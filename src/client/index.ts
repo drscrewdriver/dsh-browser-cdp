@@ -2839,6 +2839,10 @@ clearTimeout((panel as any)._dshHideT)
 				if (state.picks !== seenPicks) seenPicks = state.picks
 				if (state.enabled) {
 					emit('on', state.code === 'picking' ? wt('picking') : (state.message || wt('picking')))
+				} else if (state.code === 'picked') {
+					// Intermediate: the element is captured and the page bar is
+					// waiting for an action — not a failure, not yet delivered.
+					emit('picked', state.lastPick ? state.lastPick.describe : wt('picked'))
 				} else if (state.code && state.code !== 'idle' && state.code !== 'delivered') {
 					emit('failed', state.message || state.code)
 					enabled = false
@@ -2871,7 +2875,12 @@ clearTimeout((panel as any)._dshHideT)
 					}
 					enabled = true
 					seenPicks = state.picks || 0
-					deliveredPicks = state.picks || 0
+					// deliveredPicks = the last pick whose ACTION was already
+					// delivered. An actionless pick at arm time (lastAction null)
+					// is still pending — its action must fire a delivery, so the
+					// baseline sits one below. (Synchronising to picks would
+					// swallow a pick made before the panel armed.)
+					deliveredPicks = state.lastAction ? (state.picks || 0) : (state.picks || 0) - 1
 					emit('on', wt('picking'))
 					stopPolling()
 					timer = window.setInterval(pollOnce, 1000)

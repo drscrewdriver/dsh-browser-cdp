@@ -391,10 +391,10 @@ export function decideCdpAttach(cfg: Partial<ResolvedConfig>): AttachDecision {
     code: attach.code,
     message: attach.message,
     allowLocalFallback: Boolean(cfg?.allowLocalFallback),
-    // The built-in launcher (M0.9 / tasks T2.11+) is not wired yet, so an
-    // authorized fallback degrades to an explicit error rather than to the
-    // vendored runtime's own cold start.
-    localLauncherReady: false,
+    // M0.9 launcher (stage 2b) is wired: an authorized fallback launches a
+    // managed local browser inside refreshAttach (async path), so the sync
+    // decision table just needs to know the capability exists.
+    localLauncherReady: true,
   })
 }
 
@@ -896,6 +896,15 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
           mode: resolved.cdpMode,
           timeoutMs: resolved.cdpProbeTimeoutMs,
           cache: defaultAttachCache,
+          // T2.15/T2.16 — M0.9 launcher wired: an authorized fallback now
+          // launches a managed local browser instead of erroring out.
+          fallback: {
+            enabled: resolved.allowLocalFallback === true,
+            chromePath: resolved.chromePath,
+            chromeArgs: resolved.chromeArgs,
+            localHeadless: resolved.localHeadless,
+            userDataDir: resolved.localUserDataDir,
+          },
         })
         const ws = attach.status === 'ready' && attach.wsUrl !== '' ? attach.wsUrl : null
         if (setAttachEndpoint(ws)) {
@@ -979,6 +988,14 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
           const last = getLastEgoActivity()
           if (!shouldReapBrowser(Date.now(), last, cfg.idleTimeoutMin)) return
           if (last <= reapedFor) return // already reaped for this idle stretch
+          // T2.14 — a locally launched managed browser reaps by pid, not CLI.
+          try {
+            const { localBrowserInfo, stopLocalBrowser } = await import('./cdp/launcher.ts')
+            if (localBrowserInfo()) {
+              await stopLocalBrowser()
+              ctx.logger?.info?.('dsh-browser-cdp: idle reaper stopped the locally launched browser')
+            }
+          } catch { /* launcher reap is best-effort */ }
           // Only reap when the state file says a browser is up. A stale
           // browser.json makes --stop a harmless no-op, so no pid liveness
           // check is needed here.

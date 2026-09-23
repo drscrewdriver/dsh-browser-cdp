@@ -136,7 +136,7 @@ declare function require(id: string): any
 		}
 		var zh = {
 			title: 'dsh-browser-cdp',
-			intro: 'Agent 浏览器集成。在下方配置 Chrome/Chromium 浏览器路径及推流参数。',
+			intro: 'CDP 浏览器代理。在下方配置 Chrome/Chromium 浏览器路径及推流参数。',
 			isolateSpaces: '任务空间沙盒隔离',
 			isolateSpacesHint: '默认关闭：使用磁盘持久化 Profile，任务中登录的账号跨电脑重启永久保留；开启后使用内存临时沙盒隔离，任务结束不落盘。',
 			isolateSpacesOff: '关闭（持久化登录态，跨电脑重启不丢失）',
@@ -254,8 +254,8 @@ declare function require(id: string): any
 			settingsHide: 'Hide settings',
 		}
 		var watchZh = {
-			title: 'Agent 浏览器',
-			titleLive: 'Agent 浏览器 · 实时',
+			title: 'CDP 浏览器',
+			titleLive: 'CDP 浏览器 · 实时',
 			liveView: '只读观察窗',
 			pinned: '已固定查看',
 			realtime: '正在实时浏览',
@@ -300,7 +300,7 @@ declare function require(id: string): any
 			failed: '失败',
 			stale: '⚠ 未接管',
 			captured: '已接管',
-			fabTitle: 'Agent 浏览器实时视图',
+			fabTitle: 'CDP 浏览器实时视图',
 			settingsTitle: '展开设置',
 			settingsHide: '收起设置',
 		}

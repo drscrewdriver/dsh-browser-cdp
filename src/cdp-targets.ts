@@ -24,6 +24,7 @@
 
 import type { CdpMode, CdpTarget } from './types.ts'
 import { discoverWebSocketUrl, normalizeEndpoint, type CdpErrorCode } from './cdp/endpoint.ts'
+import { launchLocalBrowser, stopLocalBrowser } from './cdp/launcher.ts'
 
 // M0.1 (endpoint resolution) now lives in `src/cdp/endpoint.ts` — the
 // acceptance criterion for that module is that only `ws` leaves it. It is
@@ -194,6 +195,8 @@ export interface AttachState {
   message: string
   latencyMs: number
   resolvedAt: number
+  /** T2.16 — how the attach came to be, shown by the panel badge + doctor. */
+  endpointSource?: 'remote' | 'local' | 'local-fallback'
 }
 
 export function emptyAttachState(): AttachState {
@@ -311,6 +314,14 @@ export interface RefreshInput {
   now?: () => number
   fetchVersion?: ProbeOptions['fetchVersion']
   localLauncherReady?: boolean
+  /** T2.15/T2.16 — explicit local fallback (launcher M0.9). */
+  fallback?: {
+    enabled: boolean
+    chromePath?: string
+    chromeArgs?: string
+    localHeadless?: boolean
+    userDataDir?: string
+  }
 }
 
 /**
@@ -374,6 +385,50 @@ export async function refreshAttach(input: RefreshInput): Promise<AttachState> {
       wsUrl: outcome.wsUrl,
       code: '',
       message: '',
+      latencyMs: outcome.latencyMs,
+      resolvedAt: now(),
+    })
+  }
+  // T2.16 — the ONLY path from a dead remote endpoint to a local browser:
+  // explicit allowLocalFallback AND the M0.9 launcher. Launch, then probe the
+  // local endpoint like any other; mark the source so the panel/doctor can
+  // show 「本地启动（远端不可达）」. Reverse fallback is forbidden by design.
+  if (input.fallback?.enabled) {
+    const launch = await launchLocalBrowser({
+      chromePath: input.fallback.chromePath,
+      chromeArgs: input.fallback.chromeArgs,
+      localHeadless: input.fallback.localHeadless,
+      userDataDir: input.fallback.userDataDir,
+    })
+    if (launch.ok) {
+      const localProbe = await probeEndpoint(launch.endpoint, { timeoutMs: input.timeoutMs, now })
+      if (localProbe.ok && localProbe.wsUrl) {
+        return cache.patch({
+          status: 'ready',
+          wsUrl: localProbe.wsUrl,
+          endpoint: launch.endpoint,
+          code: '',
+          message: 'local fallback launched (activated endpoint unreachable)',
+          latencyMs: localProbe.latencyMs,
+          resolvedAt: now(),
+          endpointSource: 'local-fallback',
+        })
+      }
+      await stopLocalBrowser()
+      return cache.patch({
+        status: 'unreachable',
+        wsUrl: '',
+        code: 'local-launch-not-ready',
+        message: `local fallback browser launched but its endpoint did not answer: ${localProbe.message}`,
+        latencyMs: outcome.latencyMs,
+        resolvedAt: now(),
+      })
+    }
+    return cache.patch({
+      status: 'unreachable',
+      wsUrl: '',
+      code: `local-${launch.code}`,
+      message: launch.message,
       latencyMs: outcome.latencyMs,
       resolvedAt: now(),
     })

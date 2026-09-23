@@ -1,3 +1,13 @@
+## [0.15.0] - 2026-09-23 — 本地浏览器启动器（阶段 2b / M0.9）
+
+### 新增
+- **本地受管启动**：`allowLocalFallback` 开启且激活端点不可达时，自动启动本机 Chrome/Chromium/Edge（显式发现 → 平台候选表）、注入 `http://127.0.0.1:<port>` 继续工作，attach 徽章标明 `endpointSource: local-fallback`；**禁止反向回落**。
+- **单例复用**（T2.13）：`launcher.json` 记录 pid/端口/profile；只复用自己启动且仍应答的实例。
+- **停止与回收**（T2.14）：win32 `taskkill /T /F` 杀整树（实测 0 孤儿）；闲置 reaper 顺带回收本地实例。
+- **设置**：`localHeadless`、`localUserDataDir`（默认 `~/.dsh/cache/dsh-browser-cdp/chrome-profile`，绝不指向日常 profile）。
+- **端口策略**（T2.11）：预分配空闲端口显式传入，不依赖未验证的 DevToolsActivePort/端口 0 机制。
+- **文案冲突消解**：观察窗 Tab/悬浮球标题「Agent 浏览器」→「CDP 浏览器」（分析见 findings A.5）。
+
 ## [0.14.0] - 2026-09-23 — 点选引用按页聚合为字典块，附来源 CDP 连接
 
 ### 变更

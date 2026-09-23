@@ -1,8 +1,10 @@
 import z from 'schemastery'
-import type { RawConfig, ResolvedConfig } from './types.ts'
+import type { CdpTarget, RawConfig, ResolvedConfig } from './types.ts'
+import { sanitizeTargets } from './cdp-targets.ts'
 
 const backend = z.union(['auto', 'cdp', 'ffmpeg'])
 const profile = z.union(['low', 'balanced', 'high'])
+const cdpMode = z.union(['auto', 'local', 'remote'])
 const encoder = z.union([
   'auto', 'software', 'h264_mf', 'h264_nvenc', 'h264_qsv', 'h264_amf',
   'h264_videotoolbox', 'h264_vaapi',
@@ -30,6 +32,32 @@ export const Config = z.object({
   // control flags are stripped (see EGO_CLI_BLOCKED / CHROME_BLOCKED below).
   egoCliArgs: z.string().description('Extra args appended to `ego-browser nodejs` argv. Takes effect on the next ego_* call.'),
   chromeArgs: z.string().description('Extra args appended to the Chrome launch argv. Takes effect on the next browser cold start (the browser is a singleton).'),
+  // ── R1: CDP target sequence + activation ────────────────────────────────
+  // `cdpTargets` is the ordered sequence; `activeTargetId` singles out one of
+  // them. Probe fields ride along so the panel can paint a reachability badge
+  // right after startup, before any probe round-trip has happened.
+  cdpTargets: z.array(z.object({
+    id: z.string(),
+    label: z.string(),
+    endpoint: z.string(),
+    enabled: z.boolean(),
+    note: z.string(),
+    probeStatus: z.union(['unknown', 'ok', 'error']),
+    probeLatencyMs: z.number(),
+    probeError: z.string(),
+    probeCode: z.string(),
+    probeAt: z.number(),
+  })).description('Ordered CDP target sequence. Only the ACTIVATED and enabled entry receives every ego_* call.'),
+  activeTargetId: z.string().description('Id of the activated entry in cdpTargets. Empty = nothing activated.'),
+  cdpMode: cdpMode.description('auto = use the activated target and never start a local browser silently; remote = only ever connect to the activated target; local = always use local browser control.'),
+  cdpProbeTimeoutMs: z.number().min(200).max(30000).step(100).description('Timeout for one CDP endpoint probe (http endpoints answer /json/version).'),
+  // ── R4: screenshot material ─────────────────────────────────────────────
+  cursorHud: z.boolean().description('Draw the agent cursor HUD into screenshots.'),
+  cursorName: z.string().description('Name label shown in the cursor HUD.'),
+  // ── M0.9 local launcher knobs (declared now, launcher lands in T2.11+) ──
+  allowLocalFallback: z.boolean().description('auto mode may fall back to launching a local browser when the activated target is unreachable. Off by default: the fallback must be explicit.'),
+  localHeadless: z.boolean().description('Run the locally launched browser headless.'),
+  localUserDataDir: z.string().description('Profile dir for the locally launched browser. Empty = managed dir; never point at your daily Chrome profile.'),
   // Deprecated read-compatible keys. The settings UI only writes canonical keys.
   castFpsCap: z.number().min(0).max(60).step(1),
   screencastQuality: z.number().min(1).max(100).step(1),
@@ -197,5 +225,32 @@ export function resolveConfig(config: RawConfig = {}): ResolvedConfig {
     chromeArgs: typeof config.chromeArgs === 'string' ? config.chromeArgs : '',
     isolateSpaces: typeof config.isolateSpaces === 'boolean' ? config.isolateSpaces : config.isolateSpaces === 'true' || config.isolateSpaces === '1' || config.isolateSpaces === 1,
     idleTimeoutMin: finiteIn(config.idleTimeoutMin, 0, 1440) ? config.idleTimeoutMin : 0,
+    // CDP sequence: every entry is sanitized (bad endpoints dropped) and probe
+    // state is normalized to defaults so a partially written row cannot leave
+    // the panel rendering `undefined` badges.
+    cdpTargets: sanitizeTargets(config.cdpTargets).map(normalizeProbeState),
+    activeTargetId: typeof config.activeTargetId === 'string' ? config.activeTargetId : '',
+    cdpMode: oneOf(config.cdpMode, ['auto', 'local', 'remote'], 'auto'),
+    cdpProbeTimeoutMs: finiteIn(config.cdpProbeTimeoutMs, 200, 30000) ? config.cdpProbeTimeoutMs : 3000,
+    cursorHud: config.cursorHud === undefined ? true : Boolean(config.cursorHud),
+    cursorName: typeof config.cursorName === 'string' && config.cursorName.trim() !== '' ? config.cursorName : 'DeepSeek',
+    allowLocalFallback: config.allowLocalFallback === undefined ? false : Boolean(config.allowLocalFallback),
+    localHeadless: config.localHeadless === undefined ? false : Boolean(config.localHeadless),
+    localUserDataDir: typeof config.localUserDataDir === 'string' ? config.localUserDataDir : '',
+  }
+}
+
+/**
+ * Fill the per-target probe fields so downstream code (panel badge, doctor
+ * output) can read them without a null-check ladder.
+ */
+export function normalizeProbeState(target: CdpTarget): CdpTarget {
+  return {
+    ...target,
+    probeStatus: target.probeStatus === 'ok' || target.probeStatus === 'error' ? target.probeStatus : 'unknown',
+    probeLatencyMs: typeof target.probeLatencyMs === 'number' && Number.isFinite(target.probeLatencyMs) ? target.probeLatencyMs : 0,
+    probeError: typeof target.probeError === 'string' ? target.probeError : '',
+    probeCode: typeof target.probeCode === 'string' ? target.probeCode : '',
+    probeAt: typeof target.probeAt === 'number' && Number.isFinite(target.probeAt) ? target.probeAt : 0,
   }
 }

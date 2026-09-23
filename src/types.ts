@@ -118,6 +118,28 @@ export interface EgoContext {
   fiber?: { state?: number }
 }
 
+/** Ordered CDP endpoint entry — one slot of the user's target sequence (R1). */
+export interface CdpTarget {
+  /** Stable id; never changes as the list is reordered. */
+  id: string
+  /** Display name; falls back to the endpoint when empty. */
+  label: string
+  /** Exactly what the user typed: `http(s)://host:port` or `ws(s)://…`. */
+  endpoint: string
+  /** Disabled entries stay in the sequence but can never be activated. */
+  enabled: boolean
+  note: string
+  /** Probe results (written back so the panel can show them after a restart). */
+  probeStatus?: 'unknown' | 'ok' | 'error'
+  probeLatencyMs?: number
+  probeError?: string
+  probeCode?: string
+  probeAt?: number
+}
+
+/** How the plugin decides which browser the ego_* tools drive. */
+export type CdpMode = 'auto' | 'local' | 'remote'
+
 /** Resolved (post-defaults) runtime config — the canonical key set. */
 export interface ResolvedConfig {
   isolateSpaces: boolean
@@ -138,6 +160,20 @@ export interface ResolvedConfig {
   githubMirror: string
   egoCliArgs: string
   chromeArgs: string
+  // ── R1: CDP sequence + activation ───────────────────────────────────────
+  /** Ordered target sequence; index order IS the panel order. */
+  cdpTargets: CdpTarget[]
+  /** Id of the single activated target; '' = nothing activated. */
+  activeTargetId: string
+  cdpMode: CdpMode
+  cdpProbeTimeoutMs: number
+  // ── R4: screenshot material toggles ─────────────────────────────────────
+  cursorHud: boolean
+  cursorName: string
+  // ── M0.9 local launcher (optional; see design-cdp-local-launch.md) ──────
+  allowLocalFallback: boolean
+  localHeadless: boolean
+  localUserDataDir: string
 }
 
 /** Raw composition-layer config (may contain legacy / extra keys). */

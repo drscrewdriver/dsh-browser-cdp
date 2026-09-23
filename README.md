@@ -205,6 +205,36 @@ dshx list                                                # 应显示：[on] dsh-
 - **工具层**：每个工具把参数拼成 JS 脚本，经 `ctx.subprocess` 用 `ego-browser nodejs` 喂给 stdin 运行，宿主经 CDP 驱动共享 Chromium。结果以 `@@DSH_RESULT@@` 哨兵行解析。所有 `bcdp_*` 经进程内互斥锁串行化，错误统一归一。
 - **观察窗**：`lib/client.js` 管理 watcher lease、JPEG `<img>` 与 MSE `<video>`；`lib/cast-server.js` 代理元数据 SSE、watch API 和带背压的二进制视频；worker 中 `CaptureManager` 保证同时只有一个活动后端和一个当前 target。CDP 控制面（标签、viewport、输入、验证码）独立于画面后端。
 
+## JEV 风格管道：让 LLM 把控浏览器循环（阶段 10）
+
+把"一帧 ≡ 截图 + 编号 DOM + 意图 + 操作进度"这个**帧契约**，连同"判定只回编号、绝不给选择器"的**判定接缝**，落地成一套可跑、可测、可归档的管道。判定由外部的 **Laya / JEV** 判定服务承担（见下），循环由本插件驱动。
+
+**四个工具**（宿主侧 `defineTool`，判定请求从插件进程发 HTTP，不经过 agent 会话）：
+
+| 工具 | 干什么 | 何时用 |
+|---|---|---|
+| `bcdp_jev_status` | **先跑这个**：判定链可用性 + 配置体检，**不发任何请求** | 怀疑配置/链路问题时第一步 |
+| `bcdp_jev_frame` | 采一帧（截图 + 编号候选 + 意图），看判定器会看到什么 | 调试帧内容、核对候选编号 |
+| `bcdp_jev_ask` | 组装请求体；`dryRun` 默认 true，可指定 `round=control\|chapter\|pick\|evaluate` 逐级看，确认无误再发 | 想先看清楚判定请求再发 |
+| `bcdp_jev_run` | 跑整条循环，返回逐步 trace（每步的候选数 / top / 预算 / 命中） | 真要让它动手 |
+
+**默认链路是 `laya → rule`**。JEV 目前无法注册，所以默认不写它；将来可用时把 `jev` 加回 `judgePrefer` 跳序并填 `jevUrl` 即可。`bcdp_jev_status` 在缺 key 时会主动打印本地起法（`ENGINE=laya … uvicorn laya_api.main:app`，端口 **8000** 而非 7789，`ALLOW_DEV_LOGIN=true` 建 key）。不可用的跳**跳过不调用**（laya 强制鉴权无匿名分支，缺 key 必然 401），每一跳的跳过与失败都进 trace，绝不静默回落；`refuse` 是结果不是异常。
+
+**三级缩小（让 LLM 把控进程，而不是一次猜全部）**：
+1. `control` —— 要不要动手（固定 5 项：`pick_button` / `sleep` / `next` / `prev` / `done`）；
+2. `chapter` —— 哪个章节（按 AX 容器聚簇，从 `childIds` 父链挑最近的结构化祖先，如 `form#1` / `form#2`；单章节时此轮跳过）；
+3. `pick` —— 章节内选哪个编号 + 一个风险度 `score`。
+
+分章节不是装饰：阈值按候选数分桶，**把 20 选 1 拆成「几选 1 × 几选 1」会让两轮都落进更严的桶**（`top≥0.5` 且 `top−second≥0.15`），比一次性 20 选 1（`top≥0.6`）更可控。判定器**只回编号**，坐标/选择器由执行层每次重新量（`DOM.getBoxModel` + 点击前 `DOM.getNodeForLocation` 命中复核），帧里的矩形绝不作为点击依据。
+
+**判定上下文是隔离的**：只允许 `INTENT` / `PROGRESS` / `FRAME` / `HISTORY` 四段，**绝不带 agent 会话 session 前缀**；多出任何一段都在组装时直接抛错（不靠约定，靠断言）。`PROGRESS`（步数 / 各章节尝试与结果 / 真正成功过的动作 / 剩余预算）由循环自己**机械生成**，不让模型写——模型写的进度是第二难发现的幻觉通道。
+
+**评估开关 `jevEvaluate`（默认开，设置面板可关）**：每一步执行后，判定器再判一遍进度是 `inprogress` / `done` / `fail`。`fail` 或「未验真的 done」不猜下一步，而是**升级为 `escalate`**——带一组有序的 `RecoveryOption`（如先 `reload` 刷新，因为陈旧渲染会藏住已写入的确认），交回 LLM 决定恢复还是停手。
+
+**循环终止态**：`done`（对照 `successCriteria` 自验）/ `blocked`（预算拦）/ `exhausted`（预算耗尽，带 `exhaustedKind`）/ `stuck`（同锚同动作连续 3 次无变化）/ `unavailable`（无判定器）/ `error` / `escalate`。
+
+> 现状诚实记录：本阶段已证明**协议、阈值、终止、分章节、组装、隔离**正确（`bcdp_jev_*` 单测覆盖），但**尚未在真实浏览器上端到端跑过**（T10.22 待做）；判定**准确率**未经实测（阈值分桶是标定用的，不是选得对的证明）。存档的被操作元素会保留 `class` 等定位特征（只剥离检视器外壳 token），供 escalate 时回传给 LLM 恢复。
+
 ## 开发
 
 源码在 `src/`（TypeScript），构建产物在 `lib/`（host + client bundle）与 `bin/cdp-cast-worker.mjs`（worker bundle）。

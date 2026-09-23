@@ -34,11 +34,13 @@ export const EGO_HELP_INDEX: Record<string, string> = {
     'JEV/Laya 判定（阶段 10）：机械采集「截图 + 编号 DOM + 意图 + 操作进度」→ 组装问题 → 取选择 → 执行 → 验证。' +
     '判定器只能回传编号，绝不给选择器（幻觉选择器在结构上不可能）。' +
     '四件套：bcdp_jev_status（先跑这个：判定链可用性 + 配置体检，不发任何请求）/ bcdp_jev_frame（采一帧，看判定器会看到什么）/' +
-    'bcdp_jev_ask（组装请求体；dryRun 默认 true，可指定 round=control|chapter|pick 逐级看）/ bcdp_jev_run（跑循环，返回逐步 trace）。' +
+    'bcdp_jev_ask（组装请求体；dryRun 默认 true，可指定 round=control|chapter|pick|evaluate 逐级看）/ bcdp_jev_run（跑循环，返回逐步 trace）。' +
     '**三级缩小**：control（要不要动手，固定 5 项）→ chapter（哪个章节，按 AX 容器聚簇）→ pick（章节内哪个编号 + 风险度）。' +
     '分章节不是装饰：阈值按候选数分桶，把 20 选 1 拆成「几选 1 × 几选 1」会让两轮都落在更严的桶里。单章节时不问章节轮。' +
     '**判定上下文是隔离的**：只允许 INTENT / PROGRESS / FRAME / HISTORY 四段，**绝不带 agent 会话 session 前缀**；' +
     '多出任何一段都会在组装时直接抛错（不靠约定，靠断言）。PROGRESS 由循环自己机械生成，不让模型写（模型写的进度是第二个人幻觉通道）。' +
+    '**评估开关 jevEvaluate（默认开）**：每步执行后判定器再判进度 inprogress/done/fail；fail 或「未验真的 done」不猜下一步，直接 escalate——带有序 RecoveryOption（reload 排第一，因陈旧渲染会藏住已写入的确认），交回你来恢复或停手。' +
+    '被操作元素会保留 class 等定位特征（只剥离检视器外壳 token）随 escalate 回传，便于恢复。' +
     '**默认链路是 laya -> rule**：JEV 目前无法注册，所以默认不写它；将来可用时把 jev 加回跳序并填 URL 即可。' +
     '不可用的跳**跳过不调用**（laya-api 强制鉴权无匿名分支，缺 key 必然 401），每一跳的跳过与失败都记进 trace，绝不静默回落；refuse 是结果不是异常。' +
     '阈值一律用选中项概率 top（不是 confidence：后者是归一化熵，2 选 1 与 20 选 1 不可比）。' +

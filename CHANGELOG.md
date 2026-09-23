@@ -1,3 +1,28 @@
+## [Unreleased] — JEV 风格管道：DOM+截图+意图 → Laya/JEV 判定（阶段 10 / R5-R6，分支 stage9-ego-cli）
+
+### 新增
+- **JEV 风格管道（T10.1–T10.19）**：帧契约（截图 + 编号 DOM + 意图 + 操作进度）+ 判定接缝（只回编号，绝不给选择器）。
+  - 渲染 worker `bin/cdp-render-worker.mjs`：单连接 CDP 客户端、`attachPage()`（按 M0.3 次序 enable `Page/Runtime/DOM/Accessibility`）、`gatherInteractive(limit)`、`captureWithinBudget()`（JPEG 质量阶梯 + 降采样 + `overBudget` 如实上报）。
+  - 三原语 `noul`/`choice`/`score`（`src/jev/wire.ts`）+ 协议限值（`choice.criteria` 非空且 ≤255、空表必抛，因空 `criteria` 是 422 且会被误读成模型失败）+ `validateQuestions()` 一次报全 + `THRESHOLD_BUCKETS`/`bucketFor`。
+  - 判定接缝 `JudgeProvider` + 降级链 `jev → laya → rule → refuse`（**不可用者跳过不调用**，每跳失败进 trace；`refuse` 是结果不是异常）。
+  - 四工具面 `bcdp_jev_status` / `bcdp_jev_frame` / `bcdp_jev_ask`（`dryRun` 默认 true，可逐级 `round=control|chapter|pick`）/ `bcdp_jev_run`（逐步 trace）。`attachGate()` 统一拦"没有活动浏览器"；`bcdp_doctor` 增判定链五行。
+  - 循环 `src/jev/loop.ts`：六件效果全注入、`BudgetLedger` 先查后花、六态终止（含 `exhaustedKind`）、排除集结构性生效、重采集门槛、`#PROGRESS` 机械生成。
+- **laya 优先（2026-09-24 修订）**：默认 `judgePrefer='laya,rule'`（不写 jev，因 JEV 无法注册）；`jevUrl` 空即不参与。`bcdp_jev_status` 缺 key 时打印本地起法（`ENGINE=laya … uvicorn laya_api.main:app`，端口 8000，`ALLOW_DEV_LOGIN=true`）。
+- **动作分章节化（三级缩小）**：worker 从 AX `childIds` 父链推最近结构化祖先作章节（`CHAPTER_ROLES` 白名单，同 role 按文档序编号 `form#1`/`form#2`）；`control → chapter → pick`，单章节不问章节轮；阈值按候选数分桶（20→「几×几」两轮都进严桶）。
+- **判定上下文隔离**：四段白名单 `INTENT/PROGRESS/FRAME/HISTORY` + `assertJudgeIsolation()` 组装后断言（裸大写标题即拒）；`IntentStateInput` 结构上无 session 字段——**把控浏览器 UI 的不带完整会话 session 前缀**。
+- **评估开关 `jevEvaluate`（默认开，提交 `208ae38`）**：每步后判定 `inprogress/done/fail`；`fail` 或「未验真的 done」→ `escalate`，带有序 `RecoveryOption[]`（`reload` 优先，陈旧渲染会藏住已写入的确认），由 `recoveryFor(reason, lastAction)` 派生。
+- **被操作元素保留 class（提交 `f79a272`）**：`act` 命中那一个元素时懒取 `DOM.getOuterHTML`，经 `bin/record-normalize.mjs` 归一化——改写规则允许，但 `class`/`id`/`role`/`aria-*`/`data-testid` 等定位特征**保留**，只剪检视器外壳 token（如 `trae-browser-inspect-draggable`）与 `style`；完整 outerHTML 进 `Escalation.actedOn` 供 LLM 恢复，紧凑引用进 HISTORY。
+
+### 验证
+- 全测 630 passed / 11 skipped（gated 探针）；两套 `tsc` 通过；`lib/index.js` 由 206,613 → 316,544 → 317,402 B（字节证模块已接线）。
+- 护栏：`tests/worker-dispatch.test.ts`（断言 `act/reload/scroll/fill` 全落到已声明函数，正是 `ed6eccf` 静默漏掉的 bug 类）、`tests/record-normalize.test.ts`（钉死 class 保留 / chrome token 剪 / 定位属性留）。
+
+### 已知边界（诚实不粉饰）
+- **尚未真机端到端**（T10.22 待做）：单测覆盖协议/阈值/终止/分章节/组装，不覆盖真机链路。
+- **判定准确率未实测**：阈值分桶是标定用的，非选得对的证明。
+- **章节白名单未真站标定**：`CHAPTER_ROLES` 从 AX 角色表挑；若站点把控件都放无名 `div`，会全落单章节 `page`，退化回二级（已知退化，非错误）。
+- **`render.ts` 每次调用重新 attach**：会话式长连接需宿主提供可续写 spawn 契约，当前无，代价已记录。
+
 ## [Unreleased] — 连接类型多态化：本机 ego CLI 连接对象（阶段 9 / R7，分支 stage9-ego-cli）
 
 ### 新增

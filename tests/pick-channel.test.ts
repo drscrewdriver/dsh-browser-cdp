@@ -333,6 +333,26 @@ describe('T5.1b coordinate fallback (pickAt)', () => {
     expect(state.code).toBe('describe-failed')
     expect(state.lastPick).toBeNull()
   })
+
+  it('T5.8 cross-domain iframe: the hit resolves but the node cannot be described — classified, explicit', async () => {
+    // Cross-origin frames surface as a backendNodeId whose describe is
+    // refused (OOPIF nodes are not describable from the browser session).
+    const h = harness({ describeFails: true })
+    const state = await h.channel.pickAt('T1', 30, 40)
+    expect(state.code).toBe('describe-failed')
+    expect(state.errorClass).toBe('describe')
+    expect(state.lastPick).toBeNull()
+    expect(state.enabled).toBe(false)
+    // And the UI was never drawn for an undescribed node.
+    expect(h.callsFor('Runtime.addBinding')).toHaveLength(0)
+  })
+
+  it('T5.8 blank spot: classified as a hit failure, explicit reason', async () => {
+    const h = harness({ hitBackendNodeId: null })
+    const state = await h.channel.pickAt('T1', 5, 5)
+    expect(state.code).toBe('no-node-at-point')
+    expect(state.errorClass).toBe('hit')
+  })
 })
 
 describe('T5.12 payload parsing', () => {

@@ -31,6 +31,7 @@ import {
   type PageCall,
 } from '../cdp/page.ts'
 import { boxModel, describeNode, flattenAxTree, accessibilityTree, nodeAtPoint } from '../cdp/dom.ts'
+import { classifyPickError } from './pick-contract.ts'
 import { PICK_BINDING, confirmPickUi, parsePickAction, removePickUi, showPickUi, type PickAction } from './pick-ui.ts'
 
 /** The rich identity R6 serialises and the panel draws a frame around. */
@@ -54,6 +55,8 @@ export interface PickState {
   targetId: string
   code: string
   message: string
+  /** T5.2 class of the last failure ('' while healthy). */
+  errorClass: string
   lastPick: PickElement | null
   /** The action chosen in the page for `lastPick`, once it is delivered. */
   lastAction: PickAction | null
@@ -94,6 +97,7 @@ export class PickChannel {
     targetId: '',
     code: 'idle',
     message: '',
+    errorClass: '',
     lastPick: null,
     lastAction: null,
     picks: 0,
@@ -340,7 +344,7 @@ export class PickChannel {
   }
 
   #fail(code: string, message: string): PickState {
-    this.#state = { ...this.#state, enabled: false, code, message }
+    this.#state = { ...this.#state, enabled: false, code, message, errorClass: classifyPickError(code) }
     this.#onError?.(code, message)
     return this.state()
   }

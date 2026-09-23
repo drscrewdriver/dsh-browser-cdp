@@ -457,7 +457,7 @@ async function main(): Promise<void> {
         if (channel === null) {
           return sendJson(res, 200, {
             ok: true,
-            state: { enabled: false, targetId: '', code: 'idle', message: '', lastPick: null, lastAction: null, picks: 0, enabledDomains: [] },
+            state: { enabled: false, targetId: '', code: 'idle', message: '', errorClass: '', lastPick: null, lastAction: null, picks: 0, enabledDomains: [] },
           })
         }
         return sendJson(res, 200, { ok: true, state: channel.state() })

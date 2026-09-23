@@ -5576,6 +5576,48 @@ async function accessibilityTree(call, sessionId, timeoutMs) {
 }
 
 //#endregion
+//#region src/worker/pick-contract.ts
+/** Codes the picker itself produces, grouped by class. */
+const PICK_ERROR_CLASSES = {
+	connection: [
+		"browser-disconnected",
+		"worker-unavailable",
+		"connect-failed",
+		"command-timeout"
+	],
+	target: [
+		"target-required",
+		"target-stale",
+		"no-session",
+		"no-session-scope"
+	],
+	arming: [
+		"enable-failed",
+		"domain-split",
+		"inspect-failed",
+		"highlight-config-missing"
+	],
+	hit: [
+		"no-node-at-point",
+		"hit-test-failed",
+		"invalid-point"
+	],
+	describe: ["describe-failed", "empty-describe"]
+};
+/** Classify a failure code; delivery-side codes classify as their nearest class. */
+function classifyPickError(code) {
+	for (const cls of Object.keys(PICK_ERROR_CLASSES)) if (PICK_ERROR_CLASSES[cls].includes(code)) return cls;
+	if (["no-active-session", "phase-not-plain"].includes(code)) return "target";
+	if ([
+		"no-conversation-service",
+		"no-input-facade",
+		"bad-action",
+		"deliver-failed"
+	].includes(code)) return "describe";
+	return "unknown";
+}
+
+//#endregion
 //#region src/worker/pick-ui.ts
 const PICK_BINDING = "__dshPickAction";
 async function evaluate(call, sessionId, expression) {
@@ -5780,6 +5822,7 @@ var PickChannel = class {
 		targetId: "",
 		code: "idle",
 		message: "",
+		errorClass: "",
 		lastPick: null,
 		lastAction: null,
 		picks: 0,
@@ -6011,7 +6054,8 @@ var PickChannel = class {
 			...this.#state,
 			enabled: false,
 			code,
-			message
+			message,
+			errorClass: classifyPickError(code)
 		};
 		this.#onError?.(code, message);
 		return this.state();
@@ -6729,6 +6773,7 @@ async function main() {
 						targetId: "",
 						code: "idle",
 						message: "",
+						errorClass: "",
 						lastPick: null,
 						lastAction: null,
 						picks: 0,

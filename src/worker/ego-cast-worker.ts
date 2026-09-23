@@ -10,6 +10,7 @@ import { CdpClient } from './cdp-client.ts'
 import { TargetSessions, CdpCaptureBackend } from './capture-cdp.ts'
 import { CaptureManager } from './capture-manager.ts'
 import { FfmpegCaptureBackend } from './capture-ffmpeg.ts'
+import { PickChannel } from './pick-channel.ts'
 
 const SENTINEL = '@@DSH_RESULT@@'
 const HOME = homedir() || process.env.HOME || process.env.USERPROFILE || '/root'
@@ -90,6 +91,33 @@ const videoClients = new Set<VideoClient>()
 const probeCache = new Map<string, { at: number; human: unknown }>()
 const frameCache = new Map<string, CachedFrame>()
 let active: ActiveBrowser | null = null
+
+/**
+ * M1.4 / T5.1c — the pick channel rides the worker's RESIDENT connection.
+ *
+ * `Overlay`'s enabled state belongs to a CONNECTION, not to the page, so
+ * inspect mode cannot live in a per-call process (F10). The cast worker is
+ * already one long-lived browser connection with per-target page sessions, so
+ * the picker is built on `active` and rebuilt whenever that connection is.
+ */
+let pickChannel: PickChannel | null = null
+let pickChannelWsUrl = ''
+function ensurePickChannel(): PickChannel | null {
+  if (active === null) return null
+  if (pickChannel !== null && pickChannelWsUrl !== active.wsUrl) {
+    pickChannel.dispose()
+    pickChannel = null
+  }
+  if (pickChannel === null) {
+    pickChannel = new PickChannel({
+      cdp: active.cdp,
+      sessions: active.sessions,
+      onError: (code, message) => process.stderr.write(`[ego-cast-worker] pick ${code}: ${message}\n`),
+    })
+    pickChannelWsUrl = active.wsUrl
+  }
+  return pickChannel
+}
 let currentStatus: Record<string, unknown> = { backend: 'cdp', state: 'idle', targetId: null, generation: 0, watchers: 0 }
 let videoInit: { generation: number; mime: string; buffer: Buffer } | null = null
 
@@ -384,6 +412,34 @@ async function main(): Promise<void> {
         } catch (error) {
           return sendJson(res, 503, { ok: false, code: 'input-dispatch-failed', error: (error as Error).message || String(error) })
         }
+      }
+      // M1.4 / T5.20 — toggle the picker on the resident connection. `DOM` and
+      // `Overlay` are enabled in canonical order and pinned to this connection;
+      // `highlightConfig` is always sent (M0.7 enforces it in-process).
+      if (req.method === 'POST' && url.pathname === '/api/pick') {
+        const body = await readJson(req)
+        if (!active) return sendJson(res, 409, { ok: false, code: 'browser-disconnected', error: 'no live browser' })
+        const channel = ensurePickChannel()
+        if (channel === null) return sendJson(res, 409, { ok: false, code: 'browser-disconnected', error: 'no live browser' })
+        const targetId = typeof body.targetId === 'string' ? body.targetId : ''
+        try {
+          return sendJson(res, 200, { ok: true, state: await channel.setEnabled(body.enabled === true, targetId) })
+        } catch (error) {
+          return sendJson(res, 503, { ok: false, code: 'pick-failed', error: (error as Error).message || String(error) })
+        }
+      }
+      // The panel polls this to observe a pick; `POST /api/pick` only changes
+      // the mode. No page-side polling is involved — the event arrives on the
+      // resident connection.
+      if (req.method === 'GET' && url.pathname === '/api/pick') {
+        const channel = pickChannel
+        if (channel === null) {
+          return sendJson(res, 200, {
+            ok: true,
+            state: { enabled: false, targetId: '', code: 'idle', message: '', lastPick: null, picks: 0, enabledDomains: [] },
+          })
+        }
+        return sendJson(res, 200, { ok: true, state: channel.state() })
       }
       if (req.method === 'POST' && url.pathname === '/api/close') { const { targetId } = await readJson(req); if (!active || !targetId) return sendJson(res, 400, { ok: false, error: 'targetId required' }); await active.cdp.call('Target.closeTarget', { targetId }); return sendJson(res, 200, { ok: true }) }
       if (req.method === 'POST' && url.pathname === '/api/flush') { if (!active) return sendJson(res, 409, { ok: false, error: 'no live browser' }); await active.cdp.call('Storage.flushCookies').catch(() => { /* ignore */ }); return sendJson(res, 200, { ok: true }) }

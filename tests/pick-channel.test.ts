@@ -1,0 +1,201 @@
+import { describe, expect, it } from 'vitest'
+import type { CdpClient } from '../src/worker/cdp-client.ts'
+import type { TargetSessions } from '../src/worker/capture-cdp.ts'
+import { PickChannel, describeElement, type PickElement } from '../src/worker/pick-channel.ts'
+
+/**
+ * M1.4 / T5.1c acceptance: the picker runs on the worker's resident connection,
+ * enables `DOM` before `Overlay`, always sends a `highlightConfig`, exits
+ * inspect mode the moment something is picked (T5.13), and refuses a pick whose
+ * node description cannot be resolved (G7 — "coords only" is not a pick).
+ */
+
+const flush = (): Promise<void> => new Promise((resolve) => setImmediate(resolve))
+
+type Handler = (params: unknown, sessionId?: string) => void
+
+function harness(overrides: { enableFails?: boolean; describeFails?: boolean } = {}) {
+  const calls: Array<{ method: string; params: Record<string, unknown>; sessionId?: string }> = []
+  const listeners = new Map<string, Set<Handler>>()
+
+  const dispatch = async (method: string, params: Record<string, unknown>, sessionId?: string): Promise<unknown> => {
+    calls.push({ method, params, ...(sessionId === undefined ? {} : { sessionId }) })
+    if (method === 'DOM.enable' && overrides.enableFails) throw new Error('DOM is not available')
+    if (method === 'Runtime.evaluate') return { result: { value: [10, 20] } }
+    if (method === 'DOM.describeNode') {
+      if (overrides.describeFails) throw new Error('Node is detached from the document')
+      return { node: { nodeName: 'BUTTON', attributes: ['id', 'go', 'aria-label', 'Search'] } }
+    }
+    if (method === 'DOM.getBoxModel') return { model: { content: [10, 20, 110, 20, 110, 70, 10, 70] } }
+    return {}
+  }
+
+  const cdp = {
+    call: (method: string, params: unknown, sessionId?: string) => dispatch(method, (params ?? {}) as Record<string, unknown>, sessionId),
+    on: (method: string, handler: Handler) => {
+      if (!listeners.has(method)) listeners.set(method, new Set())
+      listeners.get(method)!.add(handler)
+      return () => listeners.get(method)!.delete(handler)
+    },
+  } as unknown as CdpClient
+
+  const sessions = {
+    ensure: async (targetId: string) => ({ targetId, sessionId: `S-${targetId}`, viewportW: null, viewportH: null }),
+    get: (targetId: string) => (targetId === 'T1' ? { targetId, sessionId: `S-${targetId}` } : null),
+    call: (targetId: string, method: string, params: unknown, timeoutMs?: number) =>
+      dispatch(method, (params ?? {}) as Record<string, unknown>, `S-${targetId}`),
+  } as unknown as TargetSessions
+
+  const picks: PickElement[] = []
+  const errors: string[] = []
+  const channel = new PickChannel({
+    cdp,
+    sessions,
+    onPick: (element) => picks.push(element),
+    onError: (code) => errors.push(code),
+  })
+  const fire = (method: string, params: unknown, sessionId?: string): void => {
+    for (const handler of [...(listeners.get(method) ?? [])]) handler(params, sessionId)
+  }
+  return {
+    channel,
+    picks,
+    errors,
+    fire,
+    methods: (): string[] => calls.map((entry) => entry.method),
+    callsFor: (method: string) => calls.filter((entry) => entry.method === method),
+  }
+}
+
+describe('M1.4 PickChannel enable/disable', () => {
+  it('arms DOM before Overlay, then enters inspect mode with a config', async () => {
+    const h = harness()
+    const state = await h.channel.setEnabled(true, 'T1')
+    expect(h.methods().slice(0, 3)).toEqual(['DOM.enable', 'Overlay.enable', 'Overlay.setInspectMode'])
+    const inspect = h.callsFor('Overlay.setInspectMode')[0]!
+    expect(inspect.params).toMatchObject({ mode: 'searchForNode' })
+    expect(inspect.params.highlightConfig).toBeDefined()
+    expect(inspect.sessionId).toBe('S-T1')
+    expect(state).toMatchObject({ enabled: true, code: 'picking', targetId: 'T1' })
+    expect(state.enabledDomains).toEqual(['DOM.enable', 'Overlay.enable'])
+  })
+
+  it('refuses to arm without a target, without touching the browser', async () => {
+    const h = harness()
+    const state = await h.channel.setEnabled(true, '')
+    expect(state).toMatchObject({ enabled: false, code: 'target-required' })
+    expect(h.methods()).toEqual([])
+  })
+
+  it('surfaces an enable failure and never enters inspect mode', async () => {
+    const h = harness({ enableFails: true })
+    const state = await h.channel.setEnabled(true, 'T1')
+    expect(state).toMatchObject({ enabled: false, code: 'enable-failed' })
+    expect(state.message).toContain('DOM.enable')
+    expect(h.methods()).not.toContain('Overlay.setInspectMode')
+  })
+
+  it('leaves inspect mode with the neutral config and is safe when already idle', async () => {
+    const h = harness()
+    await h.channel.setEnabled(false, 'T1')
+    const off = h.callsFor('Overlay.setInspectMode')[0]!
+    expect(off.params).toMatchObject({ mode: 'none' })
+    expect(off.params.highlightConfig).toBeDefined()
+    await expect(h.channel.setEnabled(false, 'T1')).resolves.toMatchObject({ enabled: false, code: 'idle' })
+  })
+})
+
+describe('M1.4 PickChannel pick handling', () => {
+  it('turns an inspectNodeRequested into a described element and EXITS inspect mode', async () => {
+    const h = harness()
+    await h.channel.setEnabled(true, 'T1')
+    const before = h.methods().length
+
+    h.fire('Overlay.inspectNodeRequested', { backendNodeId: 42 }, 'S-T1')
+    await flush()
+
+    // T5.13: mode is dropped before the element is even described.
+    const after = h.methods().slice(before)
+    expect(after[0]).toBe('Overlay.setInspectMode')
+    expect(h.callsFor('Overlay.setInspectMode')[1]!.params).toMatchObject({ mode: 'none' })
+
+    expect(h.picks).toHaveLength(1)
+    expect(h.picks[0]).toEqual({
+      backendNodeId: 42,
+      tag: 'button',
+      id: 'go',
+      role: '',
+      name: 'Search',
+      keyboardFocusable: true,
+      // document rect (10,20) minus scroll (10,20) = viewport (0,0)
+      rect: { x: 0, y: 0, width: 100, height: 50 },
+      documentRect: { x: 10, y: 20, width: 100, height: 50 },
+      describe: 'button #go name="Search" focusable',
+    })
+    const state = h.channel.state()
+    expect(state).toMatchObject({ enabled: false, code: 'picked', picks: 1 })
+    expect(state.lastPick?.backendNodeId).toBe(42)
+  })
+
+  it('ignores a pick event from another target session', async () => {
+    const h = harness()
+    await h.channel.setEnabled(true, 'T1')
+    h.fire('Overlay.inspectNodeRequested', { backendNodeId: 42 }, 'S-OTHER')
+    await flush()
+    expect(h.picks).toHaveLength(0)
+    expect(h.channel.state().enabled).toBe(true)
+  })
+
+  it('ignores a pick event when the picker is not armed', async () => {
+    const h = harness()
+    h.fire('Overlay.inspectNodeRequested', { backendNodeId: 42 }, 'S-T1')
+    await flush()
+    expect(h.picks).toHaveLength(0)
+  })
+
+  it('refuses a pick whose node cannot be described (G7: coords are not a pick)', async () => {
+    const h = harness({ describeFails: true })
+    await h.channel.setEnabled(true, 'T1')
+    h.fire('Overlay.inspectNodeRequested', { backendNodeId: 42 }, 'S-T1')
+    await flush()
+    expect(h.picks).toHaveLength(0)
+    expect(h.channel.state().lastPick).toBeNull()
+    expect(h.channel.state().code).toBe('describe-failed')
+    expect(h.errors).toContain('describe-failed')
+  })
+
+  it('stops listening after a pick, so a stale event cannot double-fire', async () => {
+    const h = harness()
+    await h.channel.setEnabled(true, 'T1')
+    h.fire('Overlay.inspectNodeRequested', { backendNodeId: 42 }, 'S-T1')
+    await flush()
+    h.fire('Overlay.inspectNodeRequested', { backendNodeId: 43 }, 'S-T1')
+    await flush()
+    expect(h.picks).toHaveLength(1)
+    expect(h.channel.state().picks).toBe(1)
+  })
+})
+
+describe('M1.4 PickChannel helpers', () => {
+  it('serialises an element identity as one line', () => {
+    expect(describeElement({ tag: 'a', id: 'login', role: 'link', name: 'Sign in', keyboardFocusable: true })).toBe(
+      'a #login role=link name="Sign in" focusable',
+    )
+    expect(describeElement({ tag: 'div', id: '', role: '', name: '', keyboardFocusable: false })).toBe(
+      'div name="" not-focusable',
+    )
+  })
+
+  it('reports no candidates when the picker was never armed', async () => {
+    const h = harness()
+    expect(await h.channel.candidates()).toEqual([])
+  })
+
+  it('states are copied, so a caller cannot mutate internal state', async () => {
+    const h = harness()
+    await h.channel.setEnabled(true, 'T1')
+    const snapshot = h.channel.state()
+    snapshot.enabled = false
+    expect(h.channel.state().enabled).toBe(true)
+  })
+})

@@ -5027,6 +5027,608 @@ var FfmpegCaptureBackend = class {
 };
 
 //#endregion
+//#region src/cdp/events.ts
+/**
+* src/cdp/events.ts — M0.3: domain dispatch, stateful-domain affinity, enable order.
+*
+* Two facts from the findings drive this module:
+*
+*  1. **A CDP domain's enabled state lives on the CONNECTION, not in the page.**
+*     `Overlay.highlightNode` through one process and `Overlay.enable` through
+*     another gives `Overlay must be enabled before a tool can be shown` (F10),
+*     and each `ego_cdp` call is a fresh process. So the same (target, domain)
+*     pair must always be served by the SAME connection — affinity is enforced
+*     here rather than trusted to callers.
+*  2. **Enable order matters.** `Overlay` resolves node ids that `DOM` hands
+*     out, so `DOM.enable` must precede `Overlay.enable`. Ordering is a
+*     function of the domain set, not of the order a caller happened to list
+*     them in.
+*
+* Pure and host-free: it holds no socket and performs no I/O, which is what
+* makes the affinity rule unit-testable without a browser.
+*/
+/** Domains whose `X.enable` must be called before their commands are valid. */
+const ENABLE_GATED_DOMAINS = [
+	"Target",
+	"Page",
+	"Runtime",
+	"DOM",
+	"CSS",
+	"Accessibility",
+	"Overlay",
+	"Network",
+	"Log"
+];
+/**
+* Canonical precedence. Anything not listed sorts after these, alphabetically —
+* so the result is total and deterministic for any input set, and
+* `DOM` always precedes `Overlay`.
+*/
+const DOMAIN_PRECEDENCE = ENABLE_GATED_DOMAINS;
+function domainOf(method) {
+	const dot = method.indexOf(".");
+	return dot === -1 ? "" : method.slice(0, dot);
+}
+function enableMethod(domain) {
+	return `${domain}.enable`;
+}
+function isEnableGated(domain) {
+	return ENABLE_GATED_DOMAINS.includes(domain);
+}
+/**
+* Deduplicate a set of domains and return their `X.enable` methods in canonical
+* order. Input order never leaks into the output.
+*/
+function orderEnableMethods(domains) {
+	const unique = [...new Set(domains)].filter(isEnableGated);
+	unique.sort((a, b) => {
+		const rankA = DOMAIN_PRECEDENCE.indexOf(a);
+		const rankB = DOMAIN_PRECEDENCE.indexOf(b);
+		const sortA = rankA === -1 ? Number.MAX_SAFE_INTEGER : rankA;
+		const sortB = rankB === -1 ? Number.MAX_SAFE_INTEGER : rankB;
+		if (sortA !== sortB) return sortA - sortB;
+		return a < b ? -1 : a > b ? 1 : 0;
+	});
+	return unique.map(enableMethod);
+}
+const pairKey = (targetId, domain) => `${targetId}\u0000${domain}`;
+/**
+* Remembers which connection owns each (target, domain) pair.
+*
+* `bind` is the enforcement point: asking to serve an already-owned pair from a
+* DIFFERENT connection returns a structured `domain-split` error instead of
+* silently splitting the domain's state (which is the failure mode F10 records).
+*/
+var DomainAffinity = class {
+	#owners = /* @__PURE__ */ new Map();
+	bind(targetId, domain, connectionId) {
+		const key = pairKey(targetId, domain);
+		const owner = this.#owners.get(key);
+		if (owner === void 0) {
+			this.#owners.set(key, connectionId);
+			return {
+				ok: true,
+				connectionId,
+				fresh: true
+			};
+		}
+		if (owner === connectionId) return {
+			ok: true,
+			connectionId,
+			fresh: false
+		};
+		return {
+			ok: false,
+			code: "domain-split",
+			owner,
+			message: `${targetId}/${domain} is already served by connection "${owner}"; routing it through "${connectionId}" would split the domain's enabled state`
+		};
+	}
+	ownerOf(targetId, domain) {
+		return this.#owners.get(pairKey(targetId, domain)) ?? "";
+	}
+	/** Domains currently pinned for a target, in insertion order. */
+	domainsOf(targetId) {
+		const prefix = `${targetId}\u0000`;
+		const out = [];
+		for (const key of this.#owners.keys()) if (key.startsWith(prefix)) out.push(key.slice(prefix.length));
+		return out;
+	}
+	/** Drop every pin held by a connection (it died, or was closed). */
+	release(connectionId) {
+		let removed = 0;
+		for (const [key, owner] of [...this.#owners.entries()]) if (owner === connectionId) {
+			this.#owners.delete(key);
+			removed += 1;
+		}
+		return removed;
+	}
+	clear() {
+		this.#owners.clear();
+	}
+	get size() {
+		return this.#owners.size;
+	}
+};
+/**
+* Enable a set of domains on one connection, in canonical order, and pin each
+* domain to that connection.
+*
+* Failures (a domain that will not enable, or a pair already owned elsewhere)
+* are RETURNED, never swallowed: the caller decides whether to abort, and the
+* `order` it gets back is exactly what the session should replay after a
+* reconnect.
+*/
+async function enableDomains(call, sessionId, domains, affinity, targetId, connectionId) {
+	const order = orderEnableMethods(domains);
+	const failures = [];
+	for (const method of order) {
+		try {
+			await call(method, {}, sessionId === void 0 ? {} : { sessionId });
+		} catch (error) {
+			failures.push({
+				method,
+				message: error instanceof Error ? error.message : String(error)
+			});
+			continue;
+		}
+		const bound = affinity.bind(targetId, domainOf(method), connectionId);
+		if (!bound.ok) failures.push({
+			method,
+			message: bound.message
+		});
+	}
+	return {
+		order,
+		failures
+	};
+}
+
+//#endregion
+//#region src/cdp/page.ts
+/** Current scroll offset, in CSS pixels. Needed to anchor a viewport clip. */
+async function readScrollOffset(call, sessionId, timeoutMs) {
+	try {
+		const value = (await call("Runtime.evaluate", {
+			expression: "[window.scrollX, window.scrollY]",
+			returnByValue: true
+		}, {
+			...sessionId === void 0 ? {} : { sessionId },
+			...timeoutMs === void 0 ? {} : { timeoutMs }
+		}))?.result?.value;
+		if (!Array.isArray(value) || value.length < 2 || !Number.isFinite(value[0]) || !Number.isFinite(value[1])) return {
+			ok: false,
+			code: "scroll-unreadable",
+			message: "window.scrollX/scrollY did not evaluate to two numbers"
+		};
+		return {
+			ok: true,
+			x: Number(value[0]),
+			y: Number(value[1])
+		};
+	} catch (error) {
+		return {
+			ok: false,
+			code: "scroll-unreadable",
+			message: error instanceof Error ? error.message : String(error)
+		};
+	}
+}
+/** Exactly the message Chrome 153 answers when `highlightConfig` is omitted. */
+const HIGHLIGHT_CONFIG_MISSING_MESSAGE = "highlight configuration parameter is missing";
+/** A visible, neutral box — the default for a set-of-marks highlight. */
+const NEUTRAL_HIGHLIGHT_CONFIG = {
+	showInfo: false,
+	contentColor: {
+		r: 56,
+		g: 132,
+		b: 255,
+		a: .28
+	},
+	borderColor: {
+		r: 56,
+		g: 132,
+		b: 255,
+		a: .9
+	}
+};
+/**
+* The config to send alongside `mode: 'none'`.
+*
+* A config is ALWAYS required — even to switch inspect mode off — because the
+* browser rejects the command outright without one.
+*/
+const DISABLED_HIGHLIGHT_CONFIG = {
+	showInfo: false,
+	contentColor: {
+		r: 0,
+		g: 0,
+		b: 0,
+		a: 0
+	}
+};
+function overlayFailure(code, message) {
+	return {
+		ok: false,
+		code,
+		message,
+		value: null
+	};
+}
+/**
+* Enter (or leave) inspect mode.
+*
+* `highlightConfig` is always sent — see `DISABLED_HIGHLIGHT_CONFIG` for the
+* `none` case. Omitting it is the exact mistake F10 records, so we refuse it
+* in-process instead of shipping a command we know Chrome rejects.
+*/
+async function setInspectMode(call, options) {
+	if (options.config === void 0) return overlayFailure("highlight-config-missing", `setInspectMode(${options.mode}) needs a highlightConfig (${HIGHLIGHT_CONFIG_MISSING_MESSAGE} otherwise)`);
+	try {
+		return {
+			ok: true,
+			code: "ok",
+			message: "",
+			value: await call("Overlay.setInspectMode", {
+				mode: options.mode,
+				highlightConfig: options.config
+			}, {
+				...options.sessionId === void 0 ? {} : { sessionId: options.sessionId },
+				...options.timeoutMs === void 0 ? {} : { timeoutMs: options.timeoutMs }
+			})
+		};
+	} catch (error) {
+		return overlayFailure("inspect-mode-failed", error instanceof Error ? error.message : String(error));
+	}
+}
+
+//#endregion
+//#region src/cdp/dom.ts
+async function describeNode(call, sessionId, ref, timeoutMs) {
+	if (ref.backendNodeId === void 0 && ref.nodeId === void 0) return {
+		ok: false,
+		code: "node-ref-missing",
+		message: "describeNode needs a backendNodeId or a nodeId"
+	};
+	const params = {
+		depth: 0,
+		pierce: true
+	};
+	if (ref.backendNodeId !== void 0) params.backendNodeId = ref.backendNodeId;
+	else params.nodeId = ref.nodeId;
+	try {
+		const node = (await call("DOM.describeNode", params, {
+			...sessionId === void 0 ? {} : { sessionId },
+			...timeoutMs === void 0 ? {} : { timeoutMs }
+		}))?.node;
+		if (node === void 0) return {
+			ok: false,
+			code: "node-not-found",
+			message: "DOM.describeNode returned no node"
+		};
+		const rawAttributes = Array.isArray(node.attributes) ? node.attributes : [];
+		const attributes = {};
+		for (let index = 0; index + 1 < rawAttributes.length; index += 2) attributes[String(rawAttributes[index])] = String(rawAttributes[index + 1]);
+		const tag = typeof node.nodeName === "string" ? node.nodeName.toLowerCase() : "";
+		const role = attributes.role ?? "";
+		const name = attributes["aria-label"] ?? attributes.name ?? attributes.title ?? "";
+		const keyboardFocusable = attributes.tabindex !== void 0 ? Number(attributes.tabindex) >= 0 : [
+			"a",
+			"button",
+			"input",
+			"select",
+			"textarea"
+		].includes(tag) && attributes.disabled === void 0;
+		return {
+			ok: true,
+			tag,
+			id: attributes.id ?? "",
+			role,
+			name,
+			keyboardFocusable,
+			attributes
+		};
+	} catch (error) {
+		return {
+			ok: false,
+			code: "describe-failed",
+			message: error instanceof Error ? error.message : String(error)
+		};
+	}
+}
+/** A CDP quad is 8 numbers: x1,y1 .. x4,y4. */
+function quadToRect(quad) {
+	if (!Array.isArray(quad) || quad.length < 8) return null;
+	const xs = [
+		Number(quad[0]),
+		Number(quad[2]),
+		Number(quad[4]),
+		Number(quad[6])
+	];
+	const ys = [
+		Number(quad[1]),
+		Number(quad[3]),
+		Number(quad[5]),
+		Number(quad[7])
+	];
+	if ([...xs, ...ys].some((value) => !Number.isFinite(value))) return null;
+	const x = Math.min(...xs);
+	const y = Math.min(...ys);
+	return {
+		x,
+		y,
+		width: Math.max(...xs) - x,
+		height: Math.max(...ys) - y
+	};
+}
+async function boxModel(call, sessionId, ref, options = {}) {
+	if (ref.backendNodeId === void 0 && ref.nodeId === void 0) return {
+		ok: false,
+		code: "node-ref-missing",
+		message: "boxModel needs a backendNodeId or a nodeId"
+	};
+	const params = {};
+	if (ref.backendNodeId !== void 0) params.backendNodeId = ref.backendNodeId;
+	else params.nodeId = ref.nodeId;
+	try {
+		const documentRect = quadToRect((await call("DOM.getBoxModel", params, {
+			...sessionId === void 0 ? {} : { sessionId },
+			...options.timeoutMs === void 0 ? {} : { timeoutMs: options.timeoutMs }
+		}))?.model?.content);
+		if (documentRect === null) return {
+			ok: false,
+			code: "no-box-model",
+			message: "DOM.getBoxModel returned no usable content quad"
+		};
+		const scroll = options.scroll ?? {
+			x: 0,
+			y: 0
+		};
+		return {
+			ok: true,
+			documentRect,
+			rect: {
+				...documentRect,
+				x: documentRect.x - scroll.x,
+				y: documentRect.y - scroll.y
+			}
+		};
+	} catch (error) {
+		return {
+			ok: false,
+			code: "box-model-failed",
+			message: error instanceof Error ? error.message : String(error)
+		};
+	}
+}
+/** Flatten `Accessibility.getFullAXTree` into the semantics the judge consumes. */
+function flattenAxTree(nodes) {
+	const out = [];
+	for (const node of nodes) {
+		const focusable = (node.properties ?? []).find((property) => property.name === "focusable");
+		out.push({
+			nodeId: typeof node.nodeId === "string" ? node.nodeId : "",
+			role: typeof node.role?.value === "string" ? node.role.value : "",
+			name: typeof node.name?.value === "string" ? node.name.value : "",
+			ignored: node.ignored === true,
+			keyboardFocusable: focusable?.value?.value === true
+		});
+	}
+	return out;
+}
+async function accessibilityTree(call, sessionId, timeoutMs) {
+	try {
+		const result = await call("Accessibility.getFullAXTree", {}, {
+			...sessionId === void 0 ? {} : { sessionId },
+			...timeoutMs === void 0 ? {} : { timeoutMs }
+		});
+		if (!Array.isArray(result?.nodes)) return {
+			ok: false,
+			code: "ax-tree-missing",
+			message: "Accessibility.getFullAXTree returned no nodes array"
+		};
+		return {
+			ok: true,
+			nodes: flattenAxTree(result.nodes)
+		};
+	} catch (error) {
+		return {
+			ok: false,
+			code: "ax-tree-failed",
+			message: error instanceof Error ? error.message : String(error)
+		};
+	}
+}
+
+//#endregion
+//#region src/worker/pick-channel.ts
+const CONNECTION_ID = "cast-worker";
+function describeElement(semantics) {
+	const parts = [semantics.tag || "node"];
+	if (semantics.id !== "") parts.push(`#${semantics.id}`);
+	if (semantics.role !== "") parts.push(`role=${semantics.role}`);
+	parts.push(`name="${semantics.name}"`);
+	parts.push(semantics.keyboardFocusable ? "focusable" : "not-focusable");
+	return parts.join(" ");
+}
+var PickChannel = class {
+	#cdp;
+	#sessions;
+	#onPick;
+	#onError;
+	#affinity = new DomainAffinity();
+	#state = {
+		enabled: false,
+		targetId: "",
+		code: "idle",
+		message: "",
+		lastPick: null,
+		picks: 0,
+		enabledDomains: []
+	};
+	#detachPick = null;
+	constructor(options) {
+		this.#cdp = options.cdp;
+		this.#sessions = options.sessions;
+		this.#onPick = options.onPick;
+		this.#onError = options.onError;
+	}
+	state() {
+		return {
+			...this.#state,
+			lastPick: this.#state.lastPick === null ? null : { ...this.#state.lastPick }
+		};
+	}
+	/**
+	* Turn inspect mode on or off for one target.
+	*
+	* Turning it on enables `DOM` + `Overlay` in canonical order, pins them to
+	* this connection, and only then enters inspect mode — so a failure at any
+	* step leaves `enabled: false` with the reason, never a half-armed picker.
+	*/
+	async setEnabled(enabled, targetId) {
+		if (!enabled) return this.#disable(targetId);
+		if (targetId === "") return this.#fail("target-required", "a targetId is required to start picking");
+		const session = await this.#sessions.ensure(targetId);
+		const call = (method, params, options) => this.#sessions.call(targetId, method, params, options?.timeoutMs ?? 6e3);
+		const enabledDomains = await enableDomains(call, session.sessionId, ["Overlay", "DOM"], this.#affinity, targetId, CONNECTION_ID);
+		if (enabledDomains.failures.length > 0) {
+			const first = enabledDomains.failures[0];
+			return this.#fail("enable-failed", `${first.method}: ${first.message}`);
+		}
+		const armed = await setInspectMode(call, {
+			mode: "searchForNode",
+			config: NEUTRAL_HIGHLIGHT_CONFIG,
+			sessionId: session.sessionId
+		});
+		if (!armed.ok) return this.#fail(armed.code, armed.message);
+		this.#subscribePick(session.sessionId);
+		this.#state = {
+			...this.#state,
+			enabled: true,
+			targetId,
+			code: "picking",
+			message: "",
+			enabledDomains: enabledDomains.order
+		};
+		return this.state();
+	}
+	/**
+	* Leave inspect mode and drop the event subscription. Safe to call when
+	* already disabled — the panel calls it on unmount, tab switches and
+	* target changes, and none of those should have to check first.
+	*/
+	async #disable(targetId) {
+		const effectiveTarget = targetId !== "" ? targetId : this.#state.targetId;
+		this.#detachPick?.();
+		this.#detachPick = null;
+		if (effectiveTarget !== "") {
+			const session = this.#sessions.get(effectiveTarget);
+			if (session !== null) {
+				const call = (method, params, options) => this.#sessions.call(effectiveTarget, method, params, options?.timeoutMs ?? 6e3);
+				const off = await setInspectMode(call, {
+					mode: "none",
+					config: DISABLED_HIGHLIGHT_CONFIG,
+					sessionId: session.sessionId
+				});
+				if (!off.ok) this.#onError?.(off.code, off.message);
+			}
+		}
+		this.#state = {
+			...this.#state,
+			enabled: false,
+			code: "idle",
+			message: ""
+		};
+		return this.state();
+	}
+	#subscribePick(sessionId) {
+		this.#detachPick?.();
+		this.#detachPick = this.#cdp.on("Overlay.inspectNodeRequested", (params, eventSessionId) => {
+			if (!this.#state.enabled || eventSessionId !== sessionId) return;
+			const backendNodeId = params?.backendNodeId;
+			if (typeof backendNodeId !== "number") return;
+			this.#handlePick(sessionId, backendNodeId);
+		});
+	}
+	async #handlePick(sessionId, backendNodeId) {
+		const targetId = this.#state.targetId;
+		const call = (method, params, options) => this.#sessions.call(targetId, method, params, options?.timeoutMs ?? 6e3);
+		this.#detachPick?.();
+		this.#detachPick = null;
+		await setInspectMode(call, {
+			mode: "none",
+			config: DISABLED_HIGHLIGHT_CONFIG,
+			sessionId
+		});
+		this.#state = {
+			...this.#state,
+			enabled: false,
+			code: "picked",
+			message: ""
+		};
+		const scroll = await readScrollOffset(call, sessionId);
+		const scrollOffset = scroll.ok ? {
+			x: scroll.x,
+			y: scroll.y
+		} : {
+			x: 0,
+			y: 0
+		};
+		if (!scroll.ok) this.#onError?.(scroll.code, scroll.message);
+		const semantics = await describeNode(call, sessionId, { backendNodeId });
+		if (!semantics.ok) {
+			this.#fail(semantics.code, semantics.message);
+			return;
+		}
+		const box = await boxModel(call, sessionId, { backendNodeId }, { scroll: scrollOffset });
+		const element = {
+			backendNodeId,
+			tag: semantics.tag,
+			id: semantics.id,
+			role: semantics.role,
+			name: semantics.name,
+			keyboardFocusable: semantics.keyboardFocusable,
+			rect: box.ok ? box.rect : null,
+			documentRect: box.ok ? box.documentRect : null,
+			describe: describeElement(semantics)
+		};
+		this.#state = {
+			...this.#state,
+			lastPick: element,
+			picks: this.#state.picks + 1
+		};
+		this.#onPick?.(element);
+	}
+	/** Semantic candidates from the accessibility tree; used by the R5 loop later. */
+	async candidates(limit = 200) {
+		const targetId = this.#state.targetId;
+		if (targetId === "") return [];
+		const session = this.#sessions.get(targetId);
+		if (session === null) return [];
+		const call = (method, params, options) => this.#sessions.call(targetId, method, params, options?.timeoutMs ?? 6e3);
+		const tree = await accessibilityTree(call, session.sessionId);
+		if (!tree.ok) return [];
+		return tree.nodes.filter((node) => !node.ignored).slice(0, limit);
+	}
+	#fail(code, message) {
+		this.#state = {
+			...this.#state,
+			enabled: false,
+			code,
+			message
+		};
+		this.#onError?.(code, message);
+		return this.state();
+	}
+	dispose() {
+		this.#detachPick?.();
+		this.#detachPick = null;
+		this.#affinity.clear();
+	}
+};
+
+//#endregion
 //#region src/worker/ego-cast-worker.ts
 const SENTINEL = "@@DSH_RESULT@@";
 const HOME = homedir() || process.env.HOME || process.env.USERPROFILE || "/root";
@@ -5067,6 +5669,32 @@ const videoClients = /* @__PURE__ */ new Set();
 const probeCache = /* @__PURE__ */ new Map();
 const frameCache = /* @__PURE__ */ new Map();
 let active = null;
+/**
+* M1.4 / T5.1c — the pick channel rides the worker's RESIDENT connection.
+*
+* `Overlay`'s enabled state belongs to a CONNECTION, not to the page, so
+* inspect mode cannot live in a per-call process (F10). The cast worker is
+* already one long-lived browser connection with per-target page sessions, so
+* the picker is built on `active` and rebuilt whenever that connection is.
+*/
+let pickChannel = null;
+let pickChannelWsUrl = "";
+function ensurePickChannel() {
+	if (active === null) return null;
+	if (pickChannel !== null && pickChannelWsUrl !== active.wsUrl) {
+		pickChannel.dispose();
+		pickChannel = null;
+	}
+	if (pickChannel === null) {
+		pickChannel = new PickChannel({
+			cdp: active.cdp,
+			sessions: active.sessions,
+			onError: (code, message) => process.stderr.write(`[ego-cast-worker] pick ${code}: ${message}\n`)
+		});
+		pickChannelWsUrl = active.wsUrl;
+	}
+	return pickChannel;
+}
 let currentStatus = {
 	backend: "cdp",
 	state: "idle",
@@ -5511,6 +6139,52 @@ async function main() {
 						error: error.message || String(error)
 					});
 				}
+			}
+			if (req.method === "POST" && url.pathname === "/api/pick") {
+				const body = await readJson(req);
+				if (!active) return sendJson(res, 409, {
+					ok: false,
+					code: "browser-disconnected",
+					error: "no live browser"
+				});
+				const channel = ensurePickChannel();
+				if (channel === null) return sendJson(res, 409, {
+					ok: false,
+					code: "browser-disconnected",
+					error: "no live browser"
+				});
+				const targetId = typeof body.targetId === "string" ? body.targetId : "";
+				try {
+					return sendJson(res, 200, {
+						ok: true,
+						state: await channel.setEnabled(body.enabled === true, targetId)
+					});
+				} catch (error) {
+					return sendJson(res, 503, {
+						ok: false,
+						code: "pick-failed",
+						error: error.message || String(error)
+					});
+				}
+			}
+			if (req.method === "GET" && url.pathname === "/api/pick") {
+				const channel = pickChannel;
+				if (channel === null) return sendJson(res, 200, {
+					ok: true,
+					state: {
+						enabled: false,
+						targetId: "",
+						code: "idle",
+						message: "",
+						lastPick: null,
+						picks: 0,
+						enabledDomains: []
+					}
+				});
+				return sendJson(res, 200, {
+					ok: true,
+					state: channel.state()
+				});
 			}
 			if (req.method === "POST" && url.pathname === "/api/close") {
 				const { targetId } = await readJson(req);

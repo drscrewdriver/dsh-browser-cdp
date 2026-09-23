@@ -23,6 +23,14 @@
  */
 
 import type { CdpMode, CdpTarget } from './types.ts'
+import { discoverWebSocketUrl, normalizeEndpoint, type CdpErrorCode } from './cdp/endpoint.ts'
+
+// M0.1 (endpoint resolution) now lives in `src/cdp/endpoint.ts` — the
+// acceptance criterion for that module is that only `ws` leaves it. It is
+// re-exported here so every existing import path (and the R1 tests) keep
+// working unchanged.
+export { normalizeEndpoint }
+export type { EndpointScheme, EndpointOk, EndpointErr, EndpointCheck, CdpErrorCode } from './cdp/endpoint.ts'
 
 /** Env var the vendored ego runtime reads to attach to an existing browser. */
 export const EGO_LINUX_CDP_URL = 'EGO_LINUX_CDP_URL'
@@ -30,66 +38,8 @@ export const EGO_LINUX_CDP_URL = 'EGO_LINUX_CDP_URL'
 /** Hard ceiling on the sequence length (UI + payload sanity, not semantics). */
 export const MAX_TARGETS = 32
 
-export type EndpointScheme = 'http' | 'https' | 'ws' | 'wss'
-
-export type CdpErrorCode =
-  | 'empty-endpoint'
-  | 'invalid-endpoint'
-  | 'invalid-scheme'
-  | 'probe-timeout'
-  | 'probe-failed'
-  | 'http-status'
-  | 'bad-json'
-  | 'no-ws-url'
-
-export interface EndpointOk {
-  ok: true
-  /** Normalized endpoint exactly as it should be persisted (no trailing slash). */
-  endpoint: string
-  scheme: EndpointScheme
-}
-
-export interface EndpointErr {
-  ok: false
-  code: CdpErrorCode
-  message: string
-}
-
-export type EndpointCheck = EndpointOk | EndpointErr
-
-const SCHEMES: readonly EndpointScheme[] = ['http', 'https', 'ws', 'wss']
-
-/**
- * Validate + normalize a user-supplied endpoint string.
- *
- * Accepts `http(s)://host[:port]` (needs `/json/version` discovery) and
- * `ws(s)://…` (dial-direct). Anything else, including a bare `host:port`, is
- * rejected with an explicit code — guessing a scheme here would turn a typo
- * into a confusing network-level failure later.
- */
-export function normalizeEndpoint(raw: unknown): EndpointCheck {
-  if (typeof raw !== 'string') return { ok: false, code: 'invalid-endpoint', message: 'endpoint must be a string' }
-  const trimmed = raw.trim()
-  if (trimmed === '') return { ok: false, code: 'empty-endpoint', message: 'endpoint is empty' }
-  let url: URL
-  try {
-    url = new URL(trimmed)
-  } catch {
-    return { ok: false, code: 'invalid-endpoint', message: `endpoint is not a valid URL: ${trimmed}` }
-  }
-  const scheme = url.protocol.replace(/:$/, '') as EndpointScheme
-  if (!SCHEMES.includes(scheme)) {
-    return {
-      ok: false,
-      code: 'invalid-scheme',
-      message: `endpoint scheme must be http, https, ws or wss (got "${url.protocol}")`,
-    }
-  }
-  if (url.hostname === '') {
-    return { ok: false, code: 'invalid-endpoint', message: `endpoint has no host: ${trimmed}` }
-  }
-  return { ok: true, endpoint: url.origin + url.pathname.replace(/\/+$/, ''), scheme }
-}
+// Endpoint validation + `/json/version` discovery moved to src/cdp/endpoint.ts
+// (M0.1). Re-exported above; nothing is defined here any more.
 
 /**
  * Build a stable target id. `randomUUID` is available on every supported
@@ -210,65 +160,24 @@ export interface ProbeOptions {
   now?: () => number
 }
 
-const DEFAULT_TIMEOUT_MS = 3000
-
 /**
  * Resolve one endpoint to a browser websocket URL.
  *
- * - `ws(s)` endpoints are dial-direct (no discovery round-trip).
- * - `http(s)` endpoints are asked for `/json/version` and must answer with
- *   `webSocketDebuggerUrl`, exactly like every DevTools client does.
- *
- * Timing comes from an injectable `now()` so fixtures never read a wall clock.
+ * Thin adapter over M0.1's `discoverWebSocketUrl`: the resolution logic lives
+ * in `src/cdp/endpoint.ts`, while `ProbeOutcome` stays the shape the settings
+ * panel and the gateway already speak — its codes are contract, so they are
+ * mapped one-to-one rather than re-derived here.
  */
 export async function probeEndpoint(endpoint: string, options: ProbeOptions = {}): Promise<ProbeOutcome> {
-  const now = options.now ?? (() => Date.now())
-  const started = now()
-  const elapsed = (): number => Math.max(0, now() - started)
-  const check = normalizeEndpoint(endpoint)
-  if (!check.ok) return { ok: false, code: check.code, message: check.message, latencyMs: 0 }
-  if (check.scheme === 'ws' || check.scheme === 'wss') {
-    return { ok: true, code: 'ok', message: '', wsUrl: check.endpoint, latencyMs: 0 }
+  const result = await discoverWebSocketUrl(endpoint, {
+    timeoutMs: options.timeoutMs,
+    fetchVersion: options.fetchVersion,
+    now: options.now,
+  })
+  if (!result.ok) {
+    return { ok: false, code: result.code, message: result.message, latencyMs: result.latencyMs }
   }
-  const timeoutMs = Number.isFinite(options.timeoutMs) && (options.timeoutMs as number) > 0
-    ? (options.timeoutMs as number)
-    : DEFAULT_TIMEOUT_MS
-  const url = `${check.endpoint}/json/version`
-  const signal = AbortSignal.timeout(timeoutMs)
-  try {
-    const fetchImpl = options.fetchVersion ?? ((target: string, init: { signal: AbortSignal }) => fetch(target, { signal: init.signal }))
-    const response = await fetchImpl(url, { signal })
-    if (!response.ok) {
-      return {
-        ok: false,
-        code: 'http-status',
-        message: `${url} answered HTTP ${response.status}`,
-        latencyMs: elapsed(),
-      }
-    }
-    const payload = await response.json() as { webSocketDebuggerUrl?: unknown }
-    const wsUrl = typeof payload.webSocketDebuggerUrl === 'string' ? payload.webSocketDebuggerUrl : ''
-    if (wsUrl === '') {
-      return {
-        ok: false,
-        code: 'no-ws-url',
-        message: `${url} did not return a webSocketDebuggerUrl (not a DevTools endpoint?)`,
-        latencyMs: elapsed(),
-      }
-    }
-    return { ok: true, code: 'ok', message: '', wsUrl, latencyMs: elapsed() }
-  } catch (error) {
-    const err = error as { name?: string; message?: string }
-    const timedOut = err?.name === 'TimeoutError' || err?.name === 'AbortError'
-    return {
-      ok: false,
-      code: timedOut ? 'probe-timeout' : 'probe-failed',
-      message: timedOut
-        ? `no answer from ${url} within ${timeoutMs}ms`
-        : `endpoint unreachable: ${err?.message ?? String(error)}`,
-      latencyMs: elapsed(),
-    }
-  }
+  return { ok: true, code: 'ok', message: '', wsUrl: result.wsUrl, latencyMs: result.latencyMs }
 }
 
 // ── attach decision + cache ────────────────────────────────────────────────

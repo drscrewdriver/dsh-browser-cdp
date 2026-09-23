@@ -2,6 +2,17 @@
 
 所有对用户可见的变更集中在各版本号下。格式遵循 [Keep a Changelog](https://keepachangelog.com/)，版本语义遵循 [SemVer](http://semver.org/)。
 
+## [0.10.0] - 2026-09-23 — CDP P0 底座 + 元素点选（R6 主体）+ Set-of-Marks（R4）
+
+### 新增
+- **元素点选（R6 主体）**：观察窗工具条新增「选择元素」开关（侧栏与悬浮窗各一处，均位于「打开真实页」左侧）。开启后在被选中的真实页面里点选元素：天蓝 2px 选中框 + 贴元素浮条，浮条两动作「评论到对话 Ctrl+J」/「添加到对话 ↵」，完成后原地显示「✓ 已传输到对话」并 2.5s 收起；动作完成后点选模式自动重新武装，连续点选无需回面板。切换标签 / 关闭面板会退出点选并清理注入 UI。
+- **Set-of-Marks 截图（R4 机制 + 网关）**：`POST /api/ego/marks` 一次调用返回截图 + 按文档顺序编号的交互元素映射（AX 树过滤，`n = 1..N`，含 viewport rect 与单行语义描述），可选单元素高亮。纯 CDP 实现，零页面注入；编号映射是 Overlay 一次只能高亮一个节点的替代（实测约束）。
+- **CDP 常驻会话底座（P0）**：`src/cdp/` 下 endpoint（端点规范化/发现，8 个结构化错误码）、session（命令 id 配对/单命令超时/退避重连/**重连后重放 enable 序列**）、events（域分发/有状态域亲和/`DOM.enable → Overlay.enable` 顺序）、dom、input（**无直填 `.value` 路径**、点击命中复核）、page（截图 clip 文档坐标语义、`highlightConfig` 进程内强制、`Runtime.addBinding`）。
+- **真机探针**（`CDP_PROBE_URL` 触发，默认跳过）：发现 19ms → 连接 7ms → 命令 1–5ms → binding 回传 42ms，全链路证据化。
+
+### 说明
+- **投递边界**：页面浮条的「已传输到对话」目前是 UI 状态；写入对话输入框（`conversation.input.for(actx).setDraft/submit`）的宿主侧接线尚未完成，点选结果当前经 `GET /api/ego/pick` 的 `lastPick`/`lastAction` 可观测。
+
 ## [0.9.1] - 2026-09-23 — 修复：保存后 CDP 目标从面板消失
 
 ### 修复

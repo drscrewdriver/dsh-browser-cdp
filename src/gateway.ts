@@ -22,6 +22,12 @@ import { rewriteGithubUrl } from './ffmpeg-manifest.ts'
 import type { EgoContext, SettingsService, WebServerLike } from './types.ts'
 import type { FfmpegInstallationManager, FfmpegStatus } from './ffmpeg-installation.ts'
 import type { RawConfig, ResolvedConfig } from './types.ts'
+import {
+  defaultAttachCache,
+  refreshAttach,
+  probeEndpoint,
+} from './cdp-targets.ts'
+import { setAttachEndpoint, recycleWorker } from './cast-server.ts'
 
 export interface SettingsBridge {
   source(): Record<string, unknown>
@@ -37,6 +43,9 @@ const ALLOWED_KEYS = new Set<string>([
   'chromePath', 'captureBackend', 'streamProfile', 'cdpFps', 'cdpQuality',
   'cdpMaxWidth', 'cdpBackstopIntervalMs', 'ffmpegFps', 'ffmpegMaxWidth', 'ffmpegBitrateKbps',
   'ffmpegEncoder', 'ffmpegPath', 'githubMirror', 'egoCliArgs', 'chromeArgs',
+  // ── R1: CDP sequence + activation ───────────────────────────────────────
+  'cdpTargets', 'activeTargetId', 'cdpMode', 'cdpProbeTimeoutMs',
+  'cursorHud', 'cursorName', 'allowLocalFallback', 'localHeadless', 'localUserDataDir',
 ])
 
 interface EnvelopeOk<T> { ok: true; value: T }
@@ -136,6 +145,39 @@ export function registerEgoBrowserGateway(
             const githubMirror = typeof body.githubMirror === 'string' ? body.githubMirror : config.githubMirror
             const ffmpegStatus = ffmpegManager?.startInstall({ githubMirror, configuredPath: config.ffmpegPath, requestedEncoder: config.ffmpegEncoder })
             writeJson(res, 200, envelopeOk({ ffmpegStatus: ffmpegStatus || null }))
+          } else if (method === 'cdp-status') {
+            // Live attach state for the panel badge (read-only; no re-probe).
+            writeJson(res, 200, envelopeOk({ attach: defaultAttachCache.get() }))
+          } else if (method === 'cdp-refresh') {
+            // Re-probe the ACTIVATED target and push the outcome into the attach
+            // cache + cast worker. Mirror of triggerCdpRefresh() in index.ts so
+            // a manual refresh from the panel has the same effect as a settings
+            // change.
+            const cfg = resolveConfig(bridge.source() as RawConfig)
+            const attach = await refreshAttach({
+              targets: cfg.cdpTargets,
+              activeTargetId: cfg.activeTargetId,
+              mode: cfg.cdpMode,
+              timeoutMs: cfg.cdpProbeTimeoutMs,
+              cache: defaultAttachCache,
+            })
+            const ws = attach.status === 'ready' && attach.wsUrl !== '' ? attach.wsUrl : null
+            if (setAttachEndpoint(ws)) {
+              void recycleWorker('cdp manual refresh').catch(() => null)
+            }
+            writeJson(res, 200, envelopeOk({ attach }))
+          } else if (method === 'cdp-probe') {
+            // One-shot probe of an arbitrary endpoint (used by the per-target
+            // "probe" button). Returns the raw outcome; the panel writes it back
+            // into the target's probe* fields and persists on save.
+            const endpoint = typeof body.endpoint === 'string' ? body.endpoint : ''
+            if (endpoint === '') {
+              writeJson(res, 400, envelopeError('invalid-endpoint', 'endpoint is required'))
+              return
+            }
+            const timeoutMs = typeof body.timeoutMs === 'number' && Number.isFinite(body.timeoutMs) ? body.timeoutMs : undefined
+            const outcome = await probeEndpoint(endpoint, { timeoutMs })
+            writeJson(res, 200, envelopeOk({ outcome }))
           } else {
             writeJson(res, 404, envelopeError('not-found', `unknown ego-browser API method "${method}"`))
           }
@@ -209,9 +251,61 @@ function extractPatch(body: unknown): Record<string, unknown> {
       normalized[key] = value
     } else if (typeof value === 'number' && Number.isFinite(value)) {
       normalized[key] = value
+    } else if (Array.isArray(value)) {
+      // CDP target sequence (and any other array field) is persisted verbatim
+      // after a JSON-safety pass so a hand-corrupted row cannot inject a
+      // function/class into the settings layer.
+      const safe = sanitizeJsonArray(value)
+      if (safe !== null) normalized[key] = safe
     }
   }
   return normalized
+}
+
+/**
+ * Keep only JSON-safe primitives (string/number/boolean), arrays, and plain
+ * objects. Anything else (functions, undefined, class instances) is dropped so
+ * the value is safe to hand to the settings service. Returns null for a value
+ * that could not be made safe.
+ */
+function sanitizeJsonArray(value: unknown): unknown[] | null {
+  if (!Array.isArray(value)) return null
+  const out: unknown[] = []
+  for (const item of value) {
+    if (item === null || item === undefined) {
+      out.push(null)
+    } else if (typeof item === 'string' || typeof item === 'number' || typeof item === 'boolean') {
+      out.push(item)
+    } else if (Array.isArray(item)) {
+      const inner = sanitizeJsonArray(item)
+      if (inner === null) return null
+      out.push(inner)
+    } else if (isObject(item)) {
+      const obj: Record<string, unknown> = {}
+      for (const [k, v] of Object.entries(item)) {
+        if (v === null || v === undefined) {
+          obj[k] = null
+        } else if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') {
+          obj[k] = v
+        } else if (Array.isArray(v)) {
+          const inner = sanitizeJsonArray(v)
+          if (inner === null) return null
+          obj[k] = inner
+        } else if (isObject(v)) {
+          const innerObj = sanitizeJsonArray([v])
+          if (innerObj === null) return null
+          obj[k] = innerObj[0]
+        } else {
+          // drop unsafe leaf (function, etc.)
+          obj[k] = null
+        }
+      }
+      out.push(obj)
+    } else {
+      return null
+    }
+  }
+  return out
 }
 
 /** Read and parse a JSON body from a node:http request. */

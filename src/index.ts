@@ -39,7 +39,7 @@ import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { importLoginCookies } from './login-import.ts'
-import { initCastServer, markEgoToolCall, getLastEgoActivity } from './cast-server.ts'
+import { initCastServer, markEgoToolCall, getLastEgoActivity, setAttachEndpoint, recycleWorker } from './cast-server.ts'
 import { EGO_HELP_INDEX } from './help.ts'
 import { HUMAN_CHECK_PROBE } from './captcha.ts'
 import { Config as ConfigSchema, resolveConfig, EGO_CLI_BLOCKED, CHROME_BLOCKED, filterArgs } from './config.ts'
@@ -47,9 +47,16 @@ import { installEgoBrowserSettings } from './settings.ts'
 import { registerEgoBrowserGateway } from './gateway.ts'
 import { getSharedFfmpegInstallationManager } from './ffmpeg-installation.ts'
 import { SENTINEL, j, str, num, bool, readAll, SAFE_FN } from './util.ts'
-import type { EgoContext, RawConfig, ResolvedConfig, SubprocessService, ToolExec, WebServerLike } from './types.ts'
+import {
+  EGO_LINUX_CDP_URL,
+  decideAttach,
+  defaultAttachCache,
+  refreshAttach,
+  type AttachDecision,
+} from './cdp-targets.ts'
+import type { EgoContext, RawConfig, ResolvedConfig, SubprocessService, ToolExec, WebServerLike, CdpTarget, CdpMode } from './types.ts'
 
-export const name = 'ego-browser'
+export const name = 'dsh-browser-cdp'
 // Platform-aware host services: the web shell exposes `webServer`, other Web
 // hosts expose `httpServer`. To keep activation platform-agnostic (TUI /
 // headless hosts have neither), neither is a required inject — the /api/ego/*
@@ -57,7 +64,7 @@ export const name = 'ego-browser'
 // guarded, so a GUI-less host is a safe no-op. The ego_* tools depend only on
 // tools + subprocess, present in every host.
 export const inject = ['tools', 'subprocess']
-// Schemastery schema for the composition entry and the `ego-browser` settings
+// Schemastery schema for the composition entry and the `dsh-browser-cdp` settings
 // namespace. Re-exported from config.ts so cordis's loader validates the
 // composition layer and ctx.settings.register() validates the user layer.
 export const Config = ConfigSchema
@@ -353,7 +360,54 @@ export function resolveEgoEnv(cfg: Partial<ResolvedConfig>, { platform = process
   if (env.EGO_ISOLATE_SPACES === undefined && cfg?.isolateSpaces !== undefined) {
     env.EGO_ISOLATE_SPACES = cfg.isolateSpaces ? '1' : '0'
   }
+  // ── R1: point the runtime at the ACTIVATED CDP target ───────────────────
+  // `resolveEgoEnv` stays synchronous (every spawn site calls it inline), so
+  // it reads the attach cache that the host refreshes whenever settings
+  // change — see the `triggerCdpRefresh` wiring in apply(). The cache, not
+  // this function, owns the probe; this function only applies the decision.
+  const decision = decideCdpAttach(cfg)
+  if (decision.kind === 'inject') env[EGO_LINUX_CDP_URL] = decision.wsUrl
+  // ── R4: cursor HUD material (drawn into screenshots by the runtime) ─────
+  if (env.EGO_LINUX_CURSOR === undefined && cfg?.cursorHud !== undefined) {
+    env.EGO_LINUX_CURSOR = cfg.cursorHud ? '1' : '0'
+  }
+  if (env.EGO_LINUX_CURSOR_NAME === undefined && typeof cfg?.cursorName === 'string' && cfg.cursorName !== '') {
+    env.EGO_LINUX_CURSOR_NAME = cfg.cursorName
+  }
   return env
+}
+
+/**
+ * Read the attach decision for the CURRENTLY configured mode/activation.
+ * Pure over (cfg, cache) — the decision table itself lives in cdp-targets.ts.
+ */
+export function decideCdpAttach(cfg: Partial<ResolvedConfig>): AttachDecision {
+  const attach = defaultAttachCache.get()
+  return decideAttach({
+    mode: cfg?.cdpMode ?? 'auto',
+    hasActive: attach.status !== 'no-active' && attach.targetId !== '',
+    status: attach.status,
+    wsUrl: attach.wsUrl,
+    code: attach.code,
+    message: attach.message,
+    allowLocalFallback: Boolean(cfg?.allowLocalFallback),
+    // The built-in launcher (M0.9 / tasks T2.11+) is not wired yet, so an
+    // authorized fallback degrades to an explicit error rather than to the
+    // vendored runtime's own cold start.
+    localLauncherReady: false,
+  })
+}
+
+/**
+ * Gating helper for every browser-driving spawn. Returns a human-readable
+ * reason when the call must NOT reach the runtime, or null when it may
+ * proceed. `local` decisions always pass: that is the explicit escape hatch
+ * the user asked for.
+ */
+export function cdpAttachError(cfg: Partial<ResolvedConfig>): string | null {
+  const decision = decideCdpAttach(cfg)
+  if (decision.kind === 'error') return `${decision.code}: ${decision.message}`
+  return null
 }
 function describeStderr(stderr: string): string {
   const tail = stderr.trim()
@@ -452,6 +506,8 @@ export function shouldReapBrowser(nowMs: number, lastActivityMs: number, idleTim
  */
 async function openAgentWindow(ctx: EgoContext, cfg: EgoRuntimeConfig): Promise<{ ok: boolean; error?: string }> {
   try {
+    const gate = cdpAttachError(cfg)
+    if (gate) return { ok: false, error: gate }
     const handle = ctx.subprocess.spawn({
       argv: [process.execPath, cfg.egoBin, '--open'],
       cwd: process.cwd(),
@@ -529,6 +585,18 @@ interface EgoRuntimeConfig {
   readonly idleTimeoutMin: number
   readonly chromeArgs: string
   readonly isolateSpaces: boolean
+  // ── R1: CDP sequence + activation ───────────────────────────────────────
+  readonly cdpTargets: CdpTarget[]
+  readonly activeTargetId: string
+  readonly cdpMode: CdpMode
+  readonly cdpProbeTimeoutMs: number
+  // ── R4: screenshot material toggles ─────────────────────────────────────
+  readonly cursorHud: boolean
+  readonly cursorName: string
+  // ── M0.9 local launcher (optional) ──────────────────────────────────────
+  readonly allowLocalFallback: boolean
+  readonly localHeadless: boolean
+  readonly localUserDataDir: string
 }
 
 interface ExecLike {
@@ -766,6 +834,16 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
     get chromeArgs() { return resolveConfig(bridge.source() as RawConfig).chromeArgs },
     get isolateSpaces() { return resolveConfig(bridge.source() as RawConfig).isolateSpaces },
     get idleTimeoutMin() { return resolveConfig(bridge.source() as RawConfig).idleTimeoutMin },
+    // ── R1: CDP sequence + activation ────────────────────────────────────
+    get cdpTargets() { return resolveConfig(bridge.source() as RawConfig).cdpTargets },
+    get activeTargetId() { return resolveConfig(bridge.source() as RawConfig).activeTargetId },
+    get cdpMode() { return resolveConfig(bridge.source() as RawConfig).cdpMode },
+    get cdpProbeTimeoutMs() { return resolveConfig(bridge.source() as RawConfig).cdpProbeTimeoutMs },
+    get cursorHud() { return resolveConfig(bridge.source() as RawConfig).cursorHud },
+    get cursorName() { return resolveConfig(bridge.source() as RawConfig).cursorName },
+    get allowLocalFallback() { return resolveConfig(bridge.source() as RawConfig).allowLocalFallback },
+    get localHeadless() { return resolveConfig(bridge.source() as RawConfig).localHeadless },
+    get localUserDataDir() { return resolveConfig(bridge.source() as RawConfig).localUserDataDir },
   }
   const reg = (tool: ToolHandle): void => {
     const dispose = ctx.tools.register(tool) as unknown as () => void
@@ -777,6 +855,59 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
   registerLoginImport(ctx, cfg, reg)
   registerActionTools(ctx, cfg, reg)
   registerHelpAndDoctor(ctx, cfg, reg)
+
+  // ── R1: CDP attach cache — the bridge between settings and every spawn ────
+  // `resolveEgoEnv` is synchronous and reads `defaultAttachCache`, so the cache
+  // must be kept current. We re-probe the ACTIVATED target whenever settings
+  // change (and once on startup). A changed resolved endpoint is pushed into
+  // the cast worker via `setAttachEndpoint`, which returns true only when the
+  // value actually moved — that is the signal to recycle the worker so the live
+  // panel re-attaches to the same browser the tools now drive. No resolved
+  // endpoint (local mode / nothing activated / unreachable) means "no remote
+  // attach": the worker behaves exactly as before R1.
+  const triggerCdpRefresh = (() => {
+    let inFlight = false
+    let pending = false
+    const run = async (): Promise<void> => {
+      if (inFlight) {
+        pending = true
+        return
+      }
+      inFlight = true
+      try {
+        const resolved = resolveConfig(bridge.source() as RawConfig)
+        const attach = await refreshAttach({
+          targets: resolved.cdpTargets,
+          activeTargetId: resolved.activeTargetId,
+          mode: resolved.cdpMode,
+          timeoutMs: resolved.cdpProbeTimeoutMs,
+          cache: defaultAttachCache,
+        })
+        const ws = attach.status === 'ready' && attach.wsUrl !== '' ? attach.wsUrl : null
+        if (setAttachEndpoint(ws)) {
+          void recycleWorker('cdp activation change').catch(() => null)
+        }
+      } catch {
+        /* best-effort: a failed probe must never break the settings apply */
+      } finally {
+        inFlight = false
+        if (pending) {
+          pending = false
+          void run()
+        }
+      }
+    }
+    return () => {
+      void run()
+    }
+  })()
+  bridge.onChange(triggerCdpRefresh)
+  // Initial probe so the first ego_* call attaches without waiting for a change.
+  triggerCdpRefresh()
+  // Drop stale attach state when the plugin unmounts; a fresh mount starts clean.
+  ctx.effect?.(() => () => {
+    defaultAttachCache.reset()
+  })
   // Realtime watch-panel host routes (/api/ego/*). Guarded: only meaningful
   // when the host exposes an HTTP server (web surface); headless safe-no-op.
   // The host service is `webServer` on the web shell (current runner). We only
@@ -804,7 +935,7 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
       )
     } catch (err) {
       ctx.logger?.warn?.(
-        `ego-browser: cast server init failed: ${(err as Error)?.message ?? err}`,
+        `dsh-browser-cdp: cast server init failed: ${(err as Error)?.message ?? err}`,
       )
     }
     // Settings HTTP gateway (/ego/api/get + /ego/api/set) — lets the browser
@@ -815,7 +946,7 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
       registerEgoBrowserGateway(wctx as EgoContext, bridge, ffmpegManager)
     } catch (err) {
       ctx.logger?.warn?.(
-        `ego-browser: settings gateway init failed: ${(err as Error)?.message ?? err}`,
+        `dsh-browser-cdp: settings gateway init failed: ${(err as Error)?.message ?? err}`,
       )
     }
   })
@@ -852,7 +983,7 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
             return // no state file → no browser → nothing to reap
           }
           reapedFor = last
-          ctx.logger?.info?.(`ego-browser: idle reaper stopping the backing browser after ${cfg.idleTimeoutMin}min without ego_* activity`)
+          ctx.logger?.info?.(`dsh-browser-cdp: idle reaper stopping the backing browser after ${cfg.idleTimeoutMin}min without ego_* activity`)
           const handle = ctx.subprocess.spawn({
             argv: [process.execPath, cfg.egoBin, '--stop'],
             cwd: process.cwd(),
@@ -871,7 +1002,7 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
       })()
     }, 60_000)
     return () => clearInterval(timer)
-  }, 'ego-browser: idle reaper')
+  }, 'dsh-browser-cdp: idle reaper')
   // Graceful teardown: stop the persistent browser when the plugin unmounts.
   // CRITICAL: this must be fire-and-forget, NOT awaited. Awaiting `--stop`
   // (which asks the browser to graceful-close, ~seconds) stalls the host process
@@ -907,7 +1038,7 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
     }
   })
   ctx.logger?.info?.(
-    `ego-browser: mounted (egoBin=${cfg.egoBin}, defaultSpace=${cfg.defaultSpace})`,
+    `dsh-browser-cdp: mounted (egoBin=${cfg.egoBin}, defaultSpace=${cfg.defaultSpace})`,
   )
 }
 /** `ego_status` probes CLI availability by running the real `--status` path. */

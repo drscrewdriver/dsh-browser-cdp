@@ -18,8 +18,62 @@ import type { EgoContext, RegisterRouteOptions, ResolvedConfig, WebServerLike } 
 import type { SettingsBridge } from './settings.ts'
 import type { FfmpegInstallationManager, FfmpegStatus } from './ffmpeg-installation.ts'
 import type { LoginImportOptions, LoginImportReport } from './login-import.ts'
+import { EGO_LINUX_CDP_URL } from './cdp-targets.ts'
 
 const WORKER_BIN = fileURLToPath(new URL('../bin/ego-cast-worker.mjs', import.meta.url))
+
+// ── R1: activated CDP endpoint for the watch/stream worker ────────────────
+// The cast worker is a separate long-lived process that attaches to the SAME
+// browser the tools drive. It cannot read the host half's per-spawn env, so
+// the resolved endpoint is handed to it explicitly: once as env when it
+// starts, and again on every activation change (which also recycles it — see
+// `setAttachEndpoint`). Same rules as for tools: nothing derived is persisted,
+// and no resolved endpoint simply means "no remote attach" (the worker then
+// behaves exactly as it did before R1).
+let attachWsUrl: string | null = null
+/** Logger captured in initCastServer so module-level helpers can report. */
+let castLogger: { info?: (message: string) => void; warn?: (message: string) => void } | undefined
+
+/**
+ * Publish the currently resolved endpoint for the worker. Called by the host
+ * half whenever the ACTIVATED target changes (new target, new endpoint, or
+ * mode switching away from remote). Returns true when the value actually
+ * changed, which is the caller's signal that the worker must be recycled.
+ */
+export function setAttachEndpoint(wsUrl: string | null): boolean {
+  const next = wsUrl && wsUrl !== '' ? wsUrl : null
+  if (next === attachWsUrl) return false
+  attachWsUrl = next
+  return true
+}
+
+/** The endpoint the worker should attach to right now (null = none). */
+export function getAttachEndpoint(): string | null {
+  return attachWsUrl
+}
+
+/**
+ * Stop a running worker so the next request respawns it with the new argv
+ * seed (T2.4: an activation change must take effect on a live panel, not only
+ * after a host restart). Kills only the pid WE spawned (per ego-cast.json) —
+ * never a name-matched sweep, which previously took out the DSH subprocess
+ * runner along with our own tree (issues #34 defect 2 / #40).
+ */
+export async function recycleWorker(reason: string): Promise<boolean> {
+  const state = await knownWorkerState()
+  if (state.pid === null || !isProcessAlive(state.pid)) return false
+  try {
+    process.kill(state.pid, 'SIGTERM')
+  } catch {
+    try {
+      process.kill(state.pid, 'SIGKILL')
+    } catch {
+      return false
+    }
+  }
+  castLogger?.info?.(`recycled cast worker (pid ${state.pid}) because ${reason}`)
+  return true
+}
 
 export const EGO_SPACES_ROUTE = '/api/ego/spaces'
 export const EGO_STREAM_ROUTE = '/api/ego/stream'
@@ -382,7 +436,29 @@ type EnsureWorker = () => Promise<number | null>
 type PushConfig = (cfg: ResolvedConfig) => Promise<void>
 
 /**
- * Ensure a single ego-cast worker is running (idempotent). Launches it via
+ * Env handed to a spawned cast worker.
+ *
+ * Electron hosts (DSH Desktop): process.execPath is the Electron binary, so
+ * children need ELECTRON_RUN_AS_NODE=1 or they boot as a second Electron app
+ * (issue #42). Mirror of resolveEgoEnv's guard — inlined here because
+ * cast-server cannot import from index.ts (circular import).
+ *
+ * R1 adds the resolved remote endpoint so the worker attaches to the SAME
+ * browser the tools drive; without it, `resolveBrowser()` inside the worker
+ * would fall back to reading a local browser.json that does not exist.
+ */
+function workerEnv(): NodeJS.ProcessEnv {
+  const base: NodeJS.ProcessEnv = { ...process.env }
+  if ((process.versions as { electron?: string }).electron && base.ELECTRON_RUN_AS_NODE === undefined) {
+    base.ELECTRON_RUN_AS_NODE = '1'
+  }
+  const ws = getAttachEndpoint()
+  if (ws) base[EGO_LINUX_CDP_URL] = ws
+  else delete base[EGO_LINUX_CDP_URL]
+  return base
+}
+
+/** Ensure a single ego-cast worker is running (idempotent). Launches it via
  * ctx.subprocess. Re-spawns whenever the previous worker is found dead (its
  * pid no longer alive or its /api/health does not answer), so a crashed
  * worker is brought back without a host restart. Spawn is rate-limited to
@@ -415,14 +491,7 @@ function makeEnsureWorker(ctx: EgoContext, cfg: ResolvedConfig, ffmpegManager: F
           // omitting it throws inside spawn() and the catch below swallowed it
           // silently, making the watch panel never start (issue #34 defect 1).
           cwd: process.cwd(),
-          // Electron hosts (DSH Desktop): process.execPath is the Electron
-          // binary; children need ELECTRON_RUN_AS_NODE=1 or they boot as a
-          // second Electron app (issue #42). Mirror of resolveEgoEnv's guard —
-          // inlined here because cast-server cannot import from index.ts
-          // (circular import).
-          env: (process.versions as { electron?: string }).electron
-            ? { ...process.env, ELECTRON_RUN_AS_NODE: process.env.ELECTRON_RUN_AS_NODE ?? '1' }
-            : undefined,
+          env: workerEnv(),
           stdio: {
             stdin: { data: '' },
             stdout: { maxBytes: 8192 },

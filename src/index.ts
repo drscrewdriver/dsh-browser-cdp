@@ -61,6 +61,7 @@ import { assembleSystemOneBody, buildJudgeRuntime, describeJudge, sendJudge } fr
 import { makeJudgeEffects } from './jev/effects.ts'
 import { DEFAULT_BUDGETS, runLoop } from './jev/loop.ts'
 import { buildRound, serializeLaya } from './jev/pipe.ts'
+import { chaptersOf } from './jev/frame.ts'
 import type { IntentSpec } from './jev/prompt.ts'
 import type { Frame } from './jev/frame.ts'
 import type { EgoContext, JudgeSettings, RawConfig, ResolvedConfig, SubprocessService, ToolExec, WebServerLike, BrowserLink, CdpMode } from './types.ts'
@@ -2736,7 +2737,18 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
           // Called out explicitly because it is the single most common reason
           // judging returns nothing: an absent key is a GUARANTEED 401, so the
           // hop is skipped instead of tried, and silence looks like a dead server.
-          lines.push('', 'note: laya had no key, so that hop is SKIPPED (laya-api has no anonymous branch — a keyless call is a 401).')
+          lines.push(
+            '',
+            'laya has no key, so that hop is SKIPPED — the chain is running on the offline rule hop alone.',
+            'laya-api has no anonymous branch, so a keyless call is a guaranteed 401; skipping it is deliberate.',
+            '',
+            'To bring laya up locally:',
+            '  1. start the sidecar (it serves 8000, and JevLoop\'s 7789 is a different tool):',
+            '       ENGINE=laya LAYA_PRELOAD=true LAYA_DEVICE=cpu uvicorn laya_api.main:app',
+            '     with ALLOW_DEV_LOGIN=true you can sign in without Google.',
+            '  2. open http://localhost:8000, create an API key (it is shown once, format laya_...).',
+            '  3. paste it into this panel\'s Laya key field and save.',
+          )
         }
         return { ok: true, text: lines.join('\n') }
       },
@@ -2761,6 +2773,12 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
         dryRun: { type: 'boolean', description: 'Assemble only, do not send (default true).' },
         includeImage: { type: 'boolean', description: 'Also return the base64 frame image (default false).' },
         maxCandidates: { type: 'integer', description: 'Override the candidate ceiling for this call.' },
+        round: {
+          type: 'string',
+          description:
+            "Which round to assemble: 'control' (should we act), 'chapter' (which part of the page), or 'pick' (which numbered candidate). Default control.",
+        },
+        chapter: { type: 'string', description: "Chapter key to restrict a 'pick' round to, e.g. form#1. From the chapter round's options." },
       },
       output: {
         schema: {
@@ -2789,12 +2807,27 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
         }
 
         const maxCandidates = num(args.maxCandidates, judge.chunkSize)
-        const round = buildRound({
-          frame,
-          intent: intentFrom(args),
-          round: 'control',
-          config: { chunkSize: maxCandidates, maxImageBytes: judge.maxImageBytes, historyLimit: judge.historyLimit, archiveImageBudget: judge.archiveImage ? 1 : 0, model: judge.jevModel },
-        })
+        const asked = str(args.round, 'control')
+        const roundKind = asked === 'chapter' || asked === 'pick' ? asked : 'control'
+        const chapterKey = str(args.chapter, '')
+        let round: ReturnType<typeof buildRound>
+        try {
+          round = buildRound({
+            frame,
+            intent: intentFrom(args),
+            round: roundKind,
+            ...(chapterKey === '' ? {} : { chapterKey }),
+            config: {
+              chunkSize: maxCandidates,
+              maxImageBytes: judge.maxImageBytes,
+              historyLimit: judge.historyLimit,
+              archiveImageBudget: judge.archiveImage ? 1 : 0,
+              model: judge.layaModel,
+            },
+          })
+        } catch (error) {
+          return { ok: false, text: `could not assemble the ${roundKind} round: ${error instanceof Error ? error.message : String(error)}` }
+        }
 
         // Show the body for the hop that would actually take it, so a preview
         // cannot disagree with the request.
@@ -2806,14 +2839,25 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
               { name: firstHttp, baseUrl: firstHttp === 'jev' ? judge.jevUrl : judge.layaUrl },
             )
 
+        const chaptersInFrame = chaptersOf(frame.dom.nodes)
         const lines: string[] = [
+          `round      : ${round.round}`,
           `frame      : ${frame.frameId}  ${frame.viewport.width}x${frame.viewport.height} @${frame.viewport.devicePixelRatio}x`,
           `page       : ${frame.target.url}`,
           `candidates : ${frame.dom.nodes.length}${frame.dom.truncated ? ' (TRUNCATED)' : ''}`,
+          `chapters   : ${chaptersInFrame.length}  ${chaptersInFrame.map((c) => `${c.key}(${c.nodes.length})`).join(' ')}`,
           `image      : ${frame.image === null ? 'none' : `${frame.image.format} ${frame.image.bytes} B q=${frame.image.quality ?? '-'}${frame.image.overBudget ? ' OVER BUDGET' : ''}`}`,
           `chunk plan : total=${round.plan.chunkTotal} size=${round.plan.chunkSize} reason=${round.plan.reason}`,
           `questions  : ${Object.keys(round.questions).join(', ')}`,
         ]
+        if (round.round === 'pick' && chapterKey === '') {
+          lines.push(
+            '',
+            'note: this pick round was assembled WITHOUT a chapter filter, so it offers every candidate in the chunk.',
+            'During a real run the loop asks the chapter question first and then restricts the pick to that section —',
+            'which is what keeps both questions inside a stricter threshold bucket.',
+          )
+        }
         if (round.issues.length > 0) {
           lines.push(`ISSUES     : ${round.issues.map((issue) => `${issue.code}(${issue.questionId})`).join(', ')}  <- must be fixed before sending`)
         }

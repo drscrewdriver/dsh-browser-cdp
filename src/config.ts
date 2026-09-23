@@ -94,13 +94,13 @@ export const Config = z.object({
   // have jev, laya, both, or neither, and the chain must be able to skip a hop
   // it cannot use. The key fields are separate for the same reason — laya-api
   // rejects an absent key outright, so "no key" is a SKIP, not a degraded call.
-  jevUrl: z.string().description('JEV judge base URL, no path (e.g. https://jev.example/v1). Empty = the jev hop is skipped entirely.'),
+  jevUrl: z.string().description('JEV judge base URL, no path. Leave EMPTY: JEV cannot currently be registered, so the hop would only ever be skipped. Add it (and jev to the hop order) when registration opens.'),
   jevKey: z.string().description('Bearer key for the JEV judge. Empty = the jev hop is skipped (never sent, so no 401 round trip).'),
   jevModel: z.string().description('Model name sent in the request body.'),
   layaUrl: z.string().description('Laya judge base URL. The sidecar serves 8000; 7789 is a different tool and will not answer.'),
   layaKey: z.string().description('Bearer key for the Laya judge. REQUIRED: laya-api has no anonymous branch, so a keyless call is a guaranteed 401.'),
   layaModel: z.string().description('Model name sent to the Laya judge.'),
-  judgePrefer: z.string().description('Judgement hop order, comma separated (e.g. "jev,laya,rule"). Unknown names are dropped; the terminal refusal hop cannot be removed.'),
+  judgePrefer: z.string().description('Judgement hop order, comma separated. Defaults to "laya,rule" because JEV cannot currently be registered. Unknown names are dropped; the terminal refusal hop cannot be removed.'),
   jevChunkSize: z.number().min(1).max(255).step(1).description('Candidate ceiling per judgement round. Bound to the probability threshold bucket, so raising it also tightens the gate.'),
   jevMaxImageBytes: z.number().min(0).step(1024).description('Frame byte budget. 0 = unbounded, which is the measured default: a full-page JPEG was 137 KiB, so chunking for bytes alone slices static pages for nothing.'),
   jevHistoryLimit: z.number().min(0).max(20).step(1).description('How many recent steps the judge is shown. Recency beats completeness in a loop.'),
@@ -339,7 +339,13 @@ export function resolveConfig(config: RawConfig = {}): ResolvedConfig {
     layaUrl: trimmed(config.layaUrl) === '' ? 'http://127.0.0.1:8000' : trimmed(config.layaUrl),
     layaKey: trimmed(config.layaKey),
     layaModel: trimmed(config.layaModel) === '' ? 'laya' : trimmed(config.layaModel),
-    judgePrefer: trimmed(config.judgePrefer) === '' ? 'jev,laya,rule' : trimmed(config.judgePrefer),
+    // LAYA FIRST, and jev not named at all.
+    //
+    // JEV cannot be registered at the moment, so making it the first hop means
+    // every run spends a skipped hop's worth of reasoning on a service nobody
+    // can sign up for. `laya,rule` is the chain that actually works today;
+    // re-adding `jev` to this string is the whole opt-in once it is available.
+    judgePrefer: trimmed(config.judgePrefer) === '' ? 'laya,rule' : trimmed(config.judgePrefer),
     jevChunkSize: finiteIn(config.jevChunkSize, 1, 255) ? config.jevChunkSize : 20,
     // 0 = unbounded is the DEFAULT, not a fallback: A.9 measured 136.9 KiB for a
     // real full page against any sane budget, so a byte budget that nobody asked

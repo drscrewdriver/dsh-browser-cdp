@@ -14,11 +14,28 @@
  * why `# HISTORY` carries an `excluded` set: a candidate the judge already ruled
  * out must not reappear, or the loop re-tries it forever.
  *
- * ── The three segments, and why the order is fixed ─────────────────────────
+ * ── The four segments, and why the order is fixed ──────────────────────────
  *
- *   # INTENT   what we are trying to do, and what "done" means
- *   # FRAME    what is on screen right now, as numbers
- *   # HISTORY  what has been tried, and what is ruled out
+ *   # INTENT    what we are trying to do, and what "done" means
+ *   # PROGRESS  what the LOOP has already done, as counts and outcomes
+ *   # FRAME     what is on screen right now, as numbers
+ *   # HISTORY   what has been tried on THIS frame, and what is ruled out
+ *
+ * ── The judge context is ISOLATED, and that is enforced ────────────────────
+ *
+ * Whatever steers browser UI operations must NOT see the agent's conversation.
+ * A session prefix is (a) enormous, so every judgement pays for it, and (b) full
+ * of intentions that were never about this page, so the judge starts reasoning
+ * about the plan instead of looking at the screen. The fix is structural rather
+ * than a promise: `IntentStateInput` has no field for a session, and
+ * `assertJudgeIsolation` throws if the composed text ever grows a heading
+ * outside the four above — so a future contributor who appends `# SESSION` gets
+ * a loud failure instead of a quiet context leak.
+ *
+ * `# PROGRESS` must be MECHANICAL: every number in it comes from the loop's own
+ * ledger, never from a model. A progress section a model wrote is a second
+ * hallucination channel, and it is the one that would be hardest to notice,
+ * because it reads as a summary of things that really happened.
  *
  * Intent first because a model that reads the goal after the page anchors on
  * the page. History last because it is the longest and the least important per
@@ -34,7 +51,7 @@
  */
 
 import { type ChoiceQuestion, type NoulQuestion, type Question, choice, noul } from './wire.ts'
-import type { Frame, FrameChunk, FrameNode } from './frame.ts'
+import type { Chapter, Frame, FrameChunk, FrameNode } from './frame.ts'
 
 /**
  * Where the intent came from. Recorded so a misjudgement can be attributed
@@ -67,6 +84,33 @@ export interface HistoryStep {
   note: string
 }
 
+/**
+ * What the loop has done so far, as MECHANICAL counts.
+ *
+ * No prose a model wrote, and no free-form summary: a hallucinated progress
+ * report is uniquely hard to spot because it reads like a record of real events.
+ */
+export interface ProgressReport {
+  /** Round number, 1-based. */
+  step: number
+  stepBudget: number
+  /** Judgement calls still allowed; the loop's own ledger. */
+  judgeLeft: number
+  /** Screenshots still allowed. */
+  capturesLeft: number
+  /**
+   * Chapters the loop has already entered, and what happened there.
+   *
+   * This is what makes "narrow the search" work: a judge told that `nav#1` was
+   * already tried and yielded nothing will not send the loop back into it.
+   */
+  chapters: { key: string; attempts: number; outcome: string }[]
+  /** Actions that ACTUALLY succeeded, newest last. Empty is the honest default. */
+  completed: string[]
+  /** Free text the LOOP assigns, e.g. `recovering from a failed click`. */
+  note: string
+}
+
 export interface IntentStateInput {
   intent: IntentSpec
   frame: Frame
@@ -77,6 +121,24 @@ export interface IntentStateInput {
   excluded?: readonly number[]
   /** How many history steps to keep. Recency beats completeness for a loop. */
   historyLimit?: number
+  /** Mechanical progress, from the loop. Omitted outside a loop run. */
+  progress?: ProgressReport
+  /**
+   * The EXACT candidates to list. Defaults to the chunk, or the whole frame.
+   *
+   * Must be supplied whenever the question table is narrower than the chunk,
+   * which is every `pick` round in a multi-chapter page: a FRAME section that
+   * lists candidates the question cannot accept shows the judge options it is
+   * unable to choose, and the judge — reasonably — answers with one of them.
+   * The list and the table are two views of one set and must not drift.
+   */
+  nodes?: readonly FrameNode[]
+  /**
+   * The chapter currently being narrowed into. When present the FRAME section
+   * says so, because a judge that knows it is looking at ONE section reads the
+   * candidate list differently from one that thinks it sees the whole page.
+   */
+  chapter?: { key: string; label: string; total: number } | null
 }
 
 const DEFAULT_HISTORY_LIMIT = 5
@@ -94,12 +156,71 @@ export function buildIntentState(input: IntentStateInput): string {
   const sections: string[] = []
 
   sections.push(buildIntentSection(input.intent))
+  if (input.progress !== undefined) sections.push(buildProgressSection(input.progress))
   sections.push(buildFrameSection(input))
 
   const history = buildHistorySection(input.history ?? [], limit, excluded)
   if (history !== '') sections.push(history)
 
-  return sections.join('\n\n')
+  const state = sections.join('\n\n')
+  // The guard runs on the COMPOSED text, not on the inputs: it is the only place
+  // that can catch a leak introduced by any contributor, including a future one
+  // appending a section this file has never heard of.
+  assertJudgeIsolation(state)
+  return state
+}
+
+/** The only headings a judge context may contain. */
+export const JUDGE_SECTIONS = ['INTENT', 'PROGRESS', 'FRAME', 'HISTORY'] as const
+
+/**
+ * Throw if the composed judge context carries a section outside the allow-list.
+ *
+ * This is the enforcement half of "the UI-controlling judge must not carry the
+ * agent's session". Without it, isolation is a convention that holds until
+ * somebody adds a helpful extra section; with it, that addition fails loudly on
+ * the first run instead of silently inflating every judgement.
+ */
+export function assertJudgeIsolation(state: string): void {
+  for (const line of state.split('\n')) {
+    if (!line.startsWith('# ')) continue
+    const heading = line.slice(2).trim()
+    // A content line may legitimately begin with `#` (a URL fragment, a markdown
+    // quote). Only a bare upper-case WORD is treated as a section heading, which
+    // is exactly the shape this file emits — so the guard cannot be defeated by
+    // quoting a heading inside node text, and cannot false-positive on prose.
+    if (!/^[A-Z][A-Z_-]*$/.test(heading)) continue
+    if (!(JUDGE_SECTIONS as readonly string[]).includes(heading)) {
+      throw new Error(
+        `judge context leaked a non-judge section: "# ${heading}". Allowed: ${JUDGE_SECTIONS.join(', ')}. ` +
+          'The judge must see the intent, the page, the progress and the local history — never the agent session.',
+      )
+    }
+  }
+}
+
+function buildProgressSection(progress: ProgressReport): string {
+  const lines: string[] = [
+    '# PROGRESS',
+    `step: ${progress.step} of ${progress.stepBudget}`,
+    `budget left: judge=${progress.judgeLeft} captures=${progress.capturesLeft}`,
+  ]
+  if (progress.chapters.length === 0) {
+    lines.push('chapters entered: none yet')
+  } else {
+    lines.push('chapters entered:')
+    for (const chapter of progress.chapters) {
+      lines.push(`  - ${chapter.key}: ${chapter.attempts} attempt(s), ${chapter.outcome}`)
+    }
+  }
+  if (progress.completed.length === 0) {
+    lines.push('actions that succeeded: none yet')
+  } else {
+    lines.push('actions that succeeded:')
+    for (const done of progress.completed) lines.push(`  - ${done}`)
+  }
+  if (progress.note !== '') lines.push(`note: ${progress.note}`)
+  return lines.join('\n')
 }
 
 function buildIntentSection(intent: IntentSpec): string {
@@ -136,8 +257,18 @@ function buildFrameSection(input: IntentStateInput): string {
   if (chunk !== null) {
     lines.push(`chunk: ${chunk.chunkIndex}/${chunk.chunkTotal} (${chunk.itemCount} items, mostly in ${chunk.containerHint})`)
   }
+  const chapter = input.chapter ?? null
+  if (chapter !== null) {
+    // Told explicitly, because "here are 4 candidates" means something different
+    // when the judge knows the other 16 were the ones it already ruled out.
+    lines.push(`chapter: ${chapter.key} — ${chapter.label}`)
+    lines.push(`  (this is ONE section of the page; ${chapter.total} other candidate(s) live elsewhere and were NOT re-listed)`)
+  }
 
-  const nodes = chunk === null ? frame.dom.nodes : chunk.nodes
+  // The listed set is an INPUT, not a derivation: see the `nodes` note on
+  // IntentStateInput. Deriving it from the chunk here is what previously let the
+  // prose and the question table disagree.
+  const nodes = input.nodes ?? (chunk === null ? frame.dom.nodes : chunk.nodes)
   lines.push('', ...nodes.map(formatNode))
   return lines.filter((line) => line !== '').join('\n')
 }
@@ -221,6 +352,40 @@ export function controlQuestion(canScroll: boolean): ChoiceQuestion {
   )
 }
 
+/**
+ * The chapter question: WHICH PART of the page should we look in.
+ *
+ * This is the "narrow the search" level, and it exists because of how the
+ * thresholds work rather than out of tidiness: every gate in `wire.ts` is
+ * bucketed by candidate count, so a 20-way question is judged with a looser bar
+ * than a 5-way one. Asking "which section" (a handful of options) and then
+ * "which element in it" (a handful more) puts BOTH rounds in stricter buckets
+ * than one 20-way round — the accuracy gain follows from the counts.
+ *
+ * The value of each option is written as a CONDITION, like every other choice
+ * here. Writing it as a noun label ("the nav bar") is the standard way to make a
+ * routing question useless: the judge then matches the label against the goal
+ * text instead of reasoning about where the intent can be satisfied.
+ */
+export function chapterQuestion(chapters: readonly Chapter[]): ChoiceQuestion {
+  if (chapters.length === 0) {
+    throw new Error('chapterQuestion needs at least one chapter — an empty table is not a valid question')
+  }
+  const criteria: Record<string, string> = {}
+  for (const chapter of chapters) {
+    const sample = chapter.nodes
+      .slice(0, 4)
+      .map((node) => `${node.role} "${node.name}"`)
+      .join(', ')
+    const more = chapter.nodes.length > 4 ? `, +${chapter.nodes.length - 4} more` : ''
+    criteria[chapter.key] = `${chapter.label} holds the control this intent needs — it contains ${chapter.nodes.length} candidate(s): ${sample}${more}`
+  }
+  return choice(
+    'Which part of the page should be searched for the next action? Answer with the section key.',
+    criteria,
+  )
+}
+
 /** The in-chunk question: which numbered candidate to act on. */
 export function pickQuestion(nodes: readonly FrameNode[]): ChoiceQuestion {
   if (nodes.length === 0) {
@@ -274,6 +439,13 @@ export function dangerQuestion(): Question {
  */
 export function controlQuestions(canScroll: boolean): Record<string, Question> {
   return { [CONTROL_CHOICE_ID]: controlQuestion(canScroll) }
+}
+
+/** The chapter round's question set: one question, keyed `chapter`. */
+export const CHAPTER_CHOICE_ID = 'chapter'
+
+export function chapterQuestions(chapters: readonly Chapter[]): Record<string, Question> {
+  return { [CHAPTER_CHOICE_ID]: chapterQuestion(chapters) }
 }
 
 /** The full second-round question set: an element to act on, and how risky it is. */

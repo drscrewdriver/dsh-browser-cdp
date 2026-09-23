@@ -48,8 +48,16 @@ export interface FrameNode {
     expanded: boolean
     focusable: boolean
   }
-  /** Where it sits: nav / form / main / list / dialog / other. A chunk-homogeneity hint. */
+  /**
+   * The CHAPTER this candidate belongs to, as a short stable key (`form#2`).
+   *
+   * A key rather than a sentence because a `choice` key is returned VERBATIM by
+   * the judge, so its length is paid on every round. The readable form lives in
+   * `containerLabel`.
+   */
   container: string
+  /** The chapter in prose (`the form "Shipping"`), for prompts and traces only. */
+  containerLabel: string
 }
 
 export interface FrameImage {
@@ -119,6 +127,7 @@ export interface FrameNodeInput {
   expanded?: boolean
   focusable?: boolean
   container?: string
+  containerLabel?: string
 }
 
 export interface BuildFrameInput {
@@ -174,7 +183,8 @@ export function buildFrame(input: BuildFrameInput): BuildFrameResult {
         expanded: candidate.expanded === true,
         focusable: candidate.focusable === true,
       },
-      container: candidate.container ?? 'other',
+      container: candidate.container ?? 'page',
+      containerLabel: candidate.containerLabel ?? 'the page itself',
     })
   }
 
@@ -310,4 +320,55 @@ export function dominantContainer(nodes: readonly FrameNode[]): string {
     if (count > bestCount) { best = container; bestCount = count }
   }
   return best
+}
+
+// ── chapters: the middle level of the narrowing ─────────────────────────────
+
+/**
+ * One chapter of a frame: a named part of the page and the candidates in it.
+ *
+ * The narrowing this enables is the difference between asking a judge to choose
+ * one of twenty things and asking it twice to choose one of a few. Every
+ * threshold in `wire.ts` is bucketed by CANDIDATE COUNT, so splitting 20 options
+ * into (5 chapters) x (4 candidates) moves both questions into a stricter, more
+ * accurate bucket — the accuracy gain is a consequence of the counts, not a
+ * hope about the model.
+ */
+export interface Chapter {
+  /** Stable key, also the `choice` option key. */
+  key: string
+  /** Prose form, for the question's criteria text. */
+  label: string
+  /** Candidates in document order. */
+  nodes: FrameNode[]
+}
+
+/**
+ * Group candidates into chapters, in first-appearance order.
+ *
+ * Order is FIRST APPEARANCE, not alphabetical: a judge should be offered the
+ * chapters in the order the page presents them, which is how a human reads it.
+ */
+export function chaptersOf(nodes: readonly FrameNode[]): Chapter[] {
+  const byKey = new Map<string, Chapter>()
+  for (const node of nodes) {
+    const existing = byKey.get(node.container)
+    if (existing === undefined) {
+      byKey.set(node.container, { key: node.container, label: node.containerLabel, nodes: [node] })
+      continue
+    }
+    existing.nodes.push(node)
+  }
+  return [...byKey.values()]
+}
+
+/**
+ * Whether narrowing through a chapter question is worth a round trip.
+ *
+ * `false` when there is only ONE chapter: a question with a single option is not
+ * a question, it is a round trip that can only be answered one way. Skipping it
+ * keeps the loop at two rounds on simple pages and three on busy ones.
+ */
+export function shouldAskChapter(nodes: readonly FrameNode[], chapterCount = chaptersOf(nodes).length): boolean {
+  return chapterCount > 1
 }

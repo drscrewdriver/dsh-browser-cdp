@@ -32,18 +32,19 @@
 
 import type { ActOutcome } from './act.ts'
 import { toHistoryNote } from './act.ts'
-import type { Frame, FrameNode } from './frame.ts'
+import { type Frame, type FrameNode, chaptersOf, shouldAskChapter } from './frame.ts'
 import type { JudgeChainResult, JudgeRequest } from './judge.ts'
 import {
   type HistoryStep,
   type IntentSpec,
+  type ProgressReport,
   CONTROL_CHOICE_ID,
   buildIntentState,
   canScroll,
   controlQuestion,
   pickQuestion,
 } from './prompt.ts'
-import { type PipeConfig, type PipeRound, buildRound, readControl, readPick } from './pipe.ts'
+import { type PipeConfig, type PipeRound, buildRound, readChapter, readControl, readPick } from './pipe.ts'
 import { checkChoiceMargin, bucketFor, validateQuestions } from './wire.ts'
 
 // ── budgets: five ledgers, all enforced BEFORE a spend ─────────────────────
@@ -269,6 +270,21 @@ export async function runLoop(input: LoopInput): Promise<LoopResult> {
   const history: HistoryStep[] = []
   const excluded: number[] = []
   const steps: LoopStep[] = []
+  // Mechanical progress. Every field is written by the LOOP from its own ledgers
+  // — nothing here is model-generated, because a progress report a model wrote
+  // is a hallucination channel that reads like a record of real events.
+  const chapterLog = new Map<string, { key: string; attempts: number; outcome: string }>()
+  const completed: string[] = []
+  let progressNote = ''
+  const progressOf = (): ProgressReport => ({
+    step: steps.length + 1,
+    stepBudget: budgets.steps,
+    judgeLeft: Math.max(0, ledger.snapshot().judge),
+    capturesLeft: Math.max(0, ledger.snapshot().captures),
+    chapters: [...chapterLog.values()],
+    completed: [...completed],
+    note: progressNote,
+  })
   let degraded = false
   let consecutiveUnclear = 0
   let consecutiveStalls = 0
@@ -314,12 +330,14 @@ export async function runLoop(input: LoopInput): Promise<LoopResult> {
       round: 'control',
       history,
       excluded,
+      progress: progressOf(),
       config: input.pipe,
     })
-    const controlAnswer = await ask(ledger, input.effects, controlRound)
-    if (controlAnswer === null) {
-      return finish('exhausted', 'budget exhausted: judge', excluded, steps, degraded, ledger, 'judge')
+    const controlAsked = await ask(ledger, input.effects, controlRound)
+    if (!controlAsked.ok) {
+      return finish('exhausted', `budget exhausted: ${controlAsked.blockedBy}`, excluded, steps, degraded, ledger, controlAsked.blockedBy)
     }
+    const controlAnswer = controlAsked.result
     degraded = degraded || controlAnswer.degraded
     const control = readControl(controlAnswer)
 
@@ -398,10 +416,20 @@ export async function runLoop(input: LoopInput): Promise<LoopResult> {
       continue
     }
 
-    // ── control said `act`: pick a candidate, chunk by chunk ─────────────
-    const outcome = await walkChunks(ledger, input.effects, frame, input.intent, history, excluded, input.pipe)
-    if (outcome === null) {
-      return finish('exhausted', 'budget exhausted: judge', excluded, steps, degraded, ledger, 'judge')
+    // ── control said `act`: narrow section by section, then pick ─────────
+    const outcome = await walkNarrowing(
+      ledger,
+      input.effects,
+      frame,
+      input.intent,
+      history,
+      excluded,
+      input.pipe,
+      progressOf,
+      chapterLog,
+    )
+    if (!outcome.ok) {
+      return finish('exhausted', `budget exhausted: ${outcome.blockedBy}`, excluded, steps, degraded, ledger, outcome.blockedBy)
     }
     degraded = degraded || outcome.degraded
 
@@ -434,10 +462,26 @@ export async function runLoop(input: LoopInput): Promise<LoopResult> {
         }
         continue
       }
+      if (outcome.kind === 'unknown-chapter') {
+        // The judge named a SECTION that is not in the table it was given.
+        // Labelled as a chapter failure, not a candidate one: the two point at
+        // completely different problems (a bad section table vs a bad element
+        // table), and a generic "pick failed" would hide which one it was.
+        consecutiveStalls += 1
+        history.push({ action: 'none', n: 0, ok: false, note: `judge named section ${outcome.key}, which is not in this frame` })
+        steps.push(step(ledger, steps.length, 'unknown-chapter', 0, 'none', false, `section ${outcome.key} is not in the table the judge was given`, outcome.result))
+        if (consecutiveStalls >= stalledLimit) {
+          return finish('stuck', 'judge repeatedly named sections outside the frame', excluded, steps, degraded, ledger)
+        }
+        continue
+      }
       consecutiveUnclear += 1
-      steps.push(step(ledger, steps.length, `pick-${outcome.kind}`, 0, 'none', false, 'candidate answer unusable', outcome.result))
+      // `code` is only present on the unclear variant; the other survivors are
+      // `no-answer`. Reporting the variant name keeps the two distinguishable in
+      // a trace without inventing a code for the one that has none.
+      steps.push(step(ledger, steps.length, `narrowing-${outcome.kind}`, 0, 'none', false, 'no usable answer while narrowing', outcome.result))
       if (consecutiveUnclear >= unclearLimit) {
-        return finish('stuck', `candidate answer unusable ${consecutiveUnclear}×`, excluded, steps, degraded, ledger)
+        return finish('stuck', `no usable answer while narrowing ${consecutiveUnclear}×`, excluded, steps, degraded, ledger)
       }
       continue
     }
@@ -460,30 +504,40 @@ export async function runLoop(input: LoopInput): Promise<LoopResult> {
     }
 
     consecutiveStalls = 0
+    // A SUCCESSFUL action is the only thing that goes in `completed`. A failed
+    // one must not, or the judge reads progress on work that never landed.
+    completed.push(`${action.action} ${describeNodeName(outcome.node)} in ${outcome.chapterKey ?? 'the page'}`)
+    progressNote = ''
     steps.push(step(ledger, steps.length, 'act', outcome.n, action.action, true, describeNodeName(outcome.node), outcome.result, outcome.danger))
     // The action changed something, so the frame is stale BY DESIGN.
     lastRevision = -1
   }
 }
 
-// ── the chunk walk ─────────────────────────────────────────────────────────
+// ── the narrowing walk: chunk → chapter → candidate ────────────────────────
 
 type WalkOutcome =
-  | { kind: 'pick'; n: number; danger: number | null; node: FrameNode; result: JudgeChainResult; degraded: boolean }
+  | { kind: 'pick'; n: number; danger: number | null; node: FrameNode; chapterKey: string | null; result: JudgeChainResult; degraded: boolean }
   | { kind: 'no-answer'; result: JudgeChainResult; degraded: boolean }
   | { kind: 'unclear'; code: string; result: JudgeChainResult; degraded: boolean }
+  | { kind: 'unknown-chapter'; key: string; result: JudgeChainResult; degraded: boolean }
   | { kind: 'out-of-frame'; n: number; result: JudgeChainResult; degraded: boolean }
   | { kind: 'unavailable'; result: JudgeChainResult; degraded: boolean }
   | { kind: 'candidates-exhausted'; result: JudgeChainResult; degraded: boolean }
 
 /**
- * Ask "which candidate" across the frame's chunks.
+ * Narrow the page down: chunk → chapter → candidate.
  *
- * It asks about the chunk that still HAS a candidate before asking about a chunk
- * where everything is ruled out — an all-excluded chunk can only produce a
- * `no_action` or a hallucinated number, and each attempt costs a judge call.
+ * Why chapters at all, given the extra round trip: every gate in `wire.ts` is
+ * bucketed by CANDIDATE COUNT, so a 20-way question is judged against a looser
+ * bar than a 5-way one. Splitting 20 options into (5 sections) × (4 candidates)
+ * puts BOTH rounds in stricter buckets. The accuracy gain follows from the
+ * counts, not from a hope about the model.
+ *
+ * The chapter round is SKIPPED when the frame has one chapter: a question with a
+ * single option is a round trip that can only go one way.
  */
-async function walkChunks(
+async function walkNarrowing(
   ledger: BudgetLedger,
   effects: LoopEffects,
   frame: Frame,
@@ -491,7 +545,9 @@ async function walkChunks(
   history: readonly HistoryStep[],
   excluded: readonly number[],
   pipe: Partial<PipeConfig> | undefined,
-): Promise<WalkOutcome | null> {
+  progressOf: () => ProgressReport,
+  chapterLog: Map<string, { key: string; attempts: number; outcome: string }>,
+): Promise<{ ok: true } & WalkOutcome | { ok: false; blockedBy: BudgetKind }> {
   const plan = buildRound({ frame, intent, round: 'control', history, excluded, config: pipe }).plan
   const chunkSize = plan.chunkSize
   const total = frame.dom.nodes.length
@@ -501,44 +557,112 @@ async function walkChunks(
 
   for (let index = 1; index <= chunkTotal; index += 1) {
     const chunkGate = ledger.check('chunksPerCapture')
-    if (!chunkGate.ok) return null
+    if (!chunkGate.ok) return { ok: false, blockedBy: 'chunksPerCapture' }
     const start = (index - 1) * chunkSize
-    const inChunk = frame.dom.nodes.slice(start, start + chunkSize)
-    const live = inChunk.filter((node) => !excludedSet.has(node.n))
+    const live = frame.dom.nodes.slice(start, start + chunkSize).filter((node) => !excludedSet.has(node.n))
+    // An all-excluded chunk can only produce a `no_action` or a hallucinated
+    // number, and either costs a judge call. Skipping is strictly cheaper.
     if (live.length === 0) continue
     ledger.spend('chunksPerCapture')
 
-    const round = buildRound({ frame, intent, round: 'pick', chunkIndex: index, history, excluded, config: pipe })
-    const answer = await ask(ledger, effects, round)
-    if (answer === null) return null
+    const chapters = chaptersOf(live)
+    const askChapter = shouldAskChapter(live, chapters.length)
 
-    // Resolve against the OFFERED set, i.e. the same table the question was
-    // built from. Resolving against the raw chunk would let a number that was
-    // deliberately not offered resolve to a node — reintroducing exactly the
-    // candidate the exclusion set removed.
-    const read = readPick(answer, round.laya.frame.nodes)
-    if (read.kind === 'pick') {
-      return { kind: 'pick', n: read.n, danger: read.danger, node: read.node, result: answer, degraded: answer.degraded }
-    }
-    if (read.kind === 'unavailable') return { kind: 'unavailable', result: answer, degraded: answer.degraded }
-    if (read.kind === 'out-of-frame') return { kind: 'out-of-frame', n: read.n, result: answer, degraded: answer.degraded }
-    if (read.kind === 'unclear') return { kind: 'unclear', code: read.code, result: answer, degraded: answer.degraded }
-    if (read.kind === 'no-answer') {
-      // Keep walking: another chunk may still answer cleanly.
+    // ── chapter level (the "narrow the search" step) ──────────────────────
+    let targets = chapters
+    if (askChapter) {
+      const round = buildRound({
+        frame,
+        intent,
+        round: 'chapter',
+        chunkIndex: index,
+        history,
+        excluded,
+        progress: progressOf(),
+        config: pipe,
+      })
+      const asked = await ask(ledger, effects, round)
+      if (!asked.ok) return { ok: false, blockedBy: asked.blockedBy }
+      const answer = asked.result
+      const read = readChapter(answer, chapters)
+      if (read.kind === 'unavailable') return { ok: true, kind: 'unavailable', result: answer, degraded: answer.degraded }
+      if (read.kind === 'no-answer' || read.kind === 'unclear' || read.kind === 'unknown-chapter') {
+        // Record the attempt against the WHOLE chunk: the judge could not pick a
+        // section, so no single section owns the failure.
+        recordChapter(chapterLog, `chunk${index}`, 'could not choose a section')
+        if (read.kind === 'unknown-chapter') return { ok: true, kind: 'unknown-chapter', key: read.key, result: answer, degraded: answer.degraded }
+        return { ok: true, kind: read.kind, code: read.kind === 'unclear' ? read.code : 'no-answer', result: answer, degraded: answer.degraded }
+      }
+      recordChapter(chapterLog, read.key, `chosen (top ${read.top.toFixed(2)})`)
       last = answer
-      continue
+      targets = chapters.filter((chapter) => chapter.key === read.key)
+    }
+
+    // ── candidate level ───────────────────────────────────────────────────
+    for (const chapter of targets) {
+      const offered = chapter.nodes.filter((node) => !excludedSet.has(node.n))
+      if (offered.length === 0) {
+        // Everything in this section was ruled out on an earlier round. Saying so
+        // in progress is what stops the judge sending the loop back into it.
+        recordChapter(chapterLog, chapter.key, 'every candidate ruled out')
+        continue
+      }
+      const round = buildRound({
+        frame,
+        intent,
+        round: 'pick',
+        chunkIndex: index,
+        chapterKey: askChapter ? chapter.key : undefined,
+        history,
+        excluded,
+        progress: progressOf(),
+        config: pipe,
+      })
+      const asked = await ask(ledger, effects, round)
+      if (!asked.ok) return { ok: false, blockedBy: asked.blockedBy }
+      const answer = asked.result
+
+      // Resolve against the OFFERED set — the same table the question was built
+      // from. Resolving against the raw chunk would let a number that was
+      // deliberately not offered resolve to a node, reintroducing exactly the
+      // candidate the exclusion set removed.
+      const read = readPick(answer, round.laya.frame.nodes)
+      if (read.kind === 'pick') {
+        if (askChapter) recordChapter(chapterLog, chapter.key, `acting on ${describeNodeName(read.node)}`)
+        return { ok: true, kind: 'pick', n: read.n, danger: read.danger, node: read.node, chapterKey: askChapter ? chapter.key : null, result: answer, degraded: answer.degraded }
+      }
+      if (read.kind === 'unavailable') return { ok: true, kind: 'unavailable', result: answer, degraded: answer.degraded }
+      if (read.kind === 'out-of-frame') return { ok: true, kind: 'out-of-frame', n: read.n, result: answer, degraded: answer.degraded }
+      if (read.kind === 'unclear') {
+        if (askChapter) recordChapter(chapterLog, chapter.key, `no clear candidate (${read.code})`)
+        return { ok: true, kind: 'unclear', code: read.code, result: answer, degraded: answer.degraded }
+      }
+      last = answer
+      // `no-answer` here: keep walking, another section may answer cleanly.
     }
   }
-  // Nothing anywhere. Returning the LAST response rather than asking again: a
-  // final question whose answer cannot be acted on would cost a judge call to
-  // learn something the walk already knows.
+
   if (last === null) {
     // No chunk was ever asked — every one was fully excluded. There is no
     // response to report, and inventing one would misattribute this outcome to
     // the judge rather than to the exclusion set.
-    return { kind: 'candidates-exhausted', result: NO_JUDGE_CALL, degraded: false }
+    return { ok: true, kind: 'candidates-exhausted', result: NO_JUDGE_CALL, degraded: false }
   }
-  return { kind: 'candidates-exhausted', result: last, degraded: last.degraded }
+  return { ok: true, kind: 'candidates-exhausted', result: last, degraded: last.degraded }
+}
+
+/** Count an attempt against a chapter, keeping the most recent outcome. */
+function recordChapter(
+  log: Map<string, { key: string; attempts: number; outcome: string }>,
+  key: string,
+  outcome: string,
+): void {
+  const existing = log.get(key)
+  if (existing === undefined) log.set(key, { key, attempts: 1, outcome })
+  else {
+    existing.attempts += 1
+    existing.outcome = outcome
+  }
 }
 
 /**
@@ -562,21 +686,33 @@ const NO_JUDGE_CALL: JudgeChainResult = {
 }
 
 /**
- * Charge and run one judge call, or `null` when the judge budget is spent.
+ * Charge and run one judge call.
  *
- * The `null` return is deliberate rather than throwing: the budget is an
- * expected outcome of a long run, not an exceptional one.
+ * Returns WHICH budget blocked it rather than a bare `null`, because the two are
+ * not interchangeable: a `null` collapsed both causes into one value, and the
+ * call sites then all reported "exhausted: judge" — so a run stopped by the wall
+ * clock announced that the judge budget had run out, and the caller raised the
+ * wrong limit. The whole point of enumerating the exhaustion kind is that it
+ * names the true cause; a helper that loses the cause defeats it.
+ *
+ * A blocked budget is an EXPECTED outcome of a long run, not an exception, which
+ * is why it is a return value rather than a throw.
  */
+type AskOutcome =
+  | { ok: true; result: JudgeChainResult }
+  | { ok: false; blockedBy: BudgetKind }
+
 async function ask(
   ledger: BudgetLedger,
   effects: LoopEffects,
   round: PipeRound,
-): Promise<JudgeChainResult | null> {
+): Promise<AskOutcome> {
   const gate = ledger.check('judge')
-  if (!gate.ok) return null
-  if (!ledger.check('wallMs').ok) return null
+  if (!gate.ok) return { ok: false, blockedBy: 'judge' }
+  const wall = ledger.check('wallMs')
+  if (!wall.ok) return { ok: false, blockedBy: 'wallMs' }
   ledger.spend('judge')
-  return effects.judge({ questions: round.questions, state: round.state })
+  return { ok: true, result: await effects.judge({ questions: round.questions, state: round.state }) }
 }
 
 // ── steps, finishing, tools ────────────────────────────────────────────────

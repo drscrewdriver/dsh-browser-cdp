@@ -268,9 +268,11 @@ export interface ResolvedConfig {
   layaKey: string
   layaModel: string
   /**
-   * Comma-separated hop order, e.g. `jev,laya,rule`. Unknown names are dropped
-   * and `refuse` is always last, so a hand-typed value cannot remove the
-   * terminal hop.
+   * Comma-separated hop order. Defaults to `laya,rule` — JEV cannot currently be
+   * registered, so naming it first would mean every run reporting a skipped hop
+   * for a service nobody can sign up for. Unknown names are dropped and
+   * `refuse` is always last, so a hand-typed value cannot remove the terminal
+   * hop.
    */
   judgePrefer: string
   /** Candidate ceiling per judgement round. Bound to the threshold bucket. */

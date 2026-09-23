@@ -14,12 +14,18 @@
  * Two rounds exist here and no more, because the second only makes sense after
  * the first says so:
  *
- *   ROUND 1  control   — done / act / scroll / wait / blocked  (5 fixed options)
- *   ROUND 2  pick      — which numbered candidate, and how risky it is
+ *   ROUND 1  control   — done / act / scroll / wait / blocked   (5 fixed options)
+ *   ROUND 2  chapter   — WHICH PART of the page                 (a few options)
+ *   ROUND 3  pick      — which numbered candidate in it, and how risky it is
  *
  * Asking "which of these 20 elements" before knowing whether we should act at
  * all is how a loop acts on a page it was supposed to leave alone. That is why
- * round 2 is gated on round 1's answer rather than folded into one big question.
+ * each round is gated on the previous answer rather than folded into one big
+ * question.
+ *
+ * The CHAPTER round is the "narrow the search" step. It is skipped — not
+ * answered trivially — when the frame has only one chapter, because a question
+ * with a single option is a round trip that can only go one way.
  *
  * ── The two exits are ONE encoder ──────────────────────────────────────────
  *
@@ -35,17 +41,20 @@
  * own risk appetite would be one nobody could audit.
  */
 
-import type { Frame } from './frame.ts'
-import { chunkIndexOf, planChunks, sliceFrame, type ChunkPlan } from './frame.ts'
+import type { Chapter, Frame } from './frame.ts'
+import { chaptersOf, chunkIndexOf, planChunks, sliceFrame, type ChunkPlan } from './frame.ts'
 import type { JudgeChainResult, JudgeRequest, JudgeResponse, JudgeProvider } from './judge.ts'
 import {
+  CHAPTER_CHOICE_ID,
   CONTROL_CHOICE_ID,
   buildIntentState,
   canScroll,
+  chapterQuestions,
   controlQuestions,
   pickQuestions,
   type HistoryStep,
   type IntentSpec,
+  type ProgressReport,
 } from './prompt.ts'
 import {
   type AnswerSet,
@@ -106,7 +115,7 @@ export interface LayaExit {
   kind: 'laya-frame'
   frameId: string
   intent: IntentSpec
-  round: 'control' | 'pick'
+  round: RoundKind
   frame: {
     target: Frame['target']
     viewport: Frame['viewport']
@@ -128,8 +137,11 @@ export interface LayaExit {
  * reject is a MODELLING problem (an empty candidate list usually means the page
  * has no candidates), and the caller may legitimately want to record it.
  */
+/** The three rounds, in the order they are asked. */
+export type RoundKind = 'control' | 'chapter' | 'pick'
+
 export interface PipeRound {
-  round: 'control' | 'pick'
+  round: RoundKind
   frameId: string
   /** The assembled `# INTENT` / `# FRAME` / `# HISTORY` text. */
   state: string
@@ -145,11 +157,18 @@ export interface PipeRound {
 export interface BuildRoundInput {
   frame: Frame
   intent: IntentSpec
-  round: 'control' | 'pick'
+  round: RoundKind
   history?: readonly HistoryStep[]
   excluded?: readonly number[]
   /** Which chunk to judge. Ignored for a `control` round, which is page-level. */
   chunkIndex?: number
+  /**
+   * The chapter to restrict a `pick` round to. Omitted = offer every candidate
+   * in the chunk, which is what a page with a single chapter gets.
+   */
+  chapterKey?: string
+  /** Mechanical progress from the loop, rendered into `# PROGRESS`. */
+  progress?: ProgressReport
   endpoint?: string
   config?: Partial<PipeConfig>
 }
@@ -170,8 +189,8 @@ export function buildRound(input: BuildRoundInput): PipeRound {
   })
 
   const chunkIndex = input.round === 'control' ? 1 : Math.max(1, input.chunkIndex ?? 1)
-  const chunk = plan.chunkTotal > 1 || input.round === 'pick' ? sliceFrame(input.frame, plan, chunkIndex) : null
-  if (input.round === 'pick' && chunk === null) {
+  const chunk = plan.chunkTotal > 1 || input.round !== 'control' ? sliceFrame(input.frame, plan, chunkIndex) : null
+  if (input.round !== 'control' && chunk === null) {
     // A pick round for a chunk that does not exist is a caller bug, not a page
     // state. Saying so beats assembling a question about an empty list.
     throw new Error(
@@ -180,6 +199,29 @@ export function buildRound(input: BuildRoundInput): PipeRound {
   }
 
   const excluded = new Set(input.excluded ?? [])
+  // The candidates this round may OFFER. A chapter round offers none (it asks
+  // about sections); a pick round offers the chunk, minus anything ruled out,
+  // and minus anything outside the chosen chapter.
+  const inChunk = chunk?.nodes ?? input.frame.dom.nodes
+  const offered =
+    input.round === 'control'
+      ? []
+      : input.round === 'chapter'
+        ? []
+        : inChunk.filter((node) => !excluded.has(node.n) && (input.chapterKey === undefined || node.container === input.chapterKey))
+
+  const chapters = chaptersOf(input.round === 'chapter' ? inChunk.filter((node) => !excluded.has(node.n)) : offered)
+  const chosenChapter =
+    input.round === 'pick' && input.chapterKey !== undefined
+      ? chapters.find((entry) => entry.key === input.chapterKey) ?? null
+      : null
+  // Counted against the WHOLE chunk rather than derived by subtraction: the
+  // offered list has already had exclusions and the chapter filter applied, so
+  // subtracting it would silently fold the excluded count into "elsewhere" and
+  // tell the judge about candidates it never had a chance to see.
+  const elsewhere =
+    chosenChapter === null ? 0 : inChunk.filter((node) => node.container !== chosenChapter.key).length
+
   const state = buildIntentState({
     intent: input.intent,
     frame: input.frame,
@@ -187,6 +229,15 @@ export function buildRound(input: BuildRoundInput): PipeRound {
     history: input.history ?? [],
     excluded: input.excluded ?? [],
     historyLimit: config.historyLimit,
+    ...(input.progress === undefined ? {} : { progress: input.progress }),
+    // ONE set, two views: the same `offered` array the question table is built
+    // from. Without this the FRAME prose listed candidates the table could not
+    // accept — the judge then answers with one of them and the round is wasted.
+    nodes: input.round === 'control' ? input.frame.dom.nodes : offered,
+    chapter:
+      chosenChapter === null
+        ? null
+        : { key: chosenChapter.key, label: chosenChapter.label, total: elsewhere },
   })
 
   // A candidate that was already ruled out must not be OFFERED again.
@@ -198,15 +249,12 @@ export function buildRound(input: BuildRoundInput): PipeRound {
   //
   // The frame numbers are NOT renumbered (21..26 stay 21..26), so a number still
   // means one element for both sides of the seam.
-  const offered =
-    input.round === 'control'
-      ? []
-      : (chunk?.nodes ?? input.frame.dom.nodes).filter((node) => !excluded.has(node.n))
-
   const questions =
     input.round === 'control'
       ? controlQuestions(canScroll(input.frame))
-      : pickQuestions(offered)
+      : input.round === 'chapter'
+        ? chapterQuestions(chapters)
+        : pickQuestions(offered)
 
   const issues = validateQuestions(questions)
   const body = buildSystemOneRequest(state, questions, config.model)
@@ -329,6 +377,37 @@ export function readControl(result: JudgeResponse): RoundIntent {
 
 /** The control table's size, used to pick the threshold bucket. */
 export const CONTROL_OPTION_COUNT = 5
+
+export type ChapterOutcome =
+  /** The judge chose a section. `nodes` are its candidates, already filtered. */
+  | { kind: 'chapter'; key: string; label: string; nodes: FrameNode[]; top: number; margin: number }
+  /** The answer named a section that is not in the table it was given. */
+  | { kind: 'unknown-chapter'; key: string; top: number; margin: number }
+  | { kind: 'unclear'; code: string; top: number; margin: number }
+  | { kind: 'no-answer'; missing: string[] }
+  | { kind: 'unavailable'; trace: string[] }
+
+/**
+ * Read the chapter answer.
+ *
+ * An unknown section key is its own outcome rather than a fallback to "look
+ * everywhere": falling back would silently undo the narrowing while the trace
+ * claimed it happened, which is worse than admitting the answer was unusable.
+ */
+export function readChapter(result: JudgeResponse, chapters: readonly Chapter[]): ChapterOutcome {
+  if (result.provider === 'refuse') return { kind: 'unavailable', trace: result.trace }
+
+  const answer = result.answers[CHAPTER_CHOICE_ID]
+  if (answer === undefined || answer.type !== 'choice') return { kind: 'no-answer', missing: result.missing }
+
+  const bucket = bucketFor(chapters.length)
+  const margin = checkChoiceMargin(answer, bucket.minTop, bucket.minMargin)
+  if (!margin.ok) return { kind: 'unclear', code: margin.code, top: margin.top, margin: margin.margin }
+
+  const chosen = chapters.find((chapter) => chapter.key === answer.choice)
+  if (chosen === undefined) return { kind: 'unknown-chapter', key: answer.choice, top: margin.top, margin: margin.margin }
+  return { kind: 'chapter', key: chosen.key, label: chosen.label, nodes: chosen.nodes, top: margin.top, margin: margin.margin }
+}
 
 export type PickOutcome =
   | { kind: 'pick'; n: number; top: number; margin: number; danger: number | null; node: FrameNode }

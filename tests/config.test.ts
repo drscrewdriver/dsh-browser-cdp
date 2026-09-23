@@ -14,7 +14,10 @@ describe("dual capture config", () => {
       // connection error that reads like "laya is down".
       jevUrl: "", jevKey: "", jevModel: "jev",
       layaUrl: "http://127.0.0.1:8000", layaKey: "", layaModel: "laya",
-      judgePrefer: "jev,laya,rule", jevChunkSize: 20, jevMaxImageBytes: 0,
+      // LAYA FIRST and jev unnamed: JEV cannot be registered, so naming it
+      // first means every run reports a skipped hop for a service nobody can
+      // sign up for.
+      judgePrefer: "laya,rule", jevChunkSize: 20, jevMaxImageBytes: 0,
       jevHistoryLimit: 5, jevArchiveImage: false, jevStepBudget: 20, jevWallMs: 120000,
     });
   });
@@ -31,7 +34,10 @@ describe("dual capture config", () => {
       // connection error that reads like "laya is down".
       jevUrl: "", jevKey: "", jevModel: "jev",
       layaUrl: "http://127.0.0.1:8000", layaKey: "", layaModel: "laya",
-      judgePrefer: "jev,laya,rule", jevChunkSize: 20, jevMaxImageBytes: 0,
+      // LAYA FIRST and jev unnamed: JEV cannot be registered, so naming it
+      // first means every run reports a skipped hop for a service nobody can
+      // sign up for.
+      judgePrefer: "laya,rule", jevChunkSize: 20, jevMaxImageBytes: 0,
       jevHistoryLimit: 5, jevArchiveImage: false, jevStepBudget: 20, jevWallMs: 120000,
     });
     expect(resolveConfig({ cdpFps: 15, castFpsCap: 30 }).cdpFps).toBe(15);
@@ -247,10 +253,30 @@ describe("阶段 10 judge config", () => {
     expect(settings.layaKey).toBe("k");
     // `prefer` is renamed on the way out, and that mapping is exactly the kind
     // of thing that silently breaks when duplicated in three layers.
-    expect(settings.prefer).toBe("jev,laya,rule");
+    expect(settings.prefer).toBe("laya,rule");
     expect(Object.keys(settings).sort()).toEqual([
       "archiveImage", "chunkSize", "historyLimit", "jevKey", "jevModel", "jevUrl",
       "layaKey", "layaModel", "layaUrl", "maxImageBytes", "prefer", "stepBudget", "wallMs",
     ]);
+  });
+});
+
+describe("阶段 10 · laya-first, because JEV cannot be registered", () => {
+  it("does not name jev in the default hop order", () => {
+    expect(resolveConfig({}).judgePrefer).toBe("laya,rule");
+  });
+
+  it("resolves to a chain that skips nothing when laya has a key", () => {
+    // The point of laya-first: the default chain is one that can actually run.
+    const settings = judgeSettingsOf(resolveConfig({ layaKey: "laya_x" } as never));
+    expect(settings.prefer.split(",")).toEqual(["laya", "rule"]);
+    expect(settings.layaUrl).toBe("http://127.0.0.1:8000");
+  });
+
+  it("still lets a user put jev back once registration opens", () => {
+    // The opt-in is the preference string plus a URL — no code change.
+    const config = resolveConfig({ judgePrefer: "jev,laya,rule", jevUrl: "https://j.example", jevKey: "k" } as never);
+    expect(config.judgePrefer).toBe("jev,laya,rule");
+    expect(config.jevUrl).toBe("https://j.example");
   });
 });

@@ -157,236 +157,128 @@ async function connect(wsUrl, timeoutMs) {
 }
 
 /**
- * Count the interactive candidates of a page WITHOUT touching screenshotting.
+ * Structural roles that make a good CHAPTER.
+ *
+ * "Chapter" is the answer to "which part of the page is this": a form, a nav, a
+ * dialog. Chosen so the set is small and each member is a place a human would
+ * name out loud. A generic `div` is deliberately NOT one — it would shatter a
+ * page into hundreds of meaningless chapters, which is worse than not chaptering.
+ */
+const CHAPTER_ROLES = new Set([
+  'form', 'search', 'navigation', 'main', 'complementary', 'banner', 'contentinfo',
+  'dialog', 'alertdialog', 'region', 'article', 'list', 'listbox', 'menu', 'menubar',
+  'tablist', 'toolbar', 'table', 'grid', 'radiogroup', 'group', 'section',
+  'tabpanel', 'tree', 'feed', 'figure', 'details',
+])
+
+/** Roles to number candidates from. Mirrors src/jev/frame.ts. */
+const INTERACTIVE_ROLES = new Set([
+  'button', 'link', 'textbox', 'searchbox', 'combobox', 'checkbox', 'radio',
+  'menuitem', 'menuitemcheckbox', 'menuitemradio', 'tab', 'option', 'switch', 'slider',
+])
+
+/**
+ * Parent links for every AX node, built from `childIds`.
+ *
+ * `getFullAXTree` returns a FLAT list; the hierarchy only exists through the
+ * child ids. `parentId` is also honoured when present, because which of the two
+ * a given Chrome build populates has changed before — and silently getting an
+ * empty parent map would make every candidate land in one chapter, which looks
+ * like "the page has one section" rather than like a bug.
+ */
+function parentMap(nodes) {
+  const parent = new Map()
+  for (const node of nodes) {
+    const id = String(node.nodeId ?? '')
+    if (id === '') continue
+    const children = Array.isArray(node.childIds) ? node.childIds : []
+    for (const child of children) parent.set(String(child), id)
+    if (node.parentId !== undefined && node.parentId !== null) parent.set(id, String(node.parentId))
+  }
+  return parent
+}
+
+/**
+ * The nearest structural ancestor of a node, as a chapter descriptor.
+ *
+ * NEAREST, not outermost: a button inside a form inside main belongs to the
+ * form. Taking the outermost would put half the page in "main" and lose exactly
+ * the narrowing this exists to provide. Depth-capped so a pathological tree
+ * cannot spin here.
+ */
+function chapterOf(nodeId, byId, parent) {
+  let current = parent.get(String(nodeId))
+  let depth = 0
+  while (current !== undefined && depth < 64) {
+    const ancestor = byId.get(current)
+    if (ancestor !== undefined && ancestor.ignored !== true) {
+      const role = typeof ancestor.role?.value === 'string' ? ancestor.role.value : ''
+      if (CHAPTER_ROLES.has(role)) {
+        const name = typeof ancestor.name?.value === 'string' ? ancestor.name.value.trim() : ''
+        return { role, name, id: current }
+      }
+    }
+    current = parent.get(current)
+    depth += 1
+  }
+  return null
+}
+
+/**
+ * Count the interactive candidates of a page, WITH each one's chapter.
  *
  * The whole point of the count is that it decides whether the caller must
  * chunk; that decision must therefore not depend on a rendered image.
+ *
+ * `container` is a short stable KEY (`form#2`) because a `choice` key is returned
+ * verbatim by the model — a long key costs tokens on every round. `containerLabel`
+ * carries the readable form (`the form "Shipping"`) for the prompt's prose and the
+ * trace. Same-role chapters are numbered in document order, so a page with three
+ * forms yields form#1..#3 rather than three chapters all called "form".
  */
 async function gatherInteractive(limit) {
   const ax = await call('Accessibility.getFullAXTree', {})
   const nodes = Array.isArray(ax?.nodes) ? ax.nodes : []
-  const roles = new Set([
-    'button', 'link', 'textbox', 'searchbox', 'combobox', 'checkbox', 'radio',
-    'menuitem', 'menuitemcheckbox', 'menuitemradio', 'tab', 'option', 'switch', 'slider',
-  ])
+  const byId = new Map()
+  for (const node of nodes) byId.set(String(node.nodeId ?? ''), node)
+  const parent = parentMap(nodes)
+
   const out = []
   const seen = new Set()
+  const roleCounts = new Map()
   for (const node of nodes) {
     if (out.length >= limit) break
     if (node.ignored === true) continue
     const role = typeof node.role?.value === 'string' ? node.role.value : ''
-    if (!roles.has(role)) continue
+    if (!INTERACTIVE_ROLES.has(role)) continue
     const backendNodeId = Number.parseInt(String(node.nodeId ?? ''), 10)
     if (!Number.isFinite(backendNodeId) || seen.has(backendNodeId)) continue
     seen.add(backendNodeId)
+
+    const chapter = chapterOf(node.nodeId, byId, parent)
+    let key = 'page'
+    let label = 'the page itself (no enclosing section)'
+    if (chapter !== null) {
+      const seenSoFar = (roleCounts.get(chapter.role) ?? 0) + 1
+      roleCounts.set(chapter.role, seenSoFar)
+      key = `${chapter.role}#${seenSoFar}`
+      label = chapter.name === ''
+        ? `the ${chapter.role} (${seenSoFar === 1 ? 'first' : `#${seenSoFar}`} on the page)`
+        : `the ${chapter.role} "${chapter.name}"`
+    }
+
     out.push({
       n: out.length + 1,
       backendNodeId,
       role,
       name: typeof node.name?.value === 'string' ? node.name.value : '',
+      container: key,
+      containerLabel: label,
     })
   }
   return out
 }
 
-/**
- * Capture with a BYTE BUDGET.
- *
- * Calibrated from the measured native requirement and the client's own image
- * handling: the budget is honoured by trying JPEG quality steps inside it
- * rather than by cropping the page, because cropping silently removes the very
- * elements the caller asked to see. If even the floor quality overflows, the
- * overrun is REPORTED (`overBudget: true`) — a caller that set a budget must be
- * able to tell "I got what I asked for" from "I got the closest thing".
- */
-async function captureWithinBudget({ format, quality, maxBytes, scale, marks, limit, measureRects }) {
-  const maxWidth = format === 'jpeg' ? (scale?.maxWidth || 1600) : (scale?.maxWidth || 2400)
-  const params = { format, captureBeyondViewport: true }
-  if (format === 'jpeg') {
-    params.optimizeForSpeed = true
-    params.quality = quality || 72
-  }
-  const attempts = format === 'jpeg'
-    ? [params.quality, Math.max(35, params.quality - 18), 45, 35].filter((q, i, a) => a.indexOf(q) === i)
-    : [params.quality]
-
-  // A cheap page does not need a resize round trip; only ask for the metrics
-  // when the format could overflow.
-  let width = 0
-  let height = 0
-  if (format === 'jpeg') {
-    try {
-      const metrics = await call('Page.getLayoutMetrics', {})
-      const content = metrics?.cssContentSize || metrics?.contentSize
-      width = Number(content?.width) || 0
-      height = Number(content?.height) || 0
-    } catch { /* fall through with no clipping */ }
-    if (width > maxWidth) {
-      params.clip = { x: 0, y: 0, width, height, scale: maxWidth / width }
-    }
-  }
-
-  let last = null
-  for (const q of attempts) {
-    if (format === 'jpeg') params.quality = q
-    const shot = await call('Page.captureScreenshot', params, undefined, 30000)
-    const data = typeof shot?.data === 'string' ? shot.data : ''
-    if (data === '') throw new Error('Page.captureScreenshot returned no data')
-    const bytes = Math.floor((data.length * 3) / 4)
-    last = { data, bytes, quality: format === 'jpeg' ? q : null }
-    if (maxBytes === 0 || bytes <= maxBytes) return { ...last, overBudget: false, attempts: attempts.indexOf(q) + 1 }
-  }
-  return { ...last, overBudget: true, attempts: attempts.length }
-}
-
-/**
- * Act on a numbered candidate, re-measuring first.
- *
- * This mirrors `src/jev/act.ts` deliberately. That module declares the
- * DISCIPLINE and is unit-tested plugin-side against a scripted fake; the actual
- * CDP calls have to live here, because the plugin's Node process has no CDP
- * channel (every `src/cdp/*` module runs inside a worker like this one).
- *
- * The discipline, unchanged: a rect from the frame is NEVER the click target.
- *     backendNodeId → DOM.getBoxModel (fresh) → DOM.getNodeForLocation (pre-check)
- *                   → click → DOM.getNodeForLocation (post-check)
- * The pre-check is what catches an overlay WITHOUT dispatching a stray click.
- */
-async function actOnCandidate(params) {
-  const backendNodeId = Number(params.backendNodeId)
-  const action = String(params.action || 'click')
-  if (!Number.isFinite(backendNodeId) || backendNodeId <= 0) {
-    return { ok: false, code: 'no-candidate', message: 'act needs a positive backendNodeId' }
-  }
-  if (state.sessionId === '') await attachPage(params)
-
-  if (action === 'scroll') {
-    const deltaY = Number(params.deltaY)
-    if (!Number.isFinite(deltaY) || deltaY === 0) {
-      return { ok: false, code: 'bad-delta', message: 'scroll needs a non-zero deltaY' }
-    }
-    // A wheel event needs a point; the viewport centre is neutral and needs no
-    // measurement. Zero-x keeps it a pure vertical scroll.
-    const centre = await viewportCentre()
-    await call('Input.dispatchMouseEvent', {
-      type: 'mouseWheel', x: centre.x, y: centre.y, deltaX: 0, deltaY, button: 'none', buttons: 0, clickCount: 0,
-    })
-    return { ok: true, code: 'ok', action: 'scroll', backendNodeId: 0, point: centre, measured: null, drift: 0 }
-  }
-
-  if (action === 'fill') {
-    const text = String(params.text ?? '')
-    if (text === '') return { ok: false, code: 'empty-text', message: 'fill needs non-empty text' }
-    const measured = await measure(backendNodeId)
-    if (!measured.ok) return measured
-    // Focus then insert. NEVER assign `.value`: a controlled input re-renders
-    // from its own state and would wipe it, and no input/change event fires, so
-    // the page believes the field is empty while a screenshot shows text.
-    await call('DOM.focus', { backendNodeId })
-    await call('Input.insertText', { text })
-    return { ok: true, code: 'ok', action: 'fill', backendNodeId, point: measured.centre, measured: measured.rect, drift: measured.drift }
-  }
-
-  const measured = await measure(backendNodeId)
-  if (!measured.ok) return measured
-
-  // PRE-check: is this node still the topmost thing at the measured point? Run
-  // before dispatching, so an overlay costs nothing instead of costing a click.
-  const hit = await call('DOM.getNodeForLocation', {
-    x: Math.round(measured.centre.x), y: Math.round(measured.centre.y), includeUserAgentShadowDOM: false,
-  })
-  if (Number(hit?.backendNodeId) !== backendNodeId) {
-    return {
-      ok: false,
-      code: 'click-missed',
-      message: `candidate measured to ${Math.round(measured.centre.x)},${Math.round(measured.centre.y)} but that point resolves to backendNodeId ${hit?.backendNodeId} — something is on top of it or the page moved`,
-    }
-  }
-
-  for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased']) {
-    await call('Input.dispatchMouseEvent', {
-      type,
-      x: Math.round(measured.centre.x),
-      y: Math.round(measured.centre.y),
-      button: 'left',
-      buttons: type === 'mousePressed' ? 1 : 0,
-      clickCount: type === 'mouseMoved' ? 0 : 1,
-    })
-  }
-
-  // POST-check: a mid-flight re-layout is reported, not hidden.
-  const after = await call('DOM.getNodeForLocation', {
-    x: Math.round(measured.centre.x), y: Math.round(measured.centre.y), includeUserAgentShadowDOM: false,
-  })
-  if (Number(after?.backendNodeId) !== backendNodeId) {
-    return { ok: false, code: 'click-missed', message: 'the click dispatched but the point now resolves to a different node' }
-  }
-  return { ok: true, code: 'ok', action: 'click', backendNodeId, point: measured.centre, measured: measured.rect, drift: measured.drift }
-}
-
-/** A current box model plus the frame-independent drift, for one node. */
-async function measure(backendNodeId) {
-  let model
-  try {
-    model = await call('DOM.getBoxModel', { backendNodeId })
-  } catch (error) {
-    return { ok: false, code: 'no-box-model', message: error instanceof Error ? error.message : String(error) }
-  }
-  const rect = quadToRect(model?.model?.content)
-  if (rect === null) return { ok: false, code: 'no-box-model', message: 'DOM.getBoxModel returned no usable content quad' }
-  // CDP boxes are DOCUMENT space; input coordinates are VIEWPORT space. Adding
-  // the scroll offset back is what keeps a click on the right element after the
-  // page has scrolled — the bug that only shows up on scrolled pages, i.e.
-  // never during a smoke test.
-  const scroll = await readScroll()
-  const viewportRect = { ...rect, x: rect.x - scroll.x, y: rect.y - scroll.y }
-  return {
-    ok: true,
-    rect: viewportRect,
-    centre: { x: viewportRect.x + viewportRect.width / 2, y: viewportRect.y + viewportRect.height / 2 },
-    drift: 0,
-  }
-}
-
-async function readScroll() {
-  try {
-    const result = await call('Runtime.evaluate', { expression: '[window.scrollX, window.scrollY]', returnByValue: true })
-    const value = result?.result?.value
-    if (Array.isArray(value) && value.length >= 2) return { x: Number(value[0]) || 0, y: Number(value[1]) || 0 }
-  } catch { /* a missing scroll offset must not fail the action */ }
-  return { x: 0, y: 0 }
-}
-
-async function viewportCentre() {
-  try {
-    const metrics = await call('Page.getLayoutMetrics', {})
-    const visual = metrics?.cssVisualViewport || metrics?.visualViewport
-    const w = Number(visual?.clientWidth) || 0
-    const h = Number(visual?.clientHeight) || 0
-    if (w > 0 && h > 0) return { x: Math.round(w / 2), y: Math.round(h / 2) }
-  } catch { /* fall through */ }
-  return { x: 0, y: 0 }
-}
-
-/** A CDP quad is 8 numbers: x1,y1 .. x4,y4. */
-function quadToRect(quad) {
-  if (!Array.isArray(quad) || quad.length < 8) return null
-  const xs = [Number(quad[0]), Number(quad[2]), Number(quad[4]), Number(quad[6])]
-  const ys = [Number(quad[1]), Number(quad[3]), Number(quad[5]), Number(quad[7])]
-  if ([...xs, ...ys].some((value) => !Number.isFinite(value))) return null
-  const x = Math.min(...xs)
-  const y = Math.min(...ys)
-  return { x, y, width: Math.max(...xs) - x, height: Math.max(...ys) - y }
-}
-
-/**
- * The viewport facts a FRAME needs: size, scroll offset, device pixel ratio.
- *
- * One `Page.getLayoutMetrics` serves all four. They are reported together
- * because a frame that knows its size but not its scroll offset cannot say which
- * part of the document it showed — and `resolveClip`'s whole lesson (a viewport
- * clip is meaningless without `scroll`) is the same lesson at this layer.
- */
 async function viewportInfo() {
   const fallback = { width: 0, height: 0, scrollX: 0, scrollY: 0, devicePixelRatio: 1 }
   try {

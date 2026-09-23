@@ -43,7 +43,7 @@ interface CaptureReply {
   quality: number | null
   overBudget: boolean
   attempts: number
-  marks: { n: number; backendNodeId: number; role: string; name: string }[]
+  marks: { n: number; backendNodeId: number; role: string; name: string; container?: string; containerLabel?: string }[]
   viewport: { width: number; height: number; scrollX: number; scrollY: number; devicePixelRatio: number }
   targetId: string
   targetUrl: string
@@ -150,6 +150,12 @@ export function makeJudgeEffects(deps: EffectsDeps): JudgeEffects {
       backendNodeId: mark.backendNodeId,
       role: mark.role,
       name: mark.name,
+      // The worker derives the chapter from the AX hierarchy. Passed through
+      // verbatim, defaulting to the whole-page chapter when a worker build is
+      // older than this field — a missing chapter must degrade to "the page",
+      // never to an empty string that would become a nameless choice key.
+      container: mark.container ?? 'page',
+      containerLabel: mark.containerLabel ?? 'the page itself',
       // No rect: the AX tree does not carry one, and inventing a zero rect would
       // be a fidelity claim this path cannot honour. The executor re-measures
       // before acting regardless, which is why the design makes rect a hint.

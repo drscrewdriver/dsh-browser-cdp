@@ -5541,6 +5541,188 @@ async function accessibilityTree(call, sessionId, timeoutMs) {
 }
 
 //#endregion
+//#region src/worker/pick-ui.ts
+const PICK_BINDING = "__dshPickAction";
+async function evaluate(call, sessionId, expression) {
+	try {
+		const result = await call("Runtime.evaluate", {
+			expression,
+			returnByValue: true,
+			awaitPromise: false
+		}, {
+			sessionId,
+			timeoutMs: 6e3
+		});
+		if (result && typeof result === "object" && result.exceptionDetails) {
+			const detail = result.exceptionDetails;
+			return {
+				ok: false,
+				code: "ui-eval-failed",
+				message: detail.exception?.description || detail.text || "Runtime.evaluate threw"
+			};
+		}
+		return {
+			ok: true,
+			code: "ok",
+			message: ""
+		};
+	} catch (error) {
+		const err = error;
+		return {
+			ok: false,
+			code: err?.code ?? "ui-eval-failed",
+			message: err?.message ?? String(error)
+		};
+	}
+}
+/**
+* The page-side program. Kept as one string so it survives `Runtime.evaluate`
+* with no bundler involved. Idempotent: re-running replaces the previous UI.
+*/
+function uiExpression(element) {
+	return `(() => {
+const data = ${JSON.stringify({
+		rect: element.rect,
+		describe: element.describe,
+		binding: PICK_BINDING
+	})};
+const ID_BOX = '__dsh-pick-box';
+const ID_BAR = '__dsh-pick-bar';
+const STYLE_ID = '__dsh-pick-style';
+if (!document.getElementById(STYLE_ID)) {
+  const style = document.createElement('style');
+  style.id = STYLE_ID;
+  style.textContent = [
+    '#' + ID_BOX + ' { position: fixed; pointer-events: none; z-index: 2147483646;',
+    '  outline: 2px solid #38bdf8; outline-offset: 1px; }',
+    '#' + ID_BAR + ' { position: fixed; z-index: 2147483647; display: flex; gap: 6px;',
+    '  align-items: center; padding: 6px 8px; border-radius: 8px;',
+    '  background: rgba(15, 23, 42, 0.92); color: #e2e8f0;',
+    '  font: 12px/1.4 system-ui, sans-serif; box-shadow: 0 6px 20px rgba(0,0,0,0.35); }',
+    '#' + ID_BAR + ' button { cursor: pointer; border: 1px solid #475569; border-radius: 6px;',
+    '  background: #1e293b; color: #e2e8f0; padding: 4px 10px; font: inherit; }',
+    '#' + ID_BAR + ' button:hover { background: #334155; }',
+    '#' + ID_BAR + ' .dsh-pick-desc { max-width: 320px; overflow: hidden;',
+    '  text-overflow: ellipsis; white-space: nowrap; opacity: 0.85; }',
+  ].join('\\n');
+  (document.head || document.documentElement).appendChild(style);
+}
+const oldBox = document.getElementById(ID_BOX); if (oldBox) oldBox.remove();
+const oldBar = document.getElementById(ID_BAR); if (oldBar) oldBar.remove();
+if (!data.rect) { /* no measurable rect: bar only, anchored to viewport centre */ }
+const rect = data.rect || { x: innerWidth / 2 - 60, y: innerHeight / 2 - 20, width: 120, height: 40 };
+const box = document.createElement('div');
+box.id = ID_BOX;
+box.style.left = Math.max(0, rect.x - 2) + 'px';
+box.style.top = Math.max(0, rect.y - 2) + 'px';
+box.style.width = Math.max(8, rect.width + 4) + 'px';
+box.style.height = Math.max(8, rect.height + 4) + 'px';
+document.documentElement.appendChild(box);
+const bar = document.createElement('div');
+bar.id = ID_BAR;
+const desc = document.createElement('span');
+desc.className = 'dsh-pick-desc';
+desc.textContent = data.describe;
+const btnComment = document.createElement('button');
+btnComment.textContent = '评论到对话 Ctrl+J';
+const btnSend = document.createElement('button');
+btnSend.textContent = '添加到对话 ↵';
+bar.appendChild(desc); bar.appendChild(btnComment); bar.appendChild(btnSend);
+const below = rect.y + rect.height + 10;
+const barH = 36;
+const top = below + barH <= innerHeight ? below : Math.max(4, rect.y - barH - 10);
+bar.style.left = Math.min(Math.max(4, rect.x), Math.max(4, innerWidth - 360)) + 'px';
+bar.style.top = top + 'px';
+document.documentElement.appendChild(bar);
+let done = false;
+function report(action) {
+  if (done) return; done = true;
+  try { window[data.binding] && window[data.binding](JSON.stringify({ action })); } catch (e) {}
+}
+btnComment.addEventListener('click', () => report('comment'));
+btnSend.addEventListener('click', () => report('send'));
+window.addEventListener('keydown', function onKey(ev) {
+  if (done) { window.removeEventListener('keydown', onKey); return; }
+  if ((ev.ctrlKey || ev.metaKey) && (ev.key === 'j' || ev.key === 'J')) { ev.preventDefault(); report('comment'); }
+  else if (ev.key === 'Enter') { ev.preventDefault(); report('send'); }
+}, true);
+window.__dshPickUiDone = () => done;
+})()`;
+}
+/** T5.11's "✓ 已传输到对话" confirm, collapsed in place after 2.5s. */
+function confirmExpression() {
+	return `(() => {
+const bar = document.getElementById('__dsh-pick-bar');
+if (bar) {
+  bar.textContent = '✓ 已传输到对话';
+  setTimeout(() => { bar.remove(); }, 2500);
+}
+const box = document.getElementById('__dsh-pick-box');
+if (box) setTimeout(() => { box.remove(); }, 2500);
+})()`;
+}
+function removeExpression() {
+	return `(() => {
+for (const id of ['__dsh-pick-box', '__dsh-pick-bar', '__dsh-pick-style']) {
+  const el = document.getElementById(id); if (el) el.remove();
+}
+})()`;
+}
+/** Draw the frame + bar and arm the binding that reports the chosen action. */
+async function showPickUi(call, sessionId, element) {
+	const arm = await armBinding(call, sessionId);
+	if (!arm.ok) return arm;
+	return evaluate(call, sessionId, uiExpression(element));
+}
+/** Swap the bar to the delivered state; the page collapses it after 2.5s. */
+async function confirmPickUi(call, sessionId) {
+	return evaluate(call, sessionId, confirmExpression());
+}
+/** Remove every trace of the picker UI (panel unmount / tab switch / disable). */
+async function removePickUi(call, sessionId) {
+	return evaluate(call, sessionId, removeExpression());
+}
+async function armBinding(call, sessionId) {
+	try {
+		await call("Runtime.addBinding", { name: PICK_BINDING }, {
+			sessionId,
+			timeoutMs: 6e3
+		});
+		return {
+			ok: true,
+			code: "ok",
+			message: ""
+		};
+	} catch (error) {
+		const err = error;
+		return {
+			ok: false,
+			code: err?.code ?? "binding-failed",
+			message: err?.message ?? String(error)
+		};
+	}
+}
+/** Parse one binding payload. Anything malformed is refused, not guessed. */
+function parsePickAction(payload) {
+	try {
+		const parsed = JSON.parse(payload);
+		if (parsed.action === "comment" || parsed.action === "send") return {
+			ok: true,
+			action: parsed.action
+		};
+		return {
+			ok: false,
+			code: "bad-action"
+		};
+	} catch {
+		return {
+			ok: false,
+			code: "bad-payload"
+		};
+	}
+}
+
+//#endregion
 //#region src/worker/pick-channel.ts
 const CONNECTION_ID = "cast-worker";
 function describeElement(semantics) {
@@ -5555,6 +5737,7 @@ var PickChannel = class {
 	#cdp;
 	#sessions;
 	#onPick;
+	#onAction;
 	#onError;
 	#affinity = new DomainAffinity();
 	#state = {
@@ -5563,14 +5746,17 @@ var PickChannel = class {
 		code: "idle",
 		message: "",
 		lastPick: null,
+		lastAction: null,
 		picks: 0,
 		enabledDomains: []
 	};
 	#detachPick = null;
+	#detachAction = null;
 	constructor(options) {
 		this.#cdp = options.cdp;
 		this.#sessions = options.sessions;
 		this.#onPick = options.onPick;
+		this.#onAction = options.onAction;
 		this.#onError = options.onError;
 	}
 	state() {
@@ -5622,10 +5808,14 @@ var PickChannel = class {
 		const effectiveTarget = targetId !== "" ? targetId : this.#state.targetId;
 		this.#detachPick?.();
 		this.#detachPick = null;
+		this.#detachAction?.();
+		this.#detachAction = null;
 		if (effectiveTarget !== "") {
 			const session = this.#sessions.get(effectiveTarget);
 			if (session !== null) {
 				const call = (method, params, options) => this.#sessions.call(effectiveTarget, method, params, options?.timeoutMs ?? 6e3);
+				const removed = await removePickUi(call, session.sessionId);
+				if (!removed.ok) this.#onError?.(removed.code, removed.message);
 				const off = await setInspectMode(call, {
 					mode: "none",
 					config: DISABLED_HIGHLIGHT_CONFIG,
@@ -5696,9 +5886,50 @@ var PickChannel = class {
 		this.#state = {
 			...this.#state,
 			lastPick: element,
+			lastAction: null,
 			picks: this.#state.picks + 1
 		};
 		this.#onPick?.(element);
+		const ui = await showPickUi(call, sessionId, element);
+		if (!ui.ok) this.#onError?.(ui.code, ui.message);
+		this.#subscribeAction(sessionId);
+	}
+	#subscribeAction(sessionId) {
+		this.#detachAction?.();
+		this.#detachAction = this.#cdp.on("Runtime.bindingCalled", (params, eventSessionId) => {
+			if (eventSessionId !== sessionId) return;
+			const payload = params;
+			if (payload?.name !== PICK_BINDING || typeof payload.payload !== "string") return;
+			const parsed = parsePickAction(payload.payload);
+			if (!parsed.ok) {
+				this.#onError?.(parsed.code, `unusable ${PICK_BINDING} payload`);
+				return;
+			}
+			this.#handleAction(sessionId, parsed.action);
+		});
+	}
+	async #handleAction(sessionId, action) {
+		const element = this.#state.lastPick;
+		if (element === null) return;
+		this.#detachAction?.();
+		this.#detachAction = null;
+		const targetId = this.#state.targetId;
+		const call = (method, params, options) => this.#sessions.call(targetId, method, params, options?.timeoutMs ?? 6e3);
+		const confirm = await confirmPickUi(call, sessionId);
+		if (!confirm.ok) this.#onError?.(confirm.code, confirm.message);
+		this.#state = {
+			...this.#state,
+			lastAction: action,
+			code: "delivered"
+		};
+		this.#onAction?.(element, action);
+		if (this.#state.enabled === false && targetId !== "") {
+			const session = this.#sessions.get(targetId);
+			if (session !== null && session.sessionId === sessionId) {
+				const armed = await this.setEnabled(true, targetId);
+				if (!armed.enabled) this.#onError?.(armed.code, armed.message);
+			}
+		}
 	}
 	/** Semantic candidates from the accessibility tree; used by the R5 loop later. */
 	async candidates(limit = 200) {
@@ -5724,6 +5955,8 @@ var PickChannel = class {
 	dispose() {
 		this.#detachPick?.();
 		this.#detachPick = null;
+		this.#detachAction?.();
+		this.#detachAction = null;
 		this.#affinity.clear();
 	}
 };
@@ -6399,6 +6632,7 @@ async function main() {
 						code: "idle",
 						message: "",
 						lastPick: null,
+						lastAction: null,
 						picks: 0,
 						enabledDomains: []
 					}

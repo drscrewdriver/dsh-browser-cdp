@@ -214,6 +214,11 @@ declare function require(id: string): any
 			openExternal: 'Open real page',
 		raiseWindow: 'Pop out window',
 		raiseWindowHint: 'Raise the agent browser as a real window (a headless instance is replaced by a visible one on the same profile)',
+			pickMode: 'Pick element',
+			pickModeHint: 'Click an element in the live page to quote it into the conversation',
+			picking: 'Picking… click an element in the page',
+			picked: 'Element captured',
+			pickFailed: 'Pick failed',
 			noUrl: 'No URL to open',
 			closeTab: 'Close tab',
 			newTab: '(new tab)',
@@ -258,6 +263,11 @@ declare function require(id: string): any
 			openExternal: '⧉ 打开真实页',
 		raiseWindow: '弹出窗口',
 		raiseWindowHint: '把 agent 浏览器弹出为真实窗口（无头实例会被同 Profile 的有头实例替换，标签页保留）',
+			pickMode: '选择元素',
+			pickModeHint: '在实时页面里点选一个元素，引用到对话',
+			picking: '点选中…请点击页面里的元素',
+			picked: '已捕获元素',
+			pickFailed: '点选失败',
 			noUrl: '无可打开的地址',
 			closeTab: '关闭标签',
 			newTab: '(新标签页)',
@@ -1382,6 +1392,7 @@ declare function require(id: string): any
   transition: background .15s ease;
 }
 .dsh-ego-back:hover { background: rgba(255,255,255,.2); }
+.dsh-ego-back.dsh-ego-pick-on { background: rgba(56,189,248,.3); color: #7dd3fc; }
 .dsh-ego-liveimg {
   width:100%; border-radius:11px; display:block;
   max-height:50vh; object-fit:contain;
@@ -1666,6 +1677,18 @@ declare function require(id: string): any
 				const frameCache = new Map()
 				let liveImg = null
 				let liveImgTargetId = null
+				// T5.17 — the floating window's pick control. Lives at closure
+				// scope so it survives renderLiveMain re-renders; its status is
+				// echoed on the URL line, the same surface hints use.
+				var pickCtl = createPickControl(function (pick, message) {
+					if (pickUrlLine) pickUrlLine.textContent = message || ''
+					if (pickBtnEl) {
+						pickBtnEl.textContent = pick === 'failed' ? wt('pickFailed') : pick === 'on' ? wt('picking') : wt('pickMode')
+						pickBtnEl.classList.toggle('dsh-ego-pick-on', pick === 'on')
+					}
+				})
+				var pickBtnEl = null
+				var pickUrlLine = null
 				// rAF-coalesced live-frame flush: newest frame is applied at display
 				// cadence instead of decoding every source frame (bounds CPU under
 				// an uncapped screencast).
@@ -2110,6 +2133,16 @@ declare function require(id: string): any
 					const u = document.createElement('div')
 					u.className = 'dsh-ego-liveurl'
 					u.textContent = current.url || ''
+					pickUrlLine = u
+					// T5.17 — pick toggle, LEFT of "open real page".
+					const pickBtn = document.createElement('button')
+					pickBtn.type = 'button'
+					pickBtn.className = 'dsh-ego-back'
+					pickBtn.title = wt('pickModeHint')
+					pickBtn.textContent = wt('pickMode')
+					pickBtnEl = pickBtn
+					pickBtn.addEventListener('click', () => { pickCtl.toggle(current.targetId) })
+					badge.appendChild(pickBtn)
 					const openHere = document.createElement('button')
 					openHere.type = 'button'
 					openHere.className = 'dsh-ego-back'
@@ -2520,6 +2553,7 @@ clearTimeout((panel as any)._dshHideT)
 					if (watchStopTimer) window.clearTimeout(watchStopTimer)
 					stopWatch(true); stopVideo()
 					keyboardProxy.dispose()
+					try { pickCtl.disable() } catch {}
 					try { if (sse) sse.close() } catch {}
 					fab.remove()
 					panel.remove()
@@ -2654,6 +2688,7 @@ clearTimeout((panel as any)._dshHideT)
   transition: background .15s ease; color: inherit;
 }
 .dsh-ego-side-back:hover { background: rgba(128,128,128,.3); }
+.dsh-ego-side-back.dsh-ego-pick-on { background: rgba(56,189,248,.28); color: #0ea5e9; }
 .dsh-ego-side-liveimg {
   width: 100%; border-radius: 9px; display: block;
   max-height: 50vh; object-fit: contain;
@@ -2705,6 +2740,83 @@ clearTimeout((panel as any)._dshHideT)
 		// place at rAF cadence without triggering React re-renders per frame.
 		// `ctx` is stored so the controller can call ctx.get('betterSidebar')
 		// to auto-open the Tab on the first ego_* tool call.
+		// T5.3 — the panel pick state machine. Both observation windows share
+		// this control: POST toggles the worker's resident-connection picker,
+		// GET polls the state to observe (`lastPick`/`lastAction` arrive via
+		// the worker's event subscription, never page polling). Tab switches
+		// and unmount disable the mode and strip the injected UI (T5.21).
+		function createPickControl(onState) {
+			var enabled = false
+			var timer = null
+			var seenPicks = 0
+			var request = null
+			function emit(pick, message) { onState(pick, message) }
+			function stopPolling() {
+				if (timer) { window.clearInterval(timer); timer = null }
+			}
+			function post(enabledNow, targetId) {
+				var body: { enabled: unknown; targetId?: string } = { enabled: enabledNow }
+				if (targetId) body.targetId = targetId
+				return fetch('/api/ego/pick', {
+					method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+				}).then(function (r) { return r.json().catch(function () { return null }) }).catch(function () { return null })
+			}
+			function applyState(state) {
+				if (!state || typeof state !== 'object') return
+				if (state.picks !== seenPicks) seenPicks = state.picks
+				if (state.enabled) {
+					emit('on', state.code === 'picking' ? wt('picking') : (state.message || wt('picking')))
+				} else if (state.code === 'delivered') {
+					// M1.6 note: the page bar already shows ✓ 已传输到对话; the
+					// host-side conversation.input wiring is the remaining seam.
+					emit('picked', state.lastPick ? state.lastPick.describe : wt('picked'))
+					enabled = false
+					stopPolling()
+				} else if (state.code && state.code !== 'idle') {
+					emit('failed', state.message || state.code)
+					enabled = false
+					stopPolling()
+				} else {
+					enabled = false
+					stopPolling()
+					emit('off', '')
+				}
+			}
+			function pollOnce() {
+				if (request) return
+				request = fetch('/api/ego/pick').then(function (r) { return r.json().catch(function () { return null }) }).catch(function () { return null })
+				request.then(function (res) {
+					request = null
+					if (res && res.ok !== false && res.state) applyState(res.state)
+					else { enabled = false; stopPolling(); emit('off', '') }
+				})
+			}
+			function toggle(targetId) {
+				if (enabled) { disable(); return }
+				if (!targetId) { emit('failed', wt('noActivePages')); return }
+				post(true, targetId).then(function (res) {
+					var state = res && res.ok !== false ? res.state : null
+					if (!state || state.enabled !== true) {
+						emit('failed', (state && state.message) || (res && res.error) || wt('pickFailed'))
+						return
+					}
+					enabled = true
+					seenPicks = state.picks || 0
+					emit('on', wt('picking'))
+					stopPolling()
+					timer = window.setInterval(pollOnce, 1000)
+				})
+			}
+			function disable() {
+				var wasEnabled = enabled
+				enabled = false
+				stopPolling()
+				emit('off', '')
+				if (wasEnabled) post(false, '')
+			}
+			return { toggle: toggle, disable: disable, isEnabled: function () { return enabled } }
+		}
+
 		function LivePreviewController(ctx) {
 			this.ctx = ctx
 			this.store = createSnapshotStore(this._initialState())
@@ -2753,6 +2865,10 @@ clearTimeout((panel as any)._dshHideT)
 			var self = this
 			this.keyboardProxy = createKeyboardProxy(function (targetId, type, params) { self.sendInput(targetId, type, params) })
 			this.dismissedGuides = { login: false, captcha: false }
+			this._pick = 'off'
+			this._pickMessage = ''
+			this._pickTargetId = null
+			this.pickControl = createPickControl(function (pick, message) { self._setPickState(pick, message) })
 		}
 		LivePreviewController.prototype._initialState = function () {
 			return {
@@ -2769,6 +2885,7 @@ clearTimeout((panel as any)._dshHideT)
 				zoomHint: null,
 				wiringStale: false,
 				backend: 'cdp', streamState: 'idle', streamMessage: '', streamGeneration: 0, streamMime: 'video/mp4; codecs="avc1.42E01E"',
+				pick: 'off', pickMessage: '',
 			}
 		}
 		LivePreviewController.prototype.subscribe = function (cb) {
@@ -2776,6 +2893,15 @@ clearTimeout((panel as any)._dshHideT)
 		}
 		LivePreviewController.prototype.getSnapshot = function () {
 			return this.store.getSnapshot()
+		}
+		LivePreviewController.prototype._setPickState = function (pick, message) {
+			this._pick = pick
+			this._pickMessage = message || ''
+			var self = this
+			this.store.update(function (s) {
+				s.pick = self._pick
+				s.pickMessage = self._pickMessage
+			})
 		}
 		LivePreviewController.prototype._recompute = function () {
 			var hasPage = this.lastList.some(function (s) { return s.url && !s.url.startsWith('about:') })
@@ -2819,6 +2945,11 @@ clearTimeout((panel as any)._dshHideT)
 			this.wiringStale = currentTargetId != null && this.liveImgTargetId !== currentTargetId
 			var showLogin = hasPage && !captchaHit && !this.dismissedGuides.login
 			var captchaKind = (captchaHit && !this.dismissedGuides.captcha) ? (captchaHit.humanCheck.kind || 'captcha') : null
+			// T5.21: a tab switch leaves the picker pointing at the wrong page —
+			// exit and strip the injected UI rather than picking into a hidden tab.
+			if (this.pickControl.isEnabled() && currentTargetId !== this._pickTargetId) {
+				this.togglePick()
+			}
 			this.store.update(function (s) {
 				s.spaces = self.lastList
 				s.pinned = self.pinned
@@ -2837,6 +2968,8 @@ clearTimeout((panel as any)._dshHideT)
 				s.streamMessage = self.streamMessage
 				s.streamGeneration = self.streamGeneration
 				s.streamMime = self.streamMime
+				s.pick = self._pick
+				s.pickMessage = self._pickMessage
 			})
 			this._syncWatch(currentTargetId)
 		}
@@ -2845,9 +2978,20 @@ clearTimeout((panel as any)._dshHideT)
 			this._recompute()
 			if (this.visible) { this.refresh(); this.openStream() }
 		}
+		LivePreviewController.prototype.togglePick = function () {
+			var targetId = this.currentActiveId
+			if (this.pickControl.isEnabled()) {
+				this._pickTargetId = null
+				this.pickControl.toggle(targetId)
+				return
+			}
+			this._pickTargetId = targetId
+			this.pickControl.toggle(targetId)
+		}
 		LivePreviewController.prototype.dispose = function () {
 			this.keyboardProxy.dispose()
 			this.disposed = true
+			try { this.pickControl.disable() } catch (e) {}
 			if (this.liveFlushRaf != null) try { window.cancelAnimationFrame(this.liveFlushRaf) } catch (e) {}
 			if (this.followTimer) window.clearTimeout(this.followTimer)
 			if (this.reconnectFallbackTimer) window.clearTimeout(this.reconnectFallbackTimer)
@@ -3545,6 +3689,13 @@ clearTimeout((panel as any)._dshHideT)
 									onClick: function () { controller.unpin() },
 								}, wt('backToLive'))
 								: null,
+							// T5.16 — pick-element toggle, LEFT of "open real page".
+							h('button', {
+								className: 'dsh-ego-side-back' + (state.pick === 'on' ? ' dsh-ego-pick-on' : ''),
+								type: 'button',
+								title: wt('pickModeHint'),
+								onClick: function () { controller.togglePick() },
+							}, state.pick === 'failed' ? wt('pickFailed') : state.pick === 'on' ? wt('picking') : wt('pickMode')),
 							h('button', {
 								className: 'dsh-ego-side-back', type: 'button',
 								title: wt('openExternal'),

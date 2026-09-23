@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { CdpClient } from '../src/worker/cdp-client.ts'
 import type { TargetSessions } from '../src/worker/capture-cdp.ts'
 import { PickChannel, describeElement, type PickElement } from '../src/worker/pick-channel.ts'
+import { PICK_BINDING, parsePickAction } from '../src/worker/pick-ui.ts'
 
 /**
  * M1.4 / T5.1c acceptance: the picker runs on the worker's resident connection,
@@ -48,10 +49,12 @@ function harness(overrides: { enableFails?: boolean; describeFails?: boolean } =
 
   const picks: PickElement[] = []
   const errors: string[] = []
+  const actions: Array<{ element: PickElement; action: string }> = []
   const channel = new PickChannel({
     cdp,
     sessions,
     onPick: (element) => picks.push(element),
+    onAction: (element, action) => actions.push({ element, action }),
     onError: (code) => errors.push(code),
   })
   const fire = (method: string, params: unknown, sessionId?: string): void => {
@@ -61,6 +64,7 @@ function harness(overrides: { enableFails?: boolean; describeFails?: boolean } =
     channel,
     picks,
     errors,
+    actions,
     fire,
     methods: (): string[] => calls.map((entry) => entry.method),
     callsFor: (method: string) => calls.filter((entry) => entry.method === method),
@@ -197,5 +201,103 @@ describe('M1.4 PickChannel helpers', () => {
     const snapshot = h.channel.state()
     snapshot.enabled = false
     expect(h.channel.state().enabled).toBe(true)
+  })
+})
+
+describe('M1.5 selection UI + action delivery (T5.10–T5.13)', () => {
+  const pickOnce = async (h: ReturnType<typeof harness>): Promise<void> => {
+    await h.channel.setEnabled(true, 'T1')
+    h.fire('Overlay.inspectNodeRequested', { backendNodeId: 42 }, 'S-T1')
+    await flush()
+  }
+
+  it('injects the frame + bar and arms the binding right after a pick', async () => {
+    const h = harness()
+    await pickOnce(h)
+    expect(h.callsFor('Runtime.addBinding')).toHaveLength(1)
+    expect(h.callsFor('Runtime.addBinding')[0]!.params).toMatchObject({ name: PICK_BINDING })
+    const ui = h.callsFor('Runtime.evaluate').find((entry) => String(entry.params.expression).includes('__dsh-pick-box'))
+    expect(ui).toBeDefined()
+    expect(String(ui!.params.expression)).toContain('评论到对话')
+    expect(String(ui!.params.expression)).toContain('添加到对话')
+  })
+
+  it('delivers a "send" action: confirm drawn, onAction fired, picker RE-ARMS (T5.13)', async () => {
+    const h = harness()
+    await pickOnce(h)
+    expect(h.channel.state().code).toBe('picked')
+
+    h.fire('Runtime.bindingCalled', { name: PICK_BINDING, payload: JSON.stringify({ action: 'send' }) }, 'S-T1')
+    await flush()
+    await flush()
+
+    expect(h.actions).toHaveLength(1)
+    expect(h.actions[0]!.action).toBe('send')
+    expect(h.actions[0]!.element.backendNodeId).toBe(42)
+    expect(h.channel.state().lastAction).toBe('send')
+    // The confirm expression was evaluated (✓ 已传输到对话, 2.5s collapse).
+    expect(h.callsFor('Runtime.evaluate').some((e) => String(e.params.expression).includes('已传输到对话'))).toBe(true)
+    // T5.13 second half: the picker is armed again without a panel round trip.
+    expect(h.channel.state().enabled).toBe(true)
+    expect(h.channel.state().code).toBe('picking')
+  })
+
+  it('delivers a "comment" action without auto-submitting expectations', async () => {
+    const h = harness()
+    await pickOnce(h)
+    h.fire('Runtime.bindingCalled', { name: PICK_BINDING, payload: JSON.stringify({ action: 'comment' }) }, 'S-T1')
+    await flush()
+    await flush()
+    expect(h.actions).toHaveLength(1)
+    expect(h.actions[0]!.action).toBe('comment')
+    expect(h.channel.state().lastAction).toBe('comment')
+  })
+
+  it('refuses a malformed binding payload instead of guessing', async () => {
+    const h = harness()
+    await pickOnce(h)
+    h.fire('Runtime.bindingCalled', { name: PICK_BINDING, payload: 'not json' }, 'S-T1')
+    await flush()
+    expect(h.actions).toHaveLength(0)
+    expect(h.errors).toContain('bad-payload')
+  })
+
+  it('refuses an unknown action value', async () => {
+    const h = harness()
+    await pickOnce(h)
+    h.fire('Runtime.bindingCalled', { name: PICK_BINDING, payload: JSON.stringify({ action: 'delete-all' }) }, 'S-T1')
+    await flush()
+    expect(h.actions).toHaveLength(0)
+    expect(h.errors).toContain('bad-action')
+  })
+
+  it('ignores binding calls from another target session', async () => {
+    const h = harness()
+    await pickOnce(h)
+    h.fire('Runtime.bindingCalled', { name: PICK_BINDING, payload: JSON.stringify({ action: 'send' }) }, 'S-OTHER')
+    await flush()
+    expect(h.actions).toHaveLength(0)
+  })
+
+  it('disable strips the injected UI from the page (T5.21)', async () => {
+    const h = harness()
+    await pickOnce(h)
+    const before = h.callsFor('Runtime.evaluate').length
+    await h.channel.setEnabled(false, 'T1')
+    const after = h.callsFor('Runtime.evaluate')
+    expect(after.length).toBeGreaterThan(before)
+    expect(String(after.at(-1)!.params.expression)).toContain('__dsh-pick-style')
+  })
+})
+
+describe('T5.12 payload parsing', () => {
+  it('accepts exactly the two actions', () => {
+    expect(parsePickAction(JSON.stringify({ action: 'comment' }))).toEqual({ ok: true, action: 'comment' })
+    expect(parsePickAction(JSON.stringify({ action: 'send' }))).toEqual({ ok: true, action: 'send' })
+  })
+  it('refuses anything else', () => {
+    expect(parsePickAction('not json')).toEqual({ ok: false, code: 'bad-payload' })
+    expect(parsePickAction(JSON.stringify({ action: 'other' }))).toEqual({ ok: false, code: 'bad-action' })
+    expect(parsePickAction(JSON.stringify({}))).toEqual({ ok: false, code: 'bad-action' })
   })
 })

@@ -31,6 +31,7 @@ import {
   type PageCall,
 } from '../cdp/page.ts'
 import { boxModel, describeNode, flattenAxTree, accessibilityTree } from '../cdp/dom.ts'
+import { PICK_BINDING, confirmPickUi, parsePickAction, removePickUi, showPickUi, type PickAction } from './pick-ui.ts'
 
 /** The rich identity R6 serialises and the panel draws a frame around. */
 export interface PickElement {
@@ -54,6 +55,8 @@ export interface PickState {
   code: string
   message: string
   lastPick: PickElement | null
+  /** The action chosen in the page for `lastPick`, once it is delivered. */
+  lastAction: PickAction | null
   picks: number
   /** Domains successfully enabled on this pick session, in issue order. */
   enabledDomains: string[]
@@ -63,6 +66,8 @@ export interface PickChannelOptions {
   cdp: CdpClient
   sessions: TargetSessions
   onPick?: (element: PickElement) => void
+  /** Fired once per chosen action, AFTER the in-page confirm is drawn. */
+  onAction?: (element: PickElement, action: PickAction) => void
   onError?: (code: string, message: string) => void
 }
 
@@ -81,6 +86,7 @@ export class PickChannel {
   #cdp: CdpClient
   #sessions: TargetSessions
   #onPick?: (element: PickElement) => void
+  #onAction?: (element: PickElement, action: PickAction) => void
   #onError?: (code: string, message: string) => void
   #affinity = new DomainAffinity()
   #state: PickState = {
@@ -89,15 +95,18 @@ export class PickChannel {
     code: 'idle',
     message: '',
     lastPick: null,
+    lastAction: null,
     picks: 0,
     enabledDomains: [],
   }
   #detachPick: (() => void) | null = null
+  #detachAction: (() => void) | null = null
 
   constructor(options: PickChannelOptions) {
     this.#cdp = options.cdp
     this.#sessions = options.sessions
     this.#onPick = options.onPick
+    this.#onAction = options.onAction
     this.#onError = options.onError
   }
 
@@ -161,11 +170,17 @@ export class PickChannel {
     const effectiveTarget = targetId !== '' ? targetId : this.#state.targetId
     this.#detachPick?.()
     this.#detachPick = null
+    this.#detachAction?.()
+    this.#detachAction = null
     if (effectiveTarget !== '') {
       const session = this.#sessions.get(effectiveTarget)
       if (session !== null) {
         const call: PageCall = (method, params, options) =>
           this.#sessions.call(effectiveTarget, method, params, options?.timeoutMs ?? 6000)
+        // T5.21: leaving pick mode must also strip the injected UI — a frame
+        // or bar that outlives the mode is exactly the F12 failure shape.
+        const removed = await removePickUi(call, session.sessionId)
+        if (!removed.ok) this.#onError?.(removed.code, removed.message)
         const off = await setInspectMode(call, {
           mode: 'none',
           config: DISABLED_HIGHLIGHT_CONFIG,
@@ -226,8 +241,59 @@ export class PickChannel {
       documentRect: box.ok ? box.documentRect : null,
       describe: describeElement(semantics),
     }
-    this.#state = { ...this.#state, lastPick: element, picks: this.#state.picks + 1 }
+    this.#state = { ...this.#state, lastPick: element, lastAction: null, picks: this.#state.picks + 1 }
     this.#onPick?.(element)
+
+    // M1.5 / T5.10–T5.12: draw the frame + floating bar and arm the binding
+    // that reports the chosen action. UI failure is reported but the pick
+    // itself stands — the panel can still deliver from `lastPick`.
+    const ui = await showPickUi(call, sessionId, element)
+    if (!ui.ok) this.#onError?.(ui.code, ui.message)
+    this.#subscribeAction(sessionId)
+  }
+
+  #subscribeAction(sessionId: string): void {
+    this.#detachAction?.()
+    this.#detachAction = this.#cdp.on('Runtime.bindingCalled', (params, eventSessionId) => {
+      if (eventSessionId !== sessionId) return
+      const payload = (params as { name?: unknown; payload?: unknown })
+      if (payload?.name !== PICK_BINDING || typeof payload.payload !== 'string') return
+      const parsed = parsePickAction(payload.payload)
+      if (!parsed.ok) {
+        this.#onError?.(parsed.code, `unusable ${PICK_BINDING} payload`)
+        return
+      }
+      void this.#handleAction(sessionId, parsed.action)
+    })
+  }
+
+  async #handleAction(sessionId: string, action: PickAction): Promise<void> {
+    const element = this.#state.lastPick
+    if (element === null) return
+    this.#detachAction?.()
+    this.#detachAction = null
+
+    const targetId = this.#state.targetId
+    const call: PageCall = (method, params, options) =>
+      this.#sessions.call(targetId, method, params, options?.timeoutMs ?? 6000)
+
+    // T5.11: confirm in place, collapse after 2.5s. A failed confirm must not
+    // swallow the delivery — the panel acts on the action regardless.
+    const confirm = await confirmPickUi(call, sessionId)
+    if (!confirm.ok) this.#onError?.(confirm.code, confirm.message)
+
+    this.#state = { ...this.#state, lastAction: action, code: 'delivered' }
+    this.#onAction?.(element, action)
+
+    // T5.13 second half: after the action completes, return to pick mode so a
+    // consecutive pick costs one click, not a round trip to the panel.
+    if (this.#state.enabled === false && targetId !== '') {
+      const session = this.#sessions.get(targetId)
+      if (session !== null && session.sessionId === sessionId) {
+        const armed = await this.setEnabled(true, targetId)
+        if (!armed.enabled) this.#onError?.(armed.code, armed.message)
+      }
+    }
   }
 
   /** Semantic candidates from the accessibility tree; used by the R5 loop later. */
@@ -252,6 +318,8 @@ export class PickChannel {
   dispose(): void {
     this.#detachPick?.()
     this.#detachPick = null
+    this.#detachAction?.()
+    this.#detachAction = null
     this.#affinity.clear()
   }
 }

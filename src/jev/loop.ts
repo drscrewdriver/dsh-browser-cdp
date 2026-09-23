@@ -31,6 +31,7 @@
  */
 
 import type { ActOutcome } from './act.ts'
+import { anchorFor } from './anchors.ts'
 import type { ActedOn } from '../types.ts'
 import { toHistoryNote } from './act.ts'
 import { type Frame, type FrameNode, chaptersOf, shouldAskChapter } from './frame.ts'
@@ -215,6 +216,12 @@ export interface LoopStep {
   degraded: boolean
   latencyMs: number
   budget: BudgetSnapshot
+  /**
+   * Snapshot-stable anchor (`sb-<16hex>`, T7.3) of the node a successful
+   * element action touched — present only on those steps. Survives the
+   * per-frame renumbering, invalid in any other snapshot by construction.
+   */
+  anchor?: string
 }
 
 export interface LoopResult {
@@ -575,7 +582,7 @@ export async function runLoop(input: LoopInput): Promise<LoopResult> {
     // one must not, or the judge reads progress on work that never landed.
     completed.push(`${actionLabel} in ${outcome.chapterKey ?? 'the page'}`)
     progressNote = ''
-    steps.push(step(ledger, steps.length, 'act', outcome.n, action.action, true, describeNodeName(outcome.node), outcome.result, outcome.danger))
+    steps.push(step(ledger, steps.length, 'act', outcome.n, action.action, true, describeNodeName(outcome.node), outcome.result, outcome.danger, anchorFor(frame.frameId, action.backendNodeId)))
 
     // ── progress evaluation: did that STEP actually move us? ──────────────
     //
@@ -950,6 +957,7 @@ function step(
   note: string,
   result: JudgeChainResult,
   danger?: number | null,
+  anchor?: string,
 ): LoopStep {
   return {
     index,
@@ -962,6 +970,7 @@ function step(
     degraded: result.degraded,
     latencyMs: result.latencyMs,
     budget: ledger.snapshot(),
+    ...(anchor === undefined ? {} : { anchor }),
   }
 }
 

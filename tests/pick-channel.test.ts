@@ -222,39 +222,38 @@ describe('M1.5 selection UI + action delivery (T5.10–T5.13)', () => {
     expect(h.callsFor('Runtime.addBinding')[0]!.params).toMatchObject({ name: PICK_BINDING })
     const ui = h.callsFor('Runtime.evaluate').find((entry) => String(entry.params.expression).includes('__dsh-pick-box'))
     expect(ui).toBeDefined()
-    expect(String(ui!.params.expression)).toContain('评论到对话')
-    expect(String(ui!.params.expression)).toContain('添加到对话')
+    expect(String(ui!.params.expression)).toContain('引用到对话')
   })
 
-  it('delivers a "send" action: confirm drawn, onAction fired, picker RE-ARMS (T5.13)', async () => {
+  it('delivers a "quote" action: confirm drawn, onAction fired, picker RE-ARMS (T5.13)', async () => {
     const h = harness()
     await pickOnce(h)
     expect(h.channel.state().code).toBe('picked')
 
-    h.fire('Runtime.bindingCalled', { name: PICK_BINDING, payload: JSON.stringify({ action: 'send' }) }, 'S-T1')
+    h.fire('Runtime.bindingCalled', { name: PICK_BINDING, payload: JSON.stringify({ action: 'quote' }) }, 'S-T1')
     await flush()
     await flush()
 
     expect(h.actions).toHaveLength(1)
-    expect(h.actions[0]!.action).toBe('send')
+    expect(h.actions[0]!.action).toBe('quote')
     expect(h.actions[0]!.element.backendNodeId).toBe(42)
-    expect(h.channel.state().lastAction).toBe('send')
-    // The confirm expression was evaluated (✓ 已传输到对话, 2.5s collapse).
-    expect(h.callsFor('Runtime.evaluate').some((e) => String(e.params.expression).includes('已传输到对话'))).toBe(true)
+    expect(h.channel.state().lastAction).toBe('quote')
+    // The confirm expression was evaluated (✓ 已引用到输入框, 2.5s collapse).
+    expect(h.callsFor('Runtime.evaluate').some((e) => String(e.params.expression).includes('已引用到输入框'))).toBe(true)
     // T5.13 second half: the picker is armed again without a panel round trip.
     expect(h.channel.state().enabled).toBe(true)
     expect(h.channel.state().code).toBe('picking')
   })
 
-  it('delivers a "comment" action without auto-submitting expectations', async () => {
+  it('delivers a "quote" action from the Enter shortcut too', async () => {
     const h = harness()
     await pickOnce(h)
-    h.fire('Runtime.bindingCalled', { name: PICK_BINDING, payload: JSON.stringify({ action: 'comment' }) }, 'S-T1')
+    h.fire('Runtime.bindingCalled', { name: PICK_BINDING, payload: JSON.stringify({ action: 'quote' }) }, 'S-T1')
     await flush()
     await flush()
     expect(h.actions).toHaveLength(1)
-    expect(h.actions[0]!.action).toBe('comment')
-    expect(h.channel.state().lastAction).toBe('comment')
+    expect(h.actions[0]!.action).toBe('quote')
+    expect(h.channel.state().lastAction).toBe('quote')
   })
 
   it('refuses a malformed binding payload instead of guessing', async () => {
@@ -278,7 +277,7 @@ describe('M1.5 selection UI + action delivery (T5.10–T5.13)', () => {
   it('ignores binding calls from another target session', async () => {
     const h = harness()
     await pickOnce(h)
-    h.fire('Runtime.bindingCalled', { name: PICK_BINDING, payload: JSON.stringify({ action: 'send' }) }, 'S-OTHER')
+    h.fire('Runtime.bindingCalled', { name: PICK_BINDING, payload: JSON.stringify({ action: 'quote' }) }, 'S-OTHER')
     await flush()
     expect(h.actions).toHaveLength(0)
   })
@@ -357,8 +356,8 @@ describe('T5.1b coordinate fallback (pickAt)', () => {
 
 describe('T5.12 payload parsing', () => {
   it('accepts exactly the two actions', () => {
-    expect(parsePickAction(JSON.stringify({ action: 'comment' }))).toEqual({ ok: true, action: 'comment' })
-    expect(parsePickAction(JSON.stringify({ action: 'send' }))).toEqual({ ok: true, action: 'send' })
+    expect(parsePickAction(JSON.stringify({ action: 'quote' }))).toEqual({ ok: true, action: 'quote' })
+    expect(parsePickAction(JSON.stringify({ action: 'quote' }))).toEqual({ ok: true, action: 'quote' })
   })
   it('refuses anything else', () => {
     expect(parsePickAction('not json')).toEqual({ ok: false, code: 'bad-payload' })

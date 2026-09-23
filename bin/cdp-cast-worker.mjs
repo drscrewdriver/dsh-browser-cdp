@@ -5701,10 +5701,8 @@ const desc = document.createElement('span');
 desc.className = 'dsh-pick-desc';
 desc.textContent = data.describe;
 const btnComment = document.createElement('button');
-btnComment.textContent = '评论到对话 Ctrl+J';
-const btnSend = document.createElement('button');
-btnSend.textContent = '添加到对话 ↵';
-bar.appendChild(desc); bar.appendChild(btnComment); bar.appendChild(btnSend);
+btnComment.textContent = '引用到对话 Ctrl+J';
+bar.appendChild(desc); bar.appendChild(btnComment);
 const below = rect.y + rect.height + 10;
 const barH = 36;
 const top = below + barH <= innerHeight ? below : Math.max(4, rect.y - barH - 10);
@@ -5716,12 +5714,11 @@ function report(action) {
   if (done) return; done = true;
   try { window[data.binding] && window[data.binding](JSON.stringify({ action })); } catch (e) {}
 }
-btnComment.addEventListener('click', () => report('comment'));
-btnSend.addEventListener('click', () => report('send'));
+btnComment.addEventListener('click', () => report('quote'));
 window.addEventListener('keydown', function onKey(ev) {
   if (done) { window.removeEventListener('keydown', onKey); return; }
-  if ((ev.ctrlKey || ev.metaKey) && (ev.key === 'j' || ev.key === 'J')) { ev.preventDefault(); report('comment'); }
-  else if (ev.key === 'Enter') { ev.preventDefault(); report('send'); }
+  if ((ev.ctrlKey || ev.metaKey) && (ev.key === 'j' || ev.key === 'J')) { ev.preventDefault(); report('quote'); }
+  else if (ev.key === 'Enter') { ev.preventDefault(); report('quote'); }
 }, true);
 window.__dshPickUiDone = () => done;
 })()`;
@@ -5731,7 +5728,7 @@ function confirmExpression() {
 	return `(() => {
 const bar = document.getElementById('__dsh-pick-bar');
 if (bar) {
-  bar.textContent = '✓ 已传输到对话';
+  bar.textContent = '✓ 已引用到输入框';
   setTimeout(() => { bar.remove(); }, 2500);
 }
 const box = document.getElementById('__dsh-pick-box');
@@ -5751,7 +5748,7 @@ async function showPickUi(call, sessionId, element) {
 	if (!arm.ok) return arm;
 	return evaluate(call, sessionId, uiExpression(element));
 }
-/** Swap the bar to the delivered state; the page collapses it after 2.5s. */
+/** Swap the bar to the quoted state; the page collapses it after 2.5s. */
 async function confirmPickUi(call, sessionId) {
 	return evaluate(call, sessionId, confirmExpression());
 }
@@ -5783,7 +5780,7 @@ async function armBinding(call, sessionId) {
 function parsePickAction(payload) {
 	try {
 		const parsed = JSON.parse(payload);
-		if (parsed.action === "comment" || parsed.action === "send") return {
+		if (parsed.action === "quote") return {
 			ok: true,
 			action: parsed.action
 		};

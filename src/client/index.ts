@@ -219,8 +219,7 @@ declare function require(id: string): any
 			picking: 'Picking… click an element in the page',
 			picked: 'Element captured',
 			pickFailed: 'Pick failed',
-			pickSent: '✓ Sent to conversation',
-			pickDrafted: '✓ Written to composer',
+			pickQuoted: '✓ Quoted to composer',
 			pickDeliverFailed: 'Delivery failed',
 			noUrl: 'No URL to open',
 			closeTab: 'Close tab',
@@ -271,8 +270,7 @@ declare function require(id: string): any
 			picking: '点选中…请点击页面里的元素',
 			picked: '已捕获元素',
 			pickFailed: '点选失败',
-			pickSent: '✓ 已发送到对话',
-			pickDrafted: '✓ 已写入输入框',
+			pickQuoted: '✓ 已引用到输入框',
 			pickDeliverFailed: '投递失败',
 			noUrl: '无可打开的地址',
 			closeTab: '关闭标签',
@@ -2753,22 +2751,19 @@ clearTimeout((panel as any)._dshHideT)
 		// `ctx` is stored so the controller can call ctx.get('betterSidebar')
 		// to auto-open the Tab on the first bcdp_* tool call.
 		/**
-		 * M1.6 / T5.6–T5.7 — write a picked element into the conversation.
-		 * Client-side seam, verified against dsh-better-sidebar's appendToDraft:
-		 * `ctx.sessions.list.getSnapshot().current` → `ctx.sessions.scope(sid)`
-		 * → `ctx.get('conversation').input.for(actx)` → `setDraft` / `submit`.
-		 *
-		 * Gates (T5.4 / T5.7): a pick without a resolved describe is refused
-		 * here AGAIN (second layer beyond the worker's G7 check); the auto-send
-		 * path only fires when `phase === 'plain'`; and because `submit()` is
-		 * void, the result is read back from the phase snapshot rather than
-		 * asserted.
+		 * M1.6 — quote a picked element into the conversation composer.
+		 * 2026-09-23 revision: NO auto-submit, ever. Every delivery appends a
+		 * numbered line `[pick N] <describe>` to the existing draft (N continues
+		 * the sequence already in the composer), and the user sends it when they
+		 * choose — Enter or the send button, their call.
+		 * Gates kept: a pick without a resolved describe is refused here AGAIN
+		 * (second layer beyond the worker's G7 check).
 		 */
 		function deliverPickToConversation(ctx, element, action) {
 			try {
 				var describe = element && typeof element.describe === 'string' ? element.describe : ''
 				if (describe === '') return { ok: false, code: 'empty-describe' }
-				if (action !== 'comment' && action !== 'send') return { ok: false, code: 'bad-action' }
+				if (action !== 'quote') return { ok: false, code: 'bad-action' }
 				var sessionId = ctx.sessions.list.getSnapshot().current
 				if (!sessionId) return { ok: false, code: 'no-active-session' }
 				var actx = ctx.sessions.scope(sessionId)
@@ -2779,21 +2774,15 @@ clearTimeout((panel as any)._dshHideT)
 				if (!input || typeof input.setDraft !== 'function') return { ok: false, code: 'no-input-facade' }
 				var snap = input.state && input.state.getSnapshot ? input.state.getSnapshot() : null
 				var draft = snap && typeof snap.draft === 'string' ? snap.draft : ''
-				if (action === 'comment') {
-					// Quoting path: description into the draft, the user adds their
-					// comment and sends it themselves.
-					var next = draft ? draft + (draft.endsWith('\n') ? '' : '\n') + describe : describe
-					input.setDraft(next)
-					return { ok: true, code: 'drafted' }
+				var max = 0, mm
+				var re = /\[pick (\d+)\]/g
+				while ((mm = re.exec(draft)) !== null) {
+					var n = parseInt(mm[1], 10)
+					if (n > max) max = n
 				}
-				// Auto-send path: same adjudication pipeline as the send button.
-				if (snap && snap.phase && snap.phase !== 'plain') {
-					return { ok: false, code: 'phase-not-plain', phase: snap.phase }
-				}
-				input.setDraft(draft ? draft + (draft.endsWith('\n') ? '' : '\n') + describe : describe)
-				input.submit()
-				var after = input.state && input.state.getSnapshot ? input.state.getSnapshot() : null
-				return { ok: true, code: 'submitted', phase: after && after.phase }
+				var line = '[pick ' + (max + 1) + '] ' + describe
+				input.setDraft(draft ? draft + (draft.charAt(draft.length - 1) === '\n' ? '' : '\n') + line : line)
+				return { ok: true, code: 'drafted', index: max + 1 }
 			} catch (err) {
 				return { ok: false, code: 'deliver-failed', message: String((err && err.message) || err) }
 			}
@@ -2831,7 +2820,7 @@ clearTimeout((panel as any)._dshHideT)
 					deliveredPicks = state.picks
 					var result = deliver(state.lastPick, state.lastAction)
 					if (result && result.ok) {
-						emit('picked', result.code === 'submitted' ? wt('pickSent') : wt('pickDrafted'))
+						emit('picked', wt('pickQuoted') + ' #' + result.index)
 					} else {
 						emit('failed', wt('pickDeliverFailed') + (result && result.code ? ' (' + result.code + ')' : ''))
 					}

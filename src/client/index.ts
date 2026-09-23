@@ -589,6 +589,12 @@ declare function require(id: string): any
 				cdpFps: String(config.cdpFps ?? 20), cdpQuality: String(config.cdpQuality ?? 55), cdpMaxWidth: String(config.cdpMaxWidth ?? 960), cdpBackstopIntervalMs: String(config.cdpBackstopIntervalMs ?? 3000),
 				ffmpegFps: String(config.ffmpegFps ?? 20), ffmpegMaxWidth: String(config.ffmpegMaxWidth ?? 1280), ffmpegBitrateKbps: String(config.ffmpegBitrateKbps ?? 4000), ffmpegEncoder: config.ffmpegEncoder || 'auto', ffmpegPath: config.ffmpegPath || '', githubMirror: config.githubMirror || '',
 				egoCliArgs: config.egoCliArgs || '', chromeArgs: config.chromeArgs || '',
+			// R1: the CDP sequence is part of the draft. Omitting these three
+			// here made every target vanish from the panel the instant a save
+			// succeeded (the server had them; the draft rebuild dropped them).
+			cdpTargets: Array.isArray(config.cdpTargets) ? config.cdpTargets.map(function (t) { return Object.assign({ id: '', label: '', endpoint: '', enabled: true, note: '', probeStatus: 'unknown', probeLatencyMs: 0, probeError: '', probeCode: '', probeAt: 0 }, t) }) : [],
+			activeTargetId: typeof config.activeTargetId === 'string' ? config.activeTargetId : '',
+			cdpMode: config.cdpMode === 'local' || config.cdpMode === 'remote' ? config.cdpMode : 'auto',
 			}
 				if (ffmpegStatus) s.ffmpegStatus = ffmpegStatus
 				s.dirty = false

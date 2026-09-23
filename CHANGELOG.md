@@ -2,6 +2,12 @@
 
 所有对用户可见的变更集中在各版本号下。格式遵循 [Keep a Changelog](https://keepachangelog.com/)，版本语义遵循 [SemVer](http://semver.org/)。
 
+## [0.9.1] - 2026-09-23 — 修复：保存后 CDP 目标从面板消失
+
+### 修复
+- **设置面板保存成功后，CDP 目标序列整段从界面上消失（数据其实已落盘）**：保存成功回调里用服务端返回的 config 重建设置草稿时，漏掉了 `cdpTargets` / `activeTargetId` / `cdpMode` 三个字段（`load()` 里有、这条路径没有）。于是「添加目标 → 填端点 → 保存」后目标立刻退回「还没有目标」，但 `~/.dsh/settings.yaml` 里其实写入了正确的目标与 `activeTargetId`。已在保存成功路径补齐三个字段，与 `load()` 对齐。
+  > 排查记录：`/ego/api/set` 侧的 `ALLOWED_KEYS` 与 `sanitizeJsonArray` 均正常，问题只在客户端草稿重建，不是网关或 schema 丢字段。
+
 ## [0.9.0] - 2026-09-23 — CDP 目标序列 + 激活 (R1) + 包名统一为 dsh-browser-cdp
 
 ### 新增

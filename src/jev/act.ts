@@ -31,6 +31,7 @@
 import { type BoxOutcome, boxModel, nodeAtPoint } from '../cdp/dom.ts'
 import { type InputResult, type MouseButton, clickAt, fillText, wheel } from '../cdp/input.ts'
 import type { PageCall } from '../cdp/page.ts'
+import type { ActedOn } from '../types.ts'
 import type { Frame, FrameNode } from './frame.ts'
 
 /** The distinct ways an action can decline to happen. */
@@ -58,6 +59,8 @@ export interface ActOk {
   measured: { x: number; y: number; width: number; height: number }
   /** How far the element moved between capture and action, in CSS px. Diagnostic. */
   drift: number
+  /** The faithful record of the element acted on (class preserved). Best-effort. */
+  recorded?: ActedOn
 }
 
 export interface ActFailure {
@@ -296,13 +299,16 @@ function driftOf(
  * Lives here rather than in `prompt.ts` because it is a projection of THIS
  * module's result shape; `prompt.ts` only needs the small `HistoryStep`.
  */
-export function toHistoryNote(outcome: ActOutcome): { action: string; n: number; ok: boolean; note: string } {
+export function toHistoryNote(outcome: ActOutcome): { action: string; n: number; ok: boolean; note: string; acted?: { tagName: string; className: string; text: string } } {
+  const acted = outcome.ok && outcome.recorded !== undefined
+    ? { tagName: outcome.recorded.tagName, className: outcome.recorded.className, text: outcome.recorded.text }
+    : undefined
   if (outcome.ok) {
     if (outcome.action === 'scroll') {
-      return { action: 'scroll', n: 0, ok: true, note: 'page scrolled; the frame will be recaptured' }
+      return { action: 'scroll', n: 0, ok: true, note: 'page scrolled; the frame will be recaptured', ...(acted === undefined ? {} : { acted }) }
     }
     const drift = outcome.drift > 1 ? ` (element had drifted ${outcome.drift}px since capture)` : ''
-    return { action: outcome.action, n: outcome.n, ok: true, note: `${outcome.action} dispatched${drift}` }
+    return { action: outcome.action, n: outcome.n, ok: true, note: `${outcome.action} dispatched${drift}`, ...(acted === undefined ? {} : { acted }) }
   }
-  return { action: 'none', n: outcome.n, ok: false, note: `${outcome.code}: ${outcome.message}` }
+  return { action: 'none', n: outcome.n, ok: false, note: `${outcome.code}: ${outcome.message}`, ...(acted === undefined ? {} : { acted }) }
 }

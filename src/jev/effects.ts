@@ -29,6 +29,7 @@ import type { SubprocessService } from '../types.ts'
 import type { Frame, FrameNodeInput } from './frame.ts'
 import { buildFrame, frameIdFor } from './frame.ts'
 import type { ActCode, ActOutcome } from './act.ts'
+import type { ActedOn } from '../types.ts'
 import type { CaptureResult, ActRequest, LoopEffects, VerifyResult } from './loop.ts'
 import type { IntentSpec } from './prompt.ts'
 import { doneQuestion } from './prompt.ts'
@@ -59,6 +60,8 @@ interface ActReply {
   point?: { x: number; y: number }
   measured?: { x: number; y: number; width: number; height: number } | null
   drift?: number
+  /** Faithful record of the element acted on (class preserved). Worker-only. */
+  recorded?: ActedOn
 }
 
 export interface EffectsDeps {
@@ -239,6 +242,7 @@ export function makeJudgeEffects(deps: EffectsDeps): JudgeEffects {
         point: reply.point ?? { x: 0, y: 0 },
         measured: reply.measured ?? { x: 0, y: 0, width: 0, height: 0 },
         drift: reply.drift ?? 0,
+        ...(reply.recorded === undefined ? {} : { recorded: reply.recorded }),
       }
     },
 

@@ -82,6 +82,8 @@ export interface HistoryStep {
   ok: boolean
   /** A short observation, not a transcript. */
   note: string
+  /** Compact citation of the element acted on (class preserved). Best-effort. */
+  acted?: { tagName: string; className: string; text: string }
 }
 
 /**
@@ -306,7 +308,10 @@ function buildHistorySection(history: readonly HistoryStep[], limit: number, exc
   } else {
     for (const step of recent) {
       const target = step.n === 0 ? '' : ` n=${step.n}`
-      lines.push(`- ${step.action}${target} ${step.ok ? 'ok' : 'FAILED'}: ${step.note}`)
+      const acted = step.acted === undefined
+        ? ''
+        : ` — <${step.acted.tagName}${step.acted.className ? ` class="${step.acted.className}"` : ''}>${step.acted.text}</${step.acted.tagName}>`
+      lines.push(`- ${step.action}${target} ${step.ok ? 'ok' : 'FAILED'}: ${step.note}${acted}`)
     }
   }
   if (excluded.size > 0) {

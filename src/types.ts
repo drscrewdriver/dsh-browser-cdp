@@ -296,6 +296,29 @@ export interface ResolvedConfig {
   jevWallMs: number
 }
 
+/**
+ * The faithful record of the one element an action touched.
+ *
+ * This is the "package struct full record": the element's outer HTML including
+ * inner content and class, normalized so inspector-chrome is pruned but LOCATING
+ * features (class, id, role, …) are preserved. It is attached to a successful
+ * `click`/`fill` outcome, surfaced in HISTORY (compact) and ESCALATION (full),
+ * and in the final loop result — never expanded onto every candidate in a frame.
+ */
+export interface ActedOn {
+  /** Lowercased tag, e.g. "span". */
+  tagName: string
+  /** Page classes only — inspector-chrome tokens pruned by the normalizer. */
+  className: string
+  /** The element's own text, truncated to a byte budget. */
+  text: string
+  /** The full normalized outer HTML — the faithful record. Class preserved. */
+  outerHTML: string
+  backendNodeId: number
+  /** True when text/outerHTML were truncated to fit the budget. */
+  truncated: boolean
+}
+
 /** Raw composition-layer config (may contain legacy / extra keys). */
 export interface RawConfig extends Partial<ResolvedConfig> {
   /** R1 key, superseded by `links` in R7 (read one version back). */

@@ -31,6 +31,7 @@
  */
 
 import type { ActOutcome } from './act.ts'
+import type { ActedOn } from '../types.ts'
 import { toHistoryNote } from './act.ts'
 import { type Frame, type FrameNode, chaptersOf, shouldAskChapter } from './frame.ts'
 import type { JudgeChainResult, JudgeRequest } from './judge.ts'
@@ -197,6 +198,8 @@ export interface Escalation {
   recovery: RecoveryOption[]
   /** One line the caller can act on directly. */
   suggest: string
+  /** The element the failed/uncertain action touched (class preserved). Best-effort. */
+  acted?: ActedOn
 }
 
 export interface LoopStep {
@@ -233,6 +236,8 @@ export interface LoopResult {
   remaining: BudgetSnapshot
   /** True when any step ran on a non-first-choice provider. */
   degraded: boolean
+  /** The element the last action touched (full record, class preserved). Best-effort. */
+  actedOn?: ActedOn
   /**
    * Present when `status === 'escalate'`.
    *
@@ -626,6 +631,7 @@ export async function runLoop(input: LoopInput): Promise<LoopResult> {
             verdict: `judge reported done, but the criteria do not hold on the page (${checked.note})`,
             recovery: recoveryFor('done-unverified', action.action),
             suggest: 'The judge believes the goal is met while the page disagrees. Re-capture and re-check, or correct the successCriteria if they are wrong.',
+            ...(action.recorded === undefined ? {} : { acted: action.recorded }),
           },
           excluded, steps, degraded, ledger,
         )
@@ -640,6 +646,7 @@ export async function runLoop(input: LoopInput): Promise<LoopResult> {
             verdict: 'the judge reports the step did not advance',
             recovery: recoveryFor('step-failed', action.action),
             suggest: `The step "${actionLabel}" did not work. Pick a recovery and resume, or stop and report.`,
+            ...(action.recorded === undefined ? {} : { acted: action.recorded }),
           },
           excluded, steps, degraded, ledger,
         )
@@ -661,6 +668,7 @@ export async function runLoop(input: LoopInput): Promise<LoopResult> {
           verdict: `the progress verdict was unusable: ${detail}`,
           recovery: recoveryFor('evaluation-unclear', action.action),
           suggest: 'The judge could not say whether the step advanced. Re-capture and re-evaluate, or take over.',
+          ...(action.recorded === undefined ? {} : { acted: action.recorded }),
         },
         excluded, steps, degraded, ledger,
       )
@@ -725,6 +733,7 @@ function finishEscalated(
     remaining: ledger.snapshot(),
     degraded,
     escalation,
+    ...(escalation.acted === undefined ? {} : { actedOn: escalation.acted }),
   }
 }
 

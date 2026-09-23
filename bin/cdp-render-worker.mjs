@@ -25,6 +25,7 @@
  */
 
 import { createInterface } from 'node:readline'
+import { normalizeRecordedElement } from './record-normalize.mjs'
 
 const VERSION = 1
 
@@ -292,6 +293,29 @@ async function gatherInteractive(limit) {
  *                   -> click -> DOM.getNodeForLocation (post)
  * The pre-check is what catches an overlay WITHOUT dispatching a stray click.
  */
+
+/**
+ * Best-effort faithful record of the element just acted on.
+ *
+ * One extra `DOM.getOuterHTML` call — only on the element we actually touched,
+ * never on every candidate. Recording is best-effort: a failure here must not
+ * turn a successful click into a failed one, so it returns null and the act
+ * result simply omits `recorded`.
+ *
+ * `normalizeRecordedElement` preserves locating features (class, id, role, …) and
+ * only prunes known inspector-chrome tokens — that is the locked rule.
+ */
+async function recordElement(backendNodeId) {
+  try {
+    const res = await call('DOM.getOuterHTML', { backendNodeId })
+    const html = typeof res?.outerHTML === 'string' ? res.outerHTML : ''
+    if (html === '') return null
+    return normalizeRecordedElement(html, backendNodeId)
+  } catch {
+    return null
+  }
+}
+
 async function actOnCandidate(params) {
   const backendNodeId = Number(params.backendNodeId)
   const action = String(params.action || 'click')
@@ -346,7 +370,8 @@ async function actOnCandidate(params) {
     // the page believes the field is empty while a screenshot shows text.
     await call('DOM.focus', { backendNodeId })
     await call('Input.insertText', { text })
-    return { ok: true, code: 'ok', action: 'fill', backendNodeId, point: measured.centre, measured: measured.rect, drift: measured.drift }
+    const recorded = await recordElement(backendNodeId)
+    return { ok: true, code: 'ok', action: 'fill', backendNodeId, point: measured.centre, measured: measured.rect, drift: measured.drift, ...(recorded === null ? {} : { recorded }) }
   }
 
   const measured = await measure(backendNodeId)
@@ -385,7 +410,8 @@ async function actOnCandidate(params) {
   if (Number(after?.backendNodeId) !== backendNodeId) {
     return { ok: false, code: 'click-missed', message: 'the click dispatched but the point now resolves to a different node' }
   }
-  return { ok: true, code: 'ok', action: 'click', backendNodeId, point: measured.centre, measured: measured.rect, drift: measured.drift }
+  const recorded = await recordElement(backendNodeId)
+  return { ok: true, code: 'ok', action: 'click', backendNodeId, point: measured.centre, measured: measured.rect, drift: measured.drift, ...(recorded === null ? {} : { recorded }) }
 }
 
 /** A current box model plus the point to act on, for one node. */

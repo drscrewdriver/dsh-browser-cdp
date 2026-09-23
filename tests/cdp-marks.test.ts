@@ -143,7 +143,8 @@ describe('R4 captureMarked', () => {
       'Overlay.hideHighlight',
     ])
     const highlight = fake.calls.find((entry) => entry.method === 'Overlay.highlightNode')!
-    expect(highlight.params).toMatchObject({ backendNodeId: 13 })
+    // mark #2 is the link (node 12); node 13 is a generic and was filtered out.
+    expect(highlight.params).toMatchObject({ backendNodeId: 12 })
     expect(highlight.params.highlightConfig).toBeDefined()
   })
 

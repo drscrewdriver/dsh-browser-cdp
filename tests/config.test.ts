@@ -8,6 +8,8 @@ describe("dual capture config", () => {
       cdpFps: 20, cdpQuality: 55, cdpMaxWidth: 960, cdpBackstopIntervalMs: 3000,
       ffmpegFps: 20, ffmpegMaxWidth: 1280, ffmpegBitrateKbps: 4000, ffmpegEncoder: "auto", ffmpegPath: "", githubMirror: "",
       egoCliArgs: "", chromeArgs: "", isolateSpaces: false, idleTimeoutMin: 0,
+      cdpTargets: [], activeTargetId: "", cdpMode: "auto", cdpProbeTimeoutMs: 3000,
+      cursorHud: true, cursorName: "DeepSeek", allowLocalFallback: false, localHeadless: false, localUserDataDir: "",
     });
   });
 
@@ -17,6 +19,8 @@ describe("dual capture config", () => {
       cdpFps: 30, cdpQuality: 70, cdpMaxWidth: 1200, cdpBackstopIntervalMs: 5000,
       ffmpegFps: 20, ffmpegMaxWidth: 1280, ffmpegBitrateKbps: 4000, ffmpegEncoder: "auto", ffmpegPath: "", githubMirror: "",
       egoCliArgs: "", chromeArgs: "", isolateSpaces: false, idleTimeoutMin: 0,
+      cdpTargets: [], activeTargetId: "", cdpMode: "auto", cdpProbeTimeoutMs: 3000,
+      cursorHud: true, cursorName: "DeepSeek", allowLocalFallback: false, localHeadless: false, localUserDataDir: "",
     });
     expect(resolveConfig({ cdpFps: 15, castFpsCap: 30 }).cdpFps).toBe(15);
   });

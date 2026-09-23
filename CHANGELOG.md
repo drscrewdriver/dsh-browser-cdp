@@ -9,7 +9,8 @@
 - **设置面板序列编辑器**：目标增删改 + 上下排序、激活单选、逐项「探测」按钮与可达性徽章（从 `/ego/api/cdp-status` 轮询实时状态）。端点验证只允许 `http(s)://host:port` 或 `ws(s)://…`，非法 scheme 显式报错而非静默猜解。
 - **显式激活链路**：`resolveEgoEnv` 按 `cdpMode` 注入 `EGO_LINUX_CDP_URL`；设置变更（及首次启动）触发 `refreshAttach` 重新探测被激活端点，端点变化时通过 `setAttachEndpoint` 重启 cast worker 让其重新挂接到同一浏览器。`decideAttach` 决策表保证失败**绝不静默回落**到本地浏览器——`auto`/`remote` 下无激活或不可达一律返回结构化错误。
 - **网关新增端点**：`POST /ego/api/cdp-status`(读实时激活态)、`cdp-refresh`(手动重新探测并刷新 worker 挂载)、`cdp-probe`(对任意端点一次性探测，结果写回目标 `probe*` 字段)。
-- **包名统一为 `dsh-browser-cdp`**：`cordis.patch.yml`、`dsh-plugin.json`(`id`/`name`/Scene·SettingsSection id/namespace)、设置 namespace、client 侧边栏 Tab id(`dsh-browser-cdp:watch`)、locale 文案与日志前缀全部对齐；TUI 仓库仍指向 `github.com/Fisfzy/ego-browser`。
+- **包名统一为 `dsh-browser-cdp`**：`cordis.patch.yml`、`dsh-plugin.json`(`id`/`name`/Scene·SettingsSection id/namespace)、设置 namespace、client 侧边栏 Tab id(`dsh-browser-cdp:watch`)、locale 文案与日志前缀全部对齐。
+- **仓库发布到 `github.com/drscrewdriver/dsh-browser-cdp`**：`package.json#repository` 与 `dsh-plugin.json#source` 已从上游 `Fisfzy/dsh-ego-browser`（MIT，署名保留）改指本仓库。支持 GitHub 直装：`dsh plugin --profile web add github:drscrewdriver/dsh-browser-cdp`（pnpm 经 `codeload.github.com` 拉 tarball，无需 registry 发包），亦可 `#v0.9.0` / `#<sha>` 锁定版本。
 
 ### 测试
 - 新增 `tests/cdp-targets.test.ts`（26 用例）：`normalizeEndpoint` / `sanitizeTargets` / 序列助手 / `probeEndpoint`(注入式 fetch，不读真实时钟) / `decideAttach` / `refreshAttach`+缓存。全覆盖 `cdp-targets.ts` 的解析、探测与决策路径。

@@ -6,9 +6,9 @@
  *      yet-another-subagent host half).
  *   2. client — src/client/index.ts to lib/client.js wrapped in the DSH
  *      ModuleLoader factory (browser CJS). React + dsh-client-* external.
- *   3. worker — src/worker/ego-cast-worker.ts bundled to
- *      bin/ego-cast-worker.mjs (Node ESM, self-contained: only node: builtins).
- *      cast-server spawns this single file by path (../bin/ego-cast-worker.mjs).
+ *   3. worker — src/worker/cdp-cast-worker.ts bundled to
+ *      bin/cdp-cast-worker.mjs (Node ESM, self-contained: only node: builtins).
+ *      cast-server spawns this single file by path (../bin/cdp-cast-worker.mjs).
  *
  * [0.1.2 client contract] the browser bundle MUST register the DECLARED
  * package name `dsh-browser-cdp` — the boot manifest rows are keyed by the
@@ -75,7 +75,7 @@ const client: UserConfig = {
 
 const worker: UserConfig = {
   name: `${ID}/worker`,
-  entry: { 'ego-cast-worker': 'src/worker/ego-cast-worker.ts' },
+  entry: { 'cdp-cast-worker': 'src/worker/cdp-cast-worker.ts' },
   outDir: 'bin',
   format: ['esm'],
   platform: 'node',
@@ -84,7 +84,7 @@ const worker: UserConfig = {
   sourcemap: true,
   clean: false,
   outputOptions: {
-    entryFileNames: 'ego-cast-worker.mjs',
+    entryFileNames: 'cdp-cast-worker.mjs',
   },
 }
 

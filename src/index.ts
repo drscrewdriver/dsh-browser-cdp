@@ -29,8 +29,8 @@
  *   chrome/env   : Chrome 探测 / 环境自适应
  *   runEgoScript : 脚本执行引擎 + 哨兵解析 + 冷启动重试
  *   defineEgoTool: t() 工具封装基座（自动加锁 + 重试）
- *   registerActionTools   : 大部分 ego_* 工具（用 t() 逐个注册）
- *   registerHelpAndDoctor : ego_help/doctor/script/captcha
+ *   registerActionTools   : 大部分 bcdp_* 工具（用 t() 逐个注册）
+ *   registerHelpAndDoctor : bcdp_help/doctor/script/captcha
  *   EGO_HELP_INDEX / HUMAN_CHECK_PROBE : 工具索引文案 / 人机验证探针
  * 加工具：在 registerActionTools 里 reg(t({...}))，并同步 EGO_HELP_INDEX，跑 npm run build。
  */
@@ -59,9 +59,9 @@ import type { EgoContext, RawConfig, ResolvedConfig, SubprocessService, ToolExec
 export const name = 'dsh-browser-cdp'
 // Platform-aware host services: the web shell exposes `webServer`, other Web
 // hosts expose `httpServer`. To keep activation platform-agnostic (TUI /
-// headless hosts have neither), neither is a required inject — the /api/ego/*
+// headless hosts have neither), neither is a required inject — the /api/bcdp/*
 // watch routes are registered opportunistically via ctx.get('webServer') and
-// guarded, so a GUI-less host is a safe no-op. The ego_* tools depend only on
+// guarded, so a GUI-less host is a safe no-op. The bcdp_* tools depend only on
 // tools + subprocess, present in every host.
 export const inject = ['tools', 'subprocess']
 // Schemastery schema for the composition entry and the `dsh-browser-cdp` settings
@@ -143,7 +143,7 @@ export function createActiveSpaceTracker(defaultSpace: string | number = DEFAULT
 /**
  * The ego-lite host is a single persistent browser shared by every tool call;
  * concurrent tool executions would race on the same task space / tabs. All
- * ego_* executions are therefore serialized through one in-process lock. This
+ * bcdp_* executions are therefore serialized through one in-process lock. This
  * guards against concurrent tool calls within this plugin instance; separate
  * harness sessions sharing the same browser remain unsupported (host-level).
  */
@@ -183,7 +183,7 @@ function withEgoLock<T>(fn: () => Promise<T> | T): Promise<T> {
  *    the original "inherit host env verbatim" behavior.
  */
 const BUNDLED_WRAPPER = fileURLToPath(
-  new URL('../bin/ego-chrome-wrapper.sh', import.meta.url),
+  new URL('../bin/cdp-chrome-wrapper.sh', import.meta.url),
 )
 const IS_WIN = process.platform === 'win32'
 const AUTO_ADAPT_OFF = /^(0|false|no)$/i.test(
@@ -487,7 +487,7 @@ async function withWarmupRetry(fn: () => Promise<WarmupResult>, { tries = 3, bas
  */
 /**
  * Idle reaper decision (issue #47), pure for tests. Reaps only when the
- * feature is on AND at least one ego_* call has ever happened (a never-used
+ * feature is on AND at least one bcdp_* call has ever happened (a never-used
  * browser is not running anyway).
  * @internal exported for tests
  */
@@ -500,7 +500,7 @@ export function shouldReapBrowser(nowMs: number, lastActivityMs: number, idleTim
  * Pop the agent browser out as a REAL visible window (issue #51). The
  * runtime's `--open` subcommand replaces a headless instance with a headed
  * one on the same profile (tabs restore) or just raises the existing window.
- * `--open` is on the egoCliArgs blocklist only because USER-supplied args
+ * `--open` is on the runtimeArgs blocklist only because USER-supplied args
  * must not steal the window — here it is an explicit user action from the
  * watch panel. --open stops+relaunches when headless, so give it real time.
  */
@@ -581,7 +581,7 @@ interface EgoRuntimeConfig {
   readonly ffmpegEncoder: ResolvedConfig['ffmpegEncoder']
   readonly ffmpegPath: string
   readonly githubMirror: string
-  readonly egoCliArgs: string
+  readonly runtimeArgs: string
   readonly idleTimeoutMin: number
   readonly chromeArgs: string
   readonly isolateSpaces: boolean
@@ -595,6 +595,7 @@ interface EgoRuntimeConfig {
   readonly cursorName: string
   // ── M0.9 local launcher (optional) ──────────────────────────────────────
   readonly allowLocalFallback: boolean
+  readonly legacyEgoToolNames: boolean
   readonly localHeadless: boolean
   readonly localUserDataDir: string
 }
@@ -606,11 +607,11 @@ interface ExecLike {
 async function runEgoScript(subprocess: SubprocessService, script: string, exec: ExecLike, cfg: EgoRuntimeConfig, graceOverrideMs?: number): Promise<WarmupResult> {
   let handle
   try {
-    // User-configured extra ego-browser CLI args (settings field `egoCliArgs`).
+    // User-configured extra ego-browser CLI args (settings field `runtimeArgs`).
     // Filtered against EGO_CLI_BLOCKED so a saved value with a mutually-
     // exclusive subcommand (--status/--stop/--help/...) cannot break every
-    // ego_* call by exiting before the heredoc runs.
-    const extraCliArgs = filterArgs(cfg.egoCliArgs ?? '', EGO_CLI_BLOCKED)
+    // bcdp_* call by exiting before the heredoc runs.
+    const extraCliArgs = filterArgs(cfg.runtimeArgs ?? '', EGO_CLI_BLOCKED)
     handle = subprocess.spawn({
       // Run through the node interpreter so the vendored CLI needs no +x bit.
       argv: [process.execPath, cfg.egoBin, 'nodejs', ...extraCliArgs],
@@ -756,9 +757,9 @@ function defineEgoTool(ctx: EgoContext, cfg: EgoRuntimeConfig, opts: EgoToolOpti
     timeoutMs: TOOL_TIMEOUT_MS,
     execute: async (args: Record<string, unknown>, exec: ToolExec) =>
       withEgoLock(async () => {
-        // Signal the client to auto-open the sidebar Tab on the first ego_*
+        // Signal the client to auto-open the sidebar Tab on the first bcdp_*
         // tool call. markEgoToolCall() bumps a host-side counter surfaced via
-        // /api/ego/spaces; the LivePreviewController transitions on 0 → >0 and
+        // /api/bcdp/spaces; the LivePreviewController transitions on 0 → >0 and
         // calls betterSidebar.openTab(). Idempotent: the client's transition
         // guard means only the first call per session opens the Tab.
         markEgoToolCall(callingSessionId(exec))
@@ -788,7 +789,7 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
   const settingKeys = [
     'chromePath', 'captureBackend', 'streamProfile', 'cdpFps', 'cdpQuality',
     'cdpMaxWidth', 'cdpBackstopIntervalMs', 'ffmpegFps', 'ffmpegMaxWidth', 'ffmpegBitrateKbps',
-    'ffmpegEncoder', 'ffmpegPath', 'githubMirror', 'egoCliArgs', 'chromeArgs',
+    'ffmpegEncoder', 'ffmpegPath', 'githubMirror', 'runtimeArgs', 'chromeArgs',
     'castFpsCap', 'screencastQuality', 'screencastMaxWidth', 'backstopIntervalMs',
     'idleTimeoutMin',
   ]
@@ -830,7 +831,7 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
     get githubMirror() { return resolveConfig(bridge.source() as RawConfig).githubMirror },
     // User-defined extra CLI args (see src/config.ts). Live getters so GUI
     // edits take effect on the next spawn / next browser cold start.
-    get egoCliArgs() { return resolveConfig(bridge.source() as RawConfig).egoCliArgs },
+    get runtimeArgs() { return resolveConfig(bridge.source() as RawConfig).runtimeArgs },
     get chromeArgs() { return resolveConfig(bridge.source() as RawConfig).chromeArgs },
     get isolateSpaces() { return resolveConfig(bridge.source() as RawConfig).isolateSpaces },
     get idleTimeoutMin() { return resolveConfig(bridge.source() as RawConfig).idleTimeoutMin },
@@ -842,6 +843,7 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
     get cursorHud() { return resolveConfig(bridge.source() as RawConfig).cursorHud },
     get cursorName() { return resolveConfig(bridge.source() as RawConfig).cursorName },
     get allowLocalFallback() { return resolveConfig(bridge.source() as RawConfig).allowLocalFallback },
+    get legacyEgoToolNames() { return resolveConfig(bridge.source() as RawConfig).legacyEgoToolNames },
     get localHeadless() { return resolveConfig(bridge.source() as RawConfig).localHeadless },
     get localUserDataDir() { return resolveConfig(bridge.source() as RawConfig).localUserDataDir },
   }
@@ -849,6 +851,18 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
     const dispose = ctx.tools.register(tool) as unknown as () => void
     // Cordis lifecycle: unregister the tool when the plugin unmounts.
     ctx.effect?.(() => dispose)
+    // T8.5: optional ego_* aliases for scripts written before the bcdp_*
+    // rename. Off by default; the old names collide with the upstream
+    // ego-browser plugin, so enabling this IS the opt-in to that conflict.
+    if (cfg.legacyEgoToolNames && typeof tool.name === 'string' && tool.name.startsWith('bcdp_')) {
+      const alias = { ...tool, name: 'ego_' + tool.name.slice('bcdp_'.length) } as ToolHandle
+      try {
+        const disposeAlias = ctx.tools.register(alias) as unknown as () => void
+        ctx.effect?.(() => disposeAlias)
+      } catch (error) {
+        ctx.logger?.warn?.(`dsh-browser-cdp: legacy alias ${alias.name} not registered: ${(error as Error).message}`)
+      }
+    }
   }
   registerEgoStatus(ctx, cfg, reg)
   registerAuthFlush(ctx, cfg, reg)
@@ -902,13 +916,13 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
     }
   })()
   bridge.onChange(triggerCdpRefresh)
-  // Initial probe so the first ego_* call attaches without waiting for a change.
+  // Initial probe so the first bcdp_* call attaches without waiting for a change.
   triggerCdpRefresh()
   // Drop stale attach state when the plugin unmounts; a fresh mount starts clean.
   ctx.effect?.(() => () => {
     defaultAttachCache.reset()
   })
-  // Realtime watch-panel host routes (/api/ego/*). Guarded: only meaningful
+  // Realtime watch-panel host routes (/api/bcdp/*). Guarded: only meaningful
   // when the host exposes an HTTP server (web surface); headless safe-no-op.
   // The host service is `webServer` on the web shell (current runner). We only
   // reach for `webServer` here (declared in inject) so a strict-inject host
@@ -918,7 +932,7 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
   // inject resolves through fiber.store and is fully supported by cordis.]
   // [0.1.2 migration 2026-08-28] the strict service resolver returns undefined
   // for an UNDECLARED service, so the old `ctx.get?.('webServer')` guard was
-  // silently undefined and the /api/ego/* watch routes were never installed —
+  // silently undefined and the /api/bcdp/* watch routes were never installed —
   // the watch panel had no data endpoints (sidebar tab showed the empty state
   // forever, zero errors). The official optional-service pattern is a nested
   // inject: the callback runs only once the service is available, and no-ops
@@ -938,7 +952,7 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
         `dsh-browser-cdp: cast server init failed: ${(err as Error)?.message ?? err}`,
       )
     }
-    // Settings HTTP gateway (/ego/api/get + /ego/api/set) — lets the browser
+    // Settings HTTP gateway (/bcdp/api/get + /bcdp/api/set) — lets the browser
     // read/write the `chromePath` config through a self-hosted HTTP route,
     // bypassing the host's settings-RPC allowlist. Same webServer the cast
     // server uses; guarded so a headless host without webServer is a no-op.
@@ -953,7 +967,7 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
   // Idle reaper (issue #47, opt-in via the idleTimeoutMin setting): the
   // backing Chromium is a singleton that otherwise only stops on --stop or
   // host teardown — measured at ~425 MB idle. After N minutes without an
-  // ego_* call, gracefully --stop it; the next ego_* call cold-starts it
+  // bcdp_* call, gracefully --stop it; the next bcdp_* call cold-starts it
   // (2-4s). Watching the panel does NOT count as activity (documented in the
   // setting hint). Runs on a 60s interval; cleanup clears the timer.
   ctx.effect?.(() => {
@@ -983,7 +997,7 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
             return // no state file → no browser → nothing to reap
           }
           reapedFor = last
-          ctx.logger?.info?.(`dsh-browser-cdp: idle reaper stopping the backing browser after ${cfg.idleTimeoutMin}min without ego_* activity`)
+          ctx.logger?.info?.(`dsh-browser-cdp: idle reaper stopping the backing browser after ${cfg.idleTimeoutMin}min without bcdp_* activity`)
           const handle = ctx.subprocess.spawn({
             argv: [process.execPath, cfg.egoBin, '--stop'],
             cwd: process.cwd(),
@@ -1011,7 +1025,7 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
   // slow/frozen browser here hangs the restart forever ("waiting to restart").
   // Losing in-memory login cookies on a dirty shutdown beats a restart that
   // never completes — the clean path still flushes cookies on a graceful DSH
-  // close, and ego_auth_flush exists for explicit persistence.
+  // close, and bcdp_auth_flush exists for explicit persistence.
   ctx.effect?.(() => {
     try {
       const handle = ctx.subprocess.spawn({
@@ -1041,13 +1055,13 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
     `dsh-browser-cdp: mounted (egoBin=${cfg.egoBin}, defaultSpace=${cfg.defaultSpace})`,
   )
 }
-/** `ego_status` probes CLI availability by running the real `--status` path. */
+/** `bcdp_status` probes CLI availability by running the real `--status` path. */
 function registerEgoStatus(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool: ToolHandle) => void): void {
   reg(
     defineTool({
-      name: 'ego_status',
+      name: 'bcdp_status',
       description:
-        'Check whether the ego-browser CLI is usable (runs `ego-browser --status`). Use this first when other ego_* tools report "CLI not found".',
+        'Check whether the ego-browser CLI is usable (runs `ego-browser --status`). Use this first when other bcdp_* tools report "CLI not found".',
       parameters: {},
       output: {
         schema: {
@@ -1101,18 +1115,18 @@ function registerEgoStatus(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool: T
         }),
       presentCall: () => ({
         card: 'generic',
-        title: 'ego_status',
+        title: 'bcdp_status',
         kind: 'other',
         rawInput: null,
       }),
     } as unknown as DefineToolOpts),
   )
 }
-/** `ego_auth_flush` — force persistent login cookies down to the disk profile. */
+/** `bcdp_auth_flush` — force persistent login cookies down to the disk profile. */
 function registerAuthFlush(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool: ToolHandle) => void): void {
   reg(
     defineTool({
-      name: 'ego_auth_flush',
+      name: 'bcdp_auth_flush',
       description:
         'Force all persistent login cookies in the agent browser to be written to the on-disk profile. Call this after login (or before ending a browsing task) so the login survives a later DSH/browser restart — Chrome only flushes cookies to disk on graceful close, this nudges it to persist them now.',
       parameters: {},
@@ -1139,7 +1153,7 @@ function registerAuthFlush(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool: T
             // (cast-worker.mjs) uses %LOCALAPPDATA%\ego-lite-linux on Windows
             // and $XDG_STATE_HOME/ego-lite-linux on POSIX; this used to hardcode
             // `$HOME/.local/state` which resolves to a dead path on Windows and
-            // made ego_auth_flush report "no live ego-cast worker" there.
+            // made bcdp_auth_flush report "no live ego-cast worker" there.
             const e = process.env
             const isWin = process.platform === 'win32'
             const home = e.HOME || e.USERPROFILE || (isWin ? e.LOCALAPPDATA || '' : homedir())
@@ -1181,20 +1195,20 @@ function registerAuthFlush(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool: T
         }),
       presentCall: () => ({
         card: 'generic',
-        title: 'ego_auth_flush',
+        title: 'bcdp_auth_flush',
         kind: 'other',
         rawInput: null,
       }),
     } as unknown as DefineToolOpts),
   )
 }
-/** `ego_login_import` — copy login cookies from the system browser (issue #46). */
+/** `bcdp_login_import` — copy login cookies from the system browser (issue #46). */
 function registerLoginImport(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool: ToolHandle) => void): void {
   reg(
     defineTool({
-      name: 'ego_login_import',
+      name: 'bcdp_login_import',
       description:
-        'Import login cookies from the system browser (Chrome/Edge/Brave) into the agent browser, so sites open already logged in. Works via a throwaway headless instance of the REAL system browser (CDP passthrough — no offline decryption; survives Chrome App-Bound Encryption). Run with dryRun=true first to see what is importable, then import with an explicit domains list (e.g. ["bilibili.com"]). The agent browser must be running (call ego_status first). Imported logins persist in the on-disk profile across restarts. Cookie values are never shown — only domain names and counts.',
+        'Import login cookies from the system browser (Chrome/Edge/Brave) into the agent browser, so sites open already logged in. Works via a throwaway headless instance of the REAL system browser (CDP passthrough — no offline decryption; survives Chrome App-Bound Encryption). Run with dryRun=true first to see what is importable, then import with an explicit domains list (e.g. ["bilibili.com"]). The agent browser must be running (call bcdp_status first). Imported logins persist in the on-disk profile across restarts. Cookie values are never shown — only domain names and counts.',
       parameters: {
         source: {
           type: 'string',
@@ -1262,7 +1276,7 @@ function registerLoginImport(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
         }),
       presentCall: () => ({
         card: 'generic',
-        title: 'ego_login_import',
+        title: 'bcdp_login_import',
         kind: 'other',
         rawInput: null,
       }),
@@ -1275,9 +1289,9 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
     ...opts,
     afterExecute: (args, result) => {
       if (!result || (result as Record<string, unknown>).ok === false) return
-      if (opts.name === 'ego_space_open') {
+      if (opts.name === 'bcdp_space_open') {
         cfg.spaceTracker.opened(args as { name?: string | number }, result as { id?: string | number; name?: string; done?: boolean })
-      } else if (opts.name === 'ego_space_close') {
+      } else if (opts.name === 'bcdp_space_close') {
         cfg.spaceTracker.closed(args.name as string | number, (result as { done?: boolean }).done as boolean)
       } else if (args && args.space !== undefined && args.space !== '') {
         cfg.spaceTracker.selected(args.space as string | number)
@@ -1292,7 +1306,7 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
   }
   reg(
     t({
-      name: 'ego_space_open',
+      name: 'bcdp_space_open',
       get description() {
         return cfg.isolateSpaces
           ? 'Open (or reuse) an ego-lite task space in isolated sandbox mode.'
@@ -1318,7 +1332,7 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
   )
   reg(
     t({
-      name: 'ego_space_close',
+      name: 'bcdp_space_close',
       get description() {
         return cfg.isolateSpaces
           ? 'Complete (close) an ego-lite task space in sandbox mode.'
@@ -1346,9 +1360,9 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
   )
   reg(
     t({
-      name: 'ego_snapshot',
+      name: 'bcdp_snapshot',
       description:
-        'Read the current page as text: the full-page semantic tree annotated with [ref=N, loc=...] selectors that ego_click / ego_fill can target. This is the main observation tool for any browser task.',
+        'Read the current page as text: the full-page semantic tree annotated with [ref=N, loc=...] selectors that bcdp_click / bcdp_fill can target. This is the main observation tool for any browser task.',
       parameters: {
         space: spaceParam,
         scope: {
@@ -1383,7 +1397,7 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
   )
   reg(
     t({
-      name: 'ego_navigate',
+      name: 'bcdp_navigate',
       description:
         'Open a URL in the task space, or switch to the existing tab for it. Always prefer reusing existing open tabs before opening duplicate URLs. Waits for document load. Returns resulting page info.',
       parameters: {
@@ -1408,7 +1422,7 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
         // hard-coded example page on a non-conforming empty value — report
         // back an actionable failure instead.
         if (u === '') {
-          return `console.log('${SENTINEL}' + JSON.stringify({ ok: false, reused: false, page: null, reason: 'ego_navigate: url is required' }))\n`
+          return `console.log('${SENTINEL}' + JSON.stringify({ ok: false, reused: false, page: null, reason: 'bcdp_navigate: url is required' }))\n`
         }
         // Reuse the current tab in this task space (select a real tab, then
         // navigate IN PLACE via page.goto) instead of opening a new tab every
@@ -1435,9 +1449,9 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
   )
   reg(
     t({
-      name: 'ego_click',
+      name: 'bcdp_click',
       description:
-        'Click an element in the current page. Target with a CSS selector, an xpath=.../loc=.../ref=N value from ego_snapshot, or viewport coordinates.',
+        'Click an element in the current page. Target with a CSS selector, an xpath=.../loc=.../ref=N value from bcdp_snapshot, or viewport coordinates.',
       parameters: {
         selector: {
           type: 'string',
@@ -1470,7 +1484,7 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
         const y = args.y as number | undefined
         if (sel === '' && !(typeof x === 'number' && typeof y === 'number')) {
           throw new Error(
-            'ego_click: provide either `selector` (CSS/xpath/loc/ref from ego_snapshot) or both `x` and `y` viewport coordinates',
+            'bcdp_click: provide either `selector` (CSS/xpath/loc/ref from bcdp_snapshot) or both `x` and `y` viewport coordinates',
           )
         }
         const dbl = bool(args.double, false)
@@ -1499,9 +1513,9 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
   )
   reg(
     t({
-      name: 'ego_fill',
+      name: 'bcdp_fill',
       description:
-        'Type text into an input field. Target with a CSS selector, xpath=..., loc=..., or ref=N from ego_snapshot.',
+        'Type text into an input field. Target with a CSS selector, xpath=..., loc=..., or ref=N from bcdp_snapshot.',
       parameters: {
         selector: {
           type: 'string',
@@ -1527,7 +1541,7 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
   )
   reg(
     t({
-      name: 'ego_js',
+      name: 'bcdp_js',
       description:
         'Evaluate a JavaScript expression in the current page and return its JSON-serializable value (e.g. "document.title", "document.querySelectorAll(\'a\').length").',
       parameters: {
@@ -1547,7 +1561,7 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
   )
   reg(
     t({
-      name: 'ego_cdp',
+      name: 'bcdp_cdp',
       description:
         'Issue a raw CDP command on the page target, e.g. cdp("Page.handleJavaScriptDialog", { accept: true }).',
       parameters: {
@@ -1580,7 +1594,7 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
   )
   reg(
     t({
-      name: 'ego_screenshot',
+      name: 'bcdp_screenshot',
       description:
         'Capture a screenshot of the current page (or of a single element if selector is given). Returns the file path of the saved PNG, which you can then read with a vision/image tool.',
       parameters: {
@@ -1612,7 +1626,7 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
   )
   reg(
     t({
-      name: 'ego_page_info',
+      name: 'bcdp_page_info',
       description:
         'Return the current page info: url, title, viewport size (w, h), scroll offsets (sx, sy), device metrics (pw, ph), and whether a native dialog is open. Also reports `humanCheck` — whether a CAPTCHA / human-verification challenge is detected on the page (so the agent can alert the user to complete it).',
       parameters: {
@@ -1628,9 +1642,9 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
   )
   reg(
     t({
-      name: 'ego_wait',
+      name: 'bcdp_wait',
       description:
-        'Pause for a fixed number of milliseconds (e.g. for animations or partial loads). For load waits prefer ego_navigate\'s wait option.',
+        'Pause for a fixed number of milliseconds (e.g. for animations or partial loads). For load waits prefer bcdp_navigate\'s wait option.',
       parameters: {
         ms: {
           type: 'number',
@@ -1648,7 +1662,7 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
   )
   reg(
     t({
-      name: 'ego_wait_for_selector',
+      name: 'bcdp_wait_for_selector',
       description:
         "Wait until an element matching a CSS selector appears (state=visible, default) or disappears (state=hidden). Use instead of a blind fixed wait when a page renders asynchronously.",
       parameters: {
@@ -1672,7 +1686,7 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
       buildScript: (args) => {
         const sel = str(args.selector, '').trim()
         if (sel === '')
-          return `console.log('${SENTINEL}' + JSON.stringify({ ok: false, waited: false, reason: 'ego_wait_for_selector: selector is required' }))\n`
+          return `console.log('${SENTINEL}' + JSON.stringify({ ok: false, waited: false, reason: 'bcdp_wait_for_selector: selector is required' }))\n`
         return (
           `${useSpace(str(args.space, cfg.defaultSpace))}${ensureRealTab()}` +
           `await page.waitForSelector(${j(sel)}, { state: ${j(
@@ -1687,7 +1701,7 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
   )
   reg(
     t({
-      name: 'ego_wait_for_url',
+      name: 'bcdp_wait_for_url',
       description:
         'Wait until the page navigates to a URL matching a substring / glob / regex. Use to catch login redirects or pagination.',
       parameters: {
@@ -1706,7 +1720,7 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
       buildScript: (args) => {
         const p = str(args.pattern, '').trim()
         if (p === '')
-          return `console.log('${SENTINEL}' + JSON.stringify({ ok: false, reached: false, reason: 'ego_wait_for_url: pattern is required' }))\n`
+          return `console.log('${SENTINEL}' + JSON.stringify({ ok: false, reached: false, reason: 'bcdp_wait_for_url: pattern is required' }))\n`
         return (
           `${useSpace(str(args.space, cfg.defaultSpace))}${ensureRealTab()}` +
           `const __ok = await page.waitForURL(${j(p)}, { timeout: ${num(
@@ -1721,7 +1735,7 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
   )
   reg(
     t({
-      name: 'ego_wait_for_response',
+      name: 'bcdp_wait_for_response',
       description:
         'Wait for a network response matching a URL/glob/regex and return it. Optionally return the body (text or JSON) — ideal for scraping API responses or confirming a submission.',
       parameters: {
@@ -1760,7 +1774,7 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
   )
   reg(
     t({
-      name: 'ego_key',
+      name: 'bcdp_key',
       description:
         "Press a keyboard key or shortcut combination on the current page, e.g. 'Enter', 'Tab', 'Control+a', 'Escape', 'ArrowDown'. Useful for forms, shortcuts and navigation. Pass `text` to type a string of characters instead (keyboard.type).",
       parameters: {
@@ -1787,7 +1801,7 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
           )
         }
         if (k === '')
-          return `console.log('${SENTINEL}' + JSON.stringify({ ok: false, reason: 'ego_key: provide key or text to type' }))\n`
+          return `console.log('${SENTINEL}' + JSON.stringify({ ok: false, reason: 'bcdp_key: provide key or text to type' }))\n`
         return (
           `${useSpace(str(args.space, cfg.defaultSpace))}${ensureRealTab()}` +
           `await page.keyboard.press(${j(k)})\n` +
@@ -1798,7 +1812,7 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
   )
   reg(
     t({
-      name: 'ego_hover',
+      name: 'bcdp_hover',
       description:
         'Move the pointer over an element (CSS selector / ref) or to viewport coordinates. Triggers CSS :hover, dropdowns and mouseenter handlers.',
       parameters: {
@@ -1814,7 +1828,7 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
         const sel = str(args.selector, '')
         const hasXY = typeof args.x === 'number' && typeof args.y === 'number'
         if (sel === '' && !hasXY)
-          return `console.log('${SENTINEL}' + JSON.stringify({ ok: false, reason: 'ego_hover: provide selector or both x and y' }))\n`
+          return `console.log('${SENTINEL}' + JSON.stringify({ ok: false, reason: 'bcdp_hover: provide selector or both x and y' }))\n`
         return (
           `${useSpace(str(args.space, cfg.defaultSpace))}${ensureRealTab()}` +
           (sel !== ''
@@ -1827,7 +1841,7 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
   )
   reg(
     t({
-      name: 'ego_read_element',
+      name: 'bcdp_read_element',
       description:
         "Read a single element (by selector): its text, HTML, input value, an attribute, or visibility/enabled/count. Cheaper and more precise than a full-page snapshot.",
       parameters: {
@@ -1851,7 +1865,7 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
         const sel = str(args.selector, '').trim()
         const what = str(args.what, 'text')
         if (sel === '')
-          return `console.log('${SENTINEL}' + JSON.stringify({ ok: false, reason: 'ego_read_element: selector is required' }))\n`
+          return `console.log('${SENTINEL}' + JSON.stringify({ ok: false, reason: 'bcdp_read_element: selector is required' }))\n`
         const selExpr = `page.locator(${j(sel)})`
         let expr
         switch (what) {
@@ -1876,7 +1890,7 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
   )
   reg(
     t({
-      name: 'ego_select',
+      name: 'bcdp_select',
       description:
         'Choose an option in a <select> dropdown by value, label, or index (a single value or an array for multi-select).',
       parameters: {
@@ -1904,7 +1918,7 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
   )
   reg(
     t({
-      name: 'ego_drag',
+      name: 'bcdp_drag',
       description:
         'Drag an element to a target (Playwright dragTo) or drag the pointer through coordinates. Use for sliders, sortable rows, and drag-drop zones.',
       parameters: {
@@ -1931,7 +1945,7 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
         const hasEl =
           str(args.from, '') !== '' && str(args.to, '') !== ''
         if (!hasEl && pts.length < 4)
-          return `console.log('${SENTINEL}' + JSON.stringify({ ok: false, reason: 'ego_drag: provide from+to selectors, or at least 4 points (x1,y1,x2,y2)' }))\n`
+          return `console.log('${SENTINEL}' + JSON.stringify({ ok: false, reason: 'bcdp_drag: provide from+to selectors, or at least 4 points (x1,y1,x2,y2)' }))\n`
         const action = hasEl
           ? `await page.locator(${j(str(args.from, ''))}).dragTo(page.locator(${j(
               str(args.to, ''),
@@ -1947,7 +1961,7 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
   )
   reg(
     t({
-      name: 'ego_scroll',
+      name: 'bcdp_scroll',
       description:
         'Scroll the page: by pixel deltas (wheel), or bring an element into view (scrollIntoView).',
       parameters: {
@@ -1963,7 +1977,7 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
         const hasSelector = str(args.selector, '') !== ''
         const hasDelta = Number.isFinite(args.deltaX) || Number.isFinite(args.deltaY)
         if (!hasSelector && !hasDelta)
-          return `console.log('${SENTINEL}' + JSON.stringify({ ok: false, reason: 'ego_scroll: provide deltaX/deltaY or a selector' }))\n`
+          return `console.log('${SENTINEL}' + JSON.stringify({ ok: false, reason: 'bcdp_scroll: provide deltaX/deltaY or a selector' }))\n`
         const action = hasSelector
           ? `await page.locator(${j(str(args.selector, ''))}).scrollIntoViewIfNeeded()\n`
           : `await page.mouse.wheel(${num(args.deltaX, 0)}, ${num(
@@ -1981,7 +1995,7 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
   )
   reg(
     t({
-      name: 'ego_upload',
+      name: 'bcdp_upload',
       description:
         'Set files on a file <input> element (path-driven). Use to upload a dataset/attachment from a local path.',
       parameters: {
@@ -2009,7 +2023,7 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
   )
   reg(
     t({
-      name: 'ego_download',
+      name: 'bcdp_download',
       description:
         'Wait for a file download triggered by the current action, then return its saved path. Provide `triggerSelector` (a download button/link to click) or `triggerScript` (arbitrary JS that triggers the download). The file is captured into a temp dir and (optionally) copied to `savePath`. Returns { path, suggestedFilename, url }.',
       parameters: {
@@ -2064,7 +2078,7 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
   )
   reg(
     t({
-      name: 'ego_check',
+      name: 'bcdp_check',
       description:
         'Check (tick) or uncheck a checkbox/radio element. Does nothing if already in the desired state.',
       parameters: {
@@ -2084,7 +2098,7 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
   )
   reg(
     t({
-      name: 'ego_dialog',
+      name: 'bcdp_dialog',
       description:
         'Accept or dismiss a native browser dialog (alert/confirm/prompt), optionally supplying text for a prompt. Use right after the action that triggers the dialog.',
       parameters: {
@@ -2112,7 +2126,7 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
   )
   reg(
     t({
-      name: 'ego_http',
+      name: 'bcdp_http',
       description:
         "Make an HTTP request and return status + body. Default runs in the agent page's browser context (cross-origin allowed when the server's CORS permits); set `mode: server` to use Node-side fetch.server. Use to scrape an API, POST data, or hit a service. (Note: on the vendored ego-linux Windows runtime, fetch.server can hit a libuv crash, so prefer the default browser mode there.)",
       parameters: {
@@ -2151,9 +2165,9 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
   reg(
     (() => {
       const def = defineTool({
-        name: 'ego_cli',
+        name: 'bcdp_cli',
         description:
-          'Escape hatch: run an arbitrary `ego-browser nodejs` heredoc script verbatim (facades page/browser/taskSpaces/site/fetch and the raw cdp() are preloaded). Use when the structured ego_* tools do not cover the task. Returns raw stdout plus the parsed console.log payload when present.',
+          'Escape hatch: run an arbitrary `ego-browser nodejs` heredoc script verbatim (facades page/browser/taskSpaces/site/fetch and the raw cdp() are preloaded). Use when the structured bcdp_* tools do not cover the task. Returns raw stdout plus the parsed console.log payload when present.',
         parameters: {
           script: {
             type: 'string',
@@ -2190,7 +2204,7 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
         },
         presentCall: () => ({
           card: 'generic',
-          title: 'ego_cli',
+          title: 'bcdp_cli',
           kind: 'other',
           rawInput: null,
         }),
@@ -2200,12 +2214,12 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
   )
 }
 
-// ── ego_help: built-in tool / category index ───────────────────────────────
-/** Register ego_help / ego_doctor / ego_script. */
+// ── bcdp_help: built-in tool / category index ───────────────────────────────
+/** Register bcdp_help / bcdp_doctor / bcdp_script. */
 function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool: ToolHandle) => void): void {
   reg(
     defineTool({
-      name: 'ego_captcha',
+      name: 'bcdp_captcha',
       description:
         'Check the current page for a human-verification (CAPTCHA) challenge — reCAPTCHA / hCaptcha / Cloudflare / Turnstile — and return { detected, kind }. If detected=true, ALERT THE USER that they must complete the verification in the \'ego lite - agent\' browser window (it is the same live session shown in the watch panel), then continue after they have.',
       parameters: {
@@ -2243,14 +2257,14 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
             kind: hc?.kind ?? null,
           }
         }),
-      presentCall: () => ({ card: 'generic', title: 'ego_captcha', kind: 'other', rawInput: null }),
+      presentCall: () => ({ card: 'generic', title: 'bcdp_captcha', kind: 'other', rawInput: null }),
     } as unknown as DefineToolOpts),
   )
   reg(
     defineTool({
-      name: 'ego_help',
+      name: 'bcdp_help',
       description:
-        'Query the built-in ego-browser tool guide. `topic` may be a category (overview/tools/navigate/observe/input/keyboard-mouse/form/wait/network/login/script/doctor) or a specific tool name (e.g. ego_click). Returns the matching usage notes. Call this when unsure which eyebrow tool to use.',
+        'Query the built-in ego-browser tool guide. `topic` may be a category (overview/tools/navigate/observe/input/keyboard-mouse/form/wait/network/login/script/doctor) or a specific tool name (e.g. bcdp_click). Returns the matching usage notes. Call this when unsure which eyebrow tool to use.',
       parameters: {
         topic: {
           type: 'string',
@@ -2286,12 +2300,12 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
               : EGO_HELP_INDEX.overview)
         return { ok: true, topic: q || 'overview', text }
       },
-      presentCall: () => ({ card: 'generic', title: 'ego_help', kind: 'other', rawInput: null }),
+      presentCall: () => ({ card: 'generic', title: 'bcdp_help', kind: 'other', rawInput: null }),
     } as unknown as DefineToolOpts),
   )
   reg(
     defineTool({
-      name: 'ego_doctor',
+      name: 'bcdp_doctor',
       description:
         'Preflight the ego-browser environment: vendored runtime present, Chrome/Edge/Brave candidates, state dir, CDP/browser.json, ego-cast worker, task spaces. Run first when the browser fails to start (update, reboot, port conflict) or before a long session.',
       parameters: {},
@@ -2318,12 +2332,12 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
           lines.push(`browser binary: ${chrome || '(none found — set chromePath in settings, or set EGO_LINUX_CHROME, or install Chrome/Edge/Brave)'}`)
         }
         // User-configured extra CLI args (effective after filtering). ego-CLI
-        // args take effect on the next ego_* call; Chrome args only on the next
+        // args take effect on the next bcdp_* call; Chrome args only on the next
         // browser cold start (the browser is a singleton — run `ego-browser
         // --stop` or restart DSH to relaunch).
-        const cliArgs = filterArgs(cfg.egoCliArgs ?? '', EGO_CLI_BLOCKED)
+        const cliArgs = filterArgs(cfg.runtimeArgs ?? '', EGO_CLI_BLOCKED)
         const chrArgs = filterArgs(cfg.chromeArgs ?? '', CHROME_BLOCKED)
-        lines.push(`egoCliArgs (effective): ${cliArgs.length ? cliArgs.join(' ') : '(none)'}`)
+        lines.push(`runtimeArgs (effective): ${cliArgs.length ? cliArgs.join(' ') : '(none)'}`)
         lines.push(`chromeArgs (effective, next cold start): ${chrArgs.length ? chrArgs.join(' ') : '(none)'}`)
         // state dir + runtime state
         const isWin = process.platform === 'win32'
@@ -2361,15 +2375,15 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
         lines.push('npm/node: ' + process.version)
         return { ok: true, report: lines.join('\n') }
       },
-      presentCall: () => ({ card: 'generic', title: 'ego_doctor', kind: 'other', rawInput: null }),
+      presentCall: () => ({ card: 'generic', title: 'bcdp_doctor', kind: 'other', rawInput: null }),
     } as unknown as DefineToolOpts),
   )
   reg(
     (() => {
       const def = defineTool({
-        name: 'ego_script',
+        name: 'bcdp_script',
         description:
-          'Run an arbitrary `ego-browser nodejs` heredoc script in ONE invocation (same runtime/API as ego_cli: page/…locator/browser/taskSpaces/site/fetch/cdp preloaded), and return structured {ok, stdout, stderr, result, durationMs, timedOut}. Use for a full multi-step browser task as a single script.',
+          'Run an arbitrary `ego-browser nodejs` heredoc script in ONE invocation (same runtime/API as bcdp_cli: page/…locator/browser/taskSpaces/site/fetch/cdp preloaded), and return structured {ok, stdout, stderr, result, durationMs, timedOut}. Use for a full multi-step browser task as a single script.',
         parameters: {
           script: {
             type: 'string',
@@ -2419,7 +2433,7 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
             timedOut: false,
           }
         },
-        presentCall: () => ({ card: 'generic', title: 'ego_script', kind: 'other', rawInput: null }),
+        presentCall: () => ({ card: 'generic', title: 'bcdp_script', kind: 'other', rawInput: null }),
       } as unknown as DefineToolOpts)
       return def
     })(),

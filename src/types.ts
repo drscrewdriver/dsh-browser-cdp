@@ -8,7 +8,7 @@
  * hand-written `lib/index.d.ts`.
  */
 
-/** Result payload emitted by every ego_* tool (parsed from the sentinel line). */
+/** Result payload emitted by every bcdp_* tool (parsed from the sentinel line). */
 export interface EgoResult {
   ok: boolean
   /** Free-form payload; tools put their structured data here. */
@@ -137,13 +137,13 @@ export interface CdpTarget {
   probeAt?: number
 }
 
-/** How the plugin decides which browser the ego_* tools drive. */
+/** How the plugin decides which browser the bcdp_* tools drive. */
 export type CdpMode = 'auto' | 'local' | 'remote'
 
 /** Resolved (post-defaults) runtime config — the canonical key set. */
 export interface ResolvedConfig {
   isolateSpaces: boolean
-  /** Minutes without an ego_* call before the backing browser is auto-stopped. 0 = off. */
+  /** Minutes without an bcdp_* call before the backing browser is auto-stopped. 0 = off. */
   idleTimeoutMin: number
   chromePath: string
   captureBackend: 'auto' | 'cdp' | 'ffmpeg'
@@ -158,7 +158,8 @@ export interface ResolvedConfig {
   ffmpegEncoder: 'auto' | 'software' | 'h264_mf' | 'h264_nvenc' | 'h264_qsv' | 'h264_amf' | 'h264_videotoolbox' | 'h264_vaapi'
   ffmpegPath: string
   githubMirror: string
-  egoCliArgs: string
+  runtimeArgs: string
+  legacyEgoToolNames: boolean
   chromeArgs: string
   // ── R1: CDP sequence + activation ───────────────────────────────────────
   /** Ordered target sequence; index order IS the panel order. */

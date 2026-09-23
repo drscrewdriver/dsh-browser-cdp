@@ -1,3 +1,14 @@
+## [0.12.0] - 2026-09-23 — 去 ego 化：CDP 浏览器代理身份（阶段 8）
+
+### 变更（Breaking）
+- **33 个工具 `ego_*` → `bcdp_*`**：`bcdp_status` / `bcdp_navigate` / `bcdp_doctor` …（前缀派生自插件 id，生态无占用）。引用旧工具名的脚本可用新设置 `legacyEgoToolNames: true` 过渡（额外注册 `ego_*` 别名；与上游 ego-browser 插件互斥）。
+- **HTTP 路由 `/api/ego/*` → `/api/bcdp/*`**，设置网关 `/ego/api/*` → `/bcdp/api/*`（面板同步）。
+- **资源改名**：`bin/ego-cast-worker.mjs` → `bin/cdp-cast-worker.mjs`、`bin/ego-chrome-wrapper.sh` → `bin/cdp-chrome-wrapper.sh`（worker 进程匹配/清理逻辑同步）。
+- **配置键** `egoCliArgs` → `runtimeArgs`（旧键一个版本内自动读取，设置不丢）。
+- **文案**：面板 EN/ZH 自称统一为「CDP 浏览器代理 / CDP browser bridge」，不再以 ego 开头；README 同步。
+- 内部 wire（`EGO_LINUX_*` 环境变量）与 vendored runtime 目录名**刻意不改**（升级安全）。
+- 副产物：与上游 `Fisfzy/ego-browser` **可以共存**（工具名/路由全部错开）。
+
 ## [0.11.1] - 2026-09-23 — 修复：面板点选状态两处误判
 
 ### 修复

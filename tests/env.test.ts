@@ -44,7 +44,7 @@ describe("resolveEgoEnv (Windows)", () => {
     // If it does, EGO_LINUX_CHROME must be the binary path, NOT the wrapper.
     if (env.EGO_LINUX_CHROME !== undefined) {
       expect(
-        !env.EGO_LINUX_CHROME.includes("ego-chrome-wrapper"),
+        !env.EGO_LINUX_CHROME.includes("cdp-chrome-wrapper"),
       ).toBeTruthy();
       expect(
         existsSync(env.EGO_LINUX_CHROME),
@@ -408,9 +408,9 @@ describe("runtime chrome.mjs (Windows path handling)", () => {
 });
 
 // ─── runtime/ego-linux/src/chrome.mjs (single-window launch) ───────────────
-// Regression: ego_space_open used to open two windows because launch() passed
+// Regression: bcdp_space_open used to open two windows because launch() passed
 // "about:blank" as a positional arg (opening a tab in the default browser
-// context), and ego_space_open then created another tab in its own context —
+// context), and bcdp_space_open then created another tab in its own context —
 // Chrome isolates contexts to separate windows. The fix is --no-startup-window
 // in LAUNCH_FLAGS and no positional URL. See PLAN-single-window-fix.md.
 

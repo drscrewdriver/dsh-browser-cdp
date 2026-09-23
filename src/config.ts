@@ -14,7 +14,7 @@ const encoder = z.union([
 // a schema default before the one-release migration runs.
 export const Config = z.object({
   isolateSpaces: z.boolean().description('Space isolation: false = persistent profile (keep logins across restarts); true = isolated sandbox.'),
-  idleTimeoutMin: z.number().min(0).max(1440).step(1).description('Auto-stop the backing browser after N minutes without an ego_* call (0 = off). Relaunches on demand at the next call.'),
+  idleTimeoutMin: z.number().min(0).max(1440).step(1).description('Auto-stop the backing browser after N minutes without an bcdp_* call (0 = off). Relaunches on demand at the next call.'),
   chromePath: z.string().description('Path to Chrome/Chromium. Empty = auto-detect.'),
   captureBackend: backend.description('Capture backend: auto, cdp, or ffmpeg.'),
   streamProfile: profile.description('Capture quality profile.'),
@@ -30,7 +30,7 @@ export const Config = z.object({
   githubMirror: z.string().description('HTTPS base replacing https://github.com for managed downloads.'),
   // User-defined extra CLI args. Shell-like tokenize; mutually-exclusive
   // control flags are stripped (see EGO_CLI_BLOCKED / CHROME_BLOCKED below).
-  egoCliArgs: z.string().description('Extra args appended to `ego-browser nodejs` argv. Takes effect on the next ego_* call.'),
+  runtimeArgs: z.string().description('Extra args appended to the vendored runtime argv. Takes effect on the next bcdp_* call.'),
   chromeArgs: z.string().description('Extra args appended to the Chrome launch argv. Takes effect on the next browser cold start (the browser is a singleton).'),
   // ── R1: CDP target sequence + activation ────────────────────────────────
   // `cdpTargets` is the ordered sequence; `activeTargetId` singles out one of
@@ -47,7 +47,7 @@ export const Config = z.object({
     probeError: z.string(),
     probeCode: z.string(),
     probeAt: z.number(),
-  })).description('Ordered CDP target sequence. Only the ACTIVATED and enabled entry receives every ego_* call.'),
+  })).description('Ordered CDP target sequence. Only the ACTIVATED and enabled entry receives every bcdp_* call.'),
   activeTargetId: z.string().description('Id of the activated entry in cdpTargets. Empty = nothing activated.'),
   cdpMode: cdpMode.description('auto = use the activated target and never start a local browser silently; remote = only ever connect to the activated target; local = always use local browser control.'),
   cdpProbeTimeoutMs: z.number().min(200).max(30000).step(100).description('Timeout for one CDP endpoint probe (http endpoints answer /json/version).'),
@@ -56,6 +56,7 @@ export const Config = z.object({
   cursorName: z.string().description('Name label shown in the cursor HUD.'),
   // ── M0.9 local launcher knobs (declared now, launcher lands in T2.11+) ──
   allowLocalFallback: z.boolean().description('auto mode may fall back to launching a local browser when the activated target is unreachable. Off by default: the fallback must be explicit.'),
+  legacyEgoToolNames: z.boolean().description('ALSO register the tools under their old ego_* names for scripts written before the bcdp_* rename. Off by default; mutually exclusive with installing the upstream ego-browser plugin (same tool names).'),
   localHeadless: z.boolean().description('Run the locally launched browser headless.'),
   localUserDataDir: z.string().description('Profile dir for the locally launched browser. Empty = managed dir; never point at your daily Chrome profile.'),
   // Deprecated read-compatible keys. The settings UI only writes canonical keys.
@@ -67,9 +68,9 @@ export const Config = z.object({
 
 // ── user-defined extra CLI args ─────────────────────────────────────────────
 /**
- * Flags the user must NOT put in `egoCliArgs`: these ego-browser subcommands
+ * Flags the user must NOT put in `runtimeArgs`: these runtime subcommands
  * exit before the heredoc runs (--status/--stop/--help/...) or steal the
- * browser window (--open), so appending them would break every ego_* tool.
+ * browser window (--open), so appending them would break every bcdp_* tool.
  * `--headless` is managed by EGO_LINUX_HEADLESS; `--sdk-path` is allowed.
  */
 export const EGO_CLI_BLOCKED = new Set<string>([
@@ -104,7 +105,7 @@ export const CHROME_BLOCKED = new Set<string>([
 /**
  * Shell-like tokenizer for user-supplied arg strings. Handles single/double
  * quotes and backslash escapes; bare whitespace separates tokens. Returns []
- * for empty/whitespace-only input. Used for both `egoCliArgs` and `chromeArgs`
+ * for empty/whitespace-only input. Used for both `runtimeArgs` and `chromeArgs`
  * (mirrored in runtime/ego-linux/src/chrome.mjs for the Chrome side, since the
  * runtime must not import from src/).
  */
@@ -221,7 +222,12 @@ export function resolveConfig(config: RawConfig = {}): ResolvedConfig {
     githubMirror: typeof config.githubMirror === 'string' ? config.githubMirror : '',
     // User-defined extra args: stored raw (string), filtered at the call site
     // so a saved value is not silently mutated by a later blocklist change.
-    egoCliArgs: typeof config.egoCliArgs === 'string' ? config.egoCliArgs : '',
+    // v0.12.0 rename: egoCliArgs -> runtimeArgs (read the old key one version back).
+    runtimeArgs: typeof config.runtimeArgs === 'string'
+      ? config.runtimeArgs
+      : typeof (config as Record<string, unknown>).egoCliArgs === 'string'
+        ? ((config as Record<string, unknown>).egoCliArgs as string)
+        : '',
     chromeArgs: typeof config.chromeArgs === 'string' ? config.chromeArgs : '',
     isolateSpaces: typeof config.isolateSpaces === 'boolean' ? config.isolateSpaces : config.isolateSpaces === 'true' || config.isolateSpaces === '1' || config.isolateSpaces === 1,
     idleTimeoutMin: finiteIn(config.idleTimeoutMin, 0, 1440) ? config.idleTimeoutMin : 0,
@@ -235,6 +241,7 @@ export function resolveConfig(config: RawConfig = {}): ResolvedConfig {
     cursorHud: config.cursorHud === undefined ? true : Boolean(config.cursorHud),
     cursorName: typeof config.cursorName === 'string' && config.cursorName.trim() !== '' ? config.cursorName : 'DeepSeek',
     allowLocalFallback: config.allowLocalFallback === undefined ? false : Boolean(config.allowLocalFallback),
+    legacyEgoToolNames: Boolean(config.legacyEgoToolNames),
     localHeadless: config.localHeadless === undefined ? false : Boolean(config.localHeadless),
     localUserDataDir: typeof config.localUserDataDir === 'string' ? config.localUserDataDir : '',
   }

@@ -113,7 +113,7 @@ function ensurePickChannel(): PickChannel | null {
     pickChannel = new PickChannel({
       cdp: active.cdp,
       sessions: active.sessions,
-      onError: (code, message) => process.stderr.write(`[ego-cast-worker] pick ${code}: ${message}\n`),
+      onError: (code, message) => process.stderr.write(`[cdp-cast-worker] pick ${code}: ${message}\n`),
     })
     pickChannelWsUrl = active.wsUrl
   }
@@ -340,17 +340,17 @@ function sleep(ms: number): Promise<void> {
 
 function stopSiblingWorkers(): void {
   const self = process.pid
-  // Only match processes where ego-cast-worker.mjs is the DIRECT script
+  // Only match processes where cdp-cast-worker.mjs is the DIRECT script
   // argument of the node executable. The DSH subprocess runner (our parent
   // process tree) merely *mentions* the script path in its command line — the
-  // old loose `*ego-cast-worker.mjs*` substring match plus `taskkill /T` killed
+  // old loose `*cdp-cast-worker.mjs*` substring match plus `taskkill /T` killed
   // the runner and with it our own tree, so the worker died a few hundred ms
   // after spawn, before ever writing ego-cast.json (issues #34 defect 2 / #40;
   // same root cause behind the empty watch panels in #38/#43). Ancestors of
   // self are additionally excluded defensively.
   // (Paths containing spaces inside quotes are not matched — the installed
   // plugin path never has any.)
-  const SCRIPT_ARG_RE = /node(?:\.exe)?"?\s+"?[^"\s]*ego-cast-worker\.mjs(?:["\s]|$)/i
+  const SCRIPT_ARG_RE = /node(?:\.exe)?"?\s+"?[^"\s]*cdp-cast-worker\.mjs(?:["\s]|$)/i
   if (IS_WIN) {
     const ps = [
       `$self = ${self}`,
@@ -358,7 +358,7 @@ function stopSiblingWorkers(): void {
       `$anc = @{}`,
       `$cur = $procs | Where-Object { $_.ProcessId -eq $self } | Select-Object -First 1`,
       `while ($cur) { $anc[[int]$cur.ProcessId] = $true; $cur = $procs | Where-Object { $_.ProcessId -eq $cur.ParentProcessId } | Select-Object -First 1 }`,
-      `$procs | Where-Object { $_.Name -eq 'node.exe' -and $_.CommandLine -match 'node(\\.exe)?"?\\s+"?[^"\\s]*ego-cast-worker\\.mjs(["\\s]|$)' -and -not $anc[[int]$_.ProcessId] } | Select-Object -ExpandProperty ProcessId`,
+      `$procs | Where-Object { $_.Name -eq 'node.exe' -and $_.CommandLine -match 'node(\\.exe)?"?\\s+"?[^"\\s]*cdp-cast-worker\\.mjs(["\\s]|$)' -and -not $anc[[int]$_.ProcessId] } | Select-Object -ExpandProperty ProcessId`,
     ].join('; ')
     try {
       const output = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(ps, 'utf16le').toString('base64')], { encoding: 'utf8', timeout: 8000 })
@@ -533,7 +533,7 @@ async function main(): Promise<void> {
   }
   process.on('SIGTERM', shutdown); process.on('SIGINT', shutdown)
   console.log(`${SENTINEL}${JSON.stringify({ ok: true, port, pid: process.pid })}`)
-  connectLoop().catch((error: Error) => console.error('ego-cast-worker: connect loop failed', error))
+  connectLoop().catch((error: Error) => console.error('cdp-cast-worker: connect loop failed', error))
 }
 
-main().catch((error: Error) => { console.error('ego-cast-worker failed:', error.stack || error.message); process.exit(1) })
+main().catch((error: Error) => { console.error('cdp-cast-worker failed:', error.stack || error.message); process.exit(1) })

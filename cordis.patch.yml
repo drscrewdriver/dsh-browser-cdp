@@ -1,4 +1,4 @@
-# Insert ego-browser: structured browser-automation tools (30+ ego_*) that drive
+# Insert ego-browser: structured browser-automation tools (30+ bcdp_*) that drive
 # the vendored ego-lite runtime through ctx.subprocess, plus a realtime watch
 # panel (live SSE screencast + direct mouse interaction + download capture +
 # human-verification notice + tab bar + login guide).

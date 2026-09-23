@@ -1,12 +1,12 @@
 /** Injected by the DSH ModuleLoader factory wrapper (tsdown banner). */
 declare function require(id: string): any
 
-		// #region ego-browser client: realtime browser watch-bubble
+		// #region CDP browser bridge client: realtime watch-bubble
 		//
 		// A floating "watch" bubble (bottom-right) plus an expandable overlay
-		// panel that shows what the agent's ego-browser is doing in real time:
+		// panel that shows what the agent's browser is doing in real time:
 		// one thumbnail per live page target (URL + title), polled from the
-		// host route /api/ego/spaces (which the host proxies to the ego-cast
+		// host route /api/bcdp/spaces (which the host proxies to the ego-cast
 		// worker attached to the agent's own Chrome via CDP screencast).
 		//
 		// Design constraints (kept deliberately minimal / read-only):
@@ -26,7 +26,7 @@ declare function require(id: string): any
 		//   renderSpaces / applyFrame / openStream : 轮询 + SSE 实时帧
 		//   maybeShowLoginGuide / maybeShowCaptchaGuide : 登录/人机验证提醒条
 		// 注意：本前端是单文件（受 DSH 注入机制限制），不要在页面上拆文件；
-		//   数据源 = 轮询 /api/ego/spaces + SSE /api/ego/stream(实时帧)。
+		//   数据源 = 轮询 /api/bcdp/spaces + SSE /api/bcdp/stream(实时帧)。
 		// #endregion
 
 		// ── Settings card dependencies ───────────────────────────────────
@@ -79,7 +79,7 @@ declare function require(id: string): any
 			isolateSpacesOff: 'Disabled (persistent profile, keep logins)',
 			isolateSpacesOn: 'Enabled (isolated memory sandbox)',
 		idleTimeoutMin: 'Idle auto-stop (minutes)',
-		idleTimeoutMinHint: 'Stop the backing browser after N minutes without an ego_* call (0 = off). It cold-starts on the next call (~2-4s). Watching the panel does not count as activity.',
+		idleTimeoutMinHint: 'Stop the backing browser after N minutes without an bcdp_* call (0 = off). It cold-starts on the next call (~2-4s). Watching the panel does not count as activity.',
 		minUnit: 'min',
 		loginImportTitle: 'Import logins from system browser',
 		loginImportIntro: 'Copy login cookies from your daily Chrome/Edge/Brave into the agent browser (CDP passthrough — no offline decryption). Probe first, then import with an explicit domain list.',
@@ -97,16 +97,16 @@ declare function require(id: string): any
 			chromePathHint: 'Path to the Chrome/Chromium/Edge binary. Empty = auto-detect.',
 			captureBackend: 'Capture backend', streamProfile: 'Quality profile', cdpFps: 'CDP FPS', cdpQuality: 'CDP JPEG quality', cdpMaxWidth: 'CDP max width', cdpBackstopIntervalMs: 'CDP recovery interval', ffmpegFps: 'FFmpeg FPS', ffmpegMaxWidth: 'FFmpeg max width', ffmpegBitrateKbps: 'FFmpeg bitrate', ffmpegEncoder: 'FFmpeg encoder', ffmpegPath: 'FFmpeg binary path', githubMirror: 'GitHub mirror', fpsUnit: 'fps', pxUnit: 'px', kbpsUnit: 'kbps', msUnit: 'ms',
 			ffmpegTitle: 'FFmpeg installation', ffmpegReady: 'Ready', ffmpegMissing: 'No compatible FFmpeg found', ffmpegChecking: 'Checking local FFmpeg…', ffmpegDownloading: 'Downloading FFmpeg…', ffmpegVerifying: 'Verifying download…', ffmpegExtracting: 'Extracting FFmpeg…', ffmpegProbing: 'Checking capture capabilities…', ffmpegUnsupported: 'FFmpeg capture is unsupported on this platform', ffmpegFailed: 'FFmpeg installation failed', ffmpegSource: 'Source', ffmpegVersion: 'Version', ffmpegInstall: 'Download FFmpeg', ffmpegReinstall: 'Reinstall', ffmpegRecheck: 'Recheck', ffmpegRequired: 'FFmpeg (install required)', githubMirrorHint: 'Replaces https://github.com for GitHub downloads, for example https://gh-proxy.com/github.com.',
-			egoCliArgs: 'Extra ego-browser CLI args', egoCliArgsHint: 'Appended to `ego-browser nodejs` argv. Takes effect on the next ego_* call. Blocked: --status/--stop/--open/--spaces/--help (they exit before the heredoc runs). Use --headless via the headless env instead.',
-			chromeArgs: 'Extra Chrome launch args', chromeArgsHint: 'Appended to the Chrome launch argv. Takes effect on the next browser cold start (the browser is a singleton — run `ego-browser --stop` or restart DSH to relaunch). Blocked: --user-data-dir/--remote-debugging-port/--remote-allow-origins/--headless/--no-startup-window/--proxy-server (use EGO_LINUX_PROXY for the proxy).',
+			runtimeArgs: 'Extra runtime CLI args', runtimeArgsHint: 'Appended to the vendored runtime argv. Takes effect on the next bcdp_* call. Blocked: --status/--stop/--open/--spaces/--help (they exit before the heredoc runs). Use --headless via the headless env instead.',
+			chromeArgs: 'Extra Chrome launch args', chromeArgsHint: 'Appended to the Chrome launch argv. Takes effect on the next browser cold start (the browser is a singleton — stop the browser from the panel or restart DSH to relaunch). Blocked: --user-data-dir/--remote-debugging-port/--remote-allow-origins/--headless/--no-startup-window/--proxy-server (use EGO_LINUX_PROXY for the proxy).',
 			save: 'Save', saving: 'Saving…', discard: 'Discard',
 			unsaved: 'Unsaved', readOnly: 'Settings are read-only in this deployment.',
 			namespaceUnavailable: 'The dsh-browser-cdp configuration channel is unavailable. Please retry later.',
 			retry: 'Retry',
 			expand: 'Show settings', collapse: 'Hide settings',
 			// ── R1: CDP target sequence + activation ────────────────────────
-			cdpSectionTitle: 'CDP browser targets',
-			cdpSectionIntro: 'Connect to an already-running browser over the DevTools Protocol. Keep an ordered list; the activated entry drives every ego_* call. auto mode never launches a local browser silently.',
+			cdpSectionTitle: 'CDP browser bridge targets',
+			cdpSectionIntro: 'Connect to an already-running browser over the DevTools Protocol. Keep an ordered list; the activated entry drives every bcdp_* call. auto mode never launches a local browser silently.',
 			cdpMode: 'Connection mode',
 			cdpModeAuto: 'auto — use activated target',
 			cdpModeRemote: 'remote — only the activated target',
@@ -132,7 +132,7 @@ declare function require(id: string): any
 			cdpStatusIdle: 'not probed yet',
 			cdpLatency: 'latency',
 			cdpError: 'error',
-			cdpActivateHint: 'Activate one enabled target so ego_* tools connect to it.',
+			cdpActivateHint: 'Activate one enabled target so bcdp_* tools connect to it.',
 		}
 		var zh = {
 			title: 'dsh-browser-cdp',
@@ -142,7 +142,7 @@ declare function require(id: string): any
 			isolateSpacesOff: '关闭（持久化登录态，跨电脑重启不丢失）',
 			isolateSpacesOn: '开启（严格沙盒隔离，任务结束不落盘）',
 		idleTimeoutMin: '空闲自动回收（分钟）',
-		idleTimeoutMinHint: 'N 分钟没有任何 ego_* 调用后自动关闭后台浏览器进程（0 = 关闭）。下次调用自动冷启动（约 2-4 秒）。观看观察窗不算活动。',
+		idleTimeoutMinHint: 'N 分钟没有任何 bcdp_* 调用后自动关闭后台浏览器进程（0 = 关闭）。下次调用自动冷启动（约 2-4 秒）。观看观察窗不算活动。',
 		minUnit: '分钟',
 		loginImportTitle: '从系统浏览器导入登录态',
 		loginImportIntro: '把你日常 Chrome/Edge/Brave 里的登录 cookie 复制进 agent 浏览器（CDP 透传，不做离线解密）。建议先「探测」看可导入项，再按域名导入。',
@@ -160,8 +160,8 @@ declare function require(id: string): any
 			chromePathHint: 'Chrome/Chromium/Edge 可执行文件路径。留空 = 自动检测。',
 			captureBackend: '捕获后端', streamProfile: '画质档位', cdpFps: 'CDP 帧率', cdpQuality: 'CDP JPEG 质量', cdpMaxWidth: 'CDP 最大宽度', cdpBackstopIntervalMs: 'CDP 恢复截图间隔', ffmpegFps: 'FFmpeg 帧率', ffmpegMaxWidth: 'FFmpeg 最大宽度', ffmpegBitrateKbps: 'FFmpeg 码率', ffmpegEncoder: 'FFmpeg 编码器', ffmpegPath: 'FFmpeg 路径', githubMirror: 'GitHub 镜像源', fpsUnit: 'fps', pxUnit: 'px', kbpsUnit: 'kbps', msUnit: 'ms',
 			ffmpegTitle: 'FFmpeg 安装', ffmpegReady: '已就绪', ffmpegMissing: '未找到兼容的 FFmpeg', ffmpegChecking: '正在检测本机 FFmpeg…', ffmpegDownloading: '正在下载 FFmpeg…', ffmpegVerifying: '正在校验下载文件…', ffmpegExtracting: '正在解压 FFmpeg…', ffmpegProbing: '正在检查捕获能力…', ffmpegUnsupported: '当前平台不支持 FFmpeg 捕获', ffmpegFailed: 'FFmpeg 安装失败', ffmpegSource: '来源', ffmpegVersion: '版本', ffmpegInstall: '下载 FFmpeg', ffmpegReinstall: '重新下载', ffmpegRecheck: '重新检测', ffmpegRequired: 'FFmpeg（需要安装）', githubMirrorHint: '替换 https://github.com，例如 https://gh-proxy.com/github.com。',
-			egoCliArgs: 'ego-browser CLI 附加参数', egoCliArgsHint: '追加到 `ego-browser nodejs` argv。下一次 ego_* 工具调用即生效。禁止：--status/--stop/--open/--spaces/--help（会在 heredoc 执行前退出）。--headless 请走 headless 环境变量。',
-			chromeArgs: 'Chrome 启动附加参数', chromeArgsHint: '追加到 Chrome 启动 argv。仅在浏览器下次冷启动时生效（浏览器是单例常驻——需运行 `ego-browser --stop` 或重启 DSH 才会重新启动）。禁止：--user-data-dir/--remote-debugging-port/--remote-allow-origins/--headless/--no-startup-window/--proxy-server（代理请用 EGO_LINUX_PROXY）。',
+			runtimeArgs: '运行时附加参数', runtimeArgsHint: '追加到内置运行时 argv。下一次 bcdp_* 工具调用即生效。禁止：--status/--stop/--open/--spaces/--help（会在 heredoc 执行前退出）。--headless 请走 headless 环境变量。',
+			chromeArgs: 'Chrome 启动附加参数', chromeArgsHint: '追加到 Chrome 启动 argv。仅在浏览器下次冷启动时生效（浏览器是单例常驻——从面板关闭浏览器或重启 DSH 后才会重新启动）。禁止：--user-data-dir/--remote-debugging-port/--remote-allow-origins/--headless/--no-startup-window/--proxy-server（代理请用 EGO_LINUX_PROXY）。',
 			save: '保存', saving: '保存中…', discard: '放弃',
 			unsaved: '未保存', readOnly: '当前部署下设置只读。',
 			namespaceUnavailable: 'dsh-browser-cdp 配置通道不可用，请稍后重试。',
@@ -169,7 +169,7 @@ declare function require(id: string): any
 			expand: '展开设置', collapse: '收起设置',
 			// ── R1: CDP 目标序列 + 激活 ──────────────────────────────────────
 			cdpSectionTitle: 'CDP 浏览器目标',
-			cdpSectionIntro: '通过 DevTools 协议连接到已运行的浏览器。维护一个有序列表，被激活的那一项驱动每一次 ego_* 调用。auto 模式绝不悄无声息地启动本地浏览器。',
+			cdpSectionIntro: '通过 DevTools 协议连接到已运行的浏览器。维护一个有序列表，被激活的那一项驱动每一次 bcdp_* 调用。auto 模式绝不悄无声息地启动本地浏览器。',
 			cdpMode: '连接模式',
 			cdpModeAuto: 'auto — 使用被激活的目标',
 			cdpModeRemote: 'remote — 仅连接被激活的目标',
@@ -195,7 +195,7 @@ declare function require(id: string): any
 			cdpStatusIdle: '尚未探测',
 			cdpLatency: '时延',
 			cdpError: '错误',
-			cdpActivateHint: '激活一个已启用的目标，ego_* 工具才会连上它。',
+			cdpActivateHint: '激活一个已启用的目标，bcdp_* 工具才会连上它。',
 		}
 
 		// ── Watch panel locale ────────────────────────────────────────────
@@ -210,7 +210,7 @@ declare function require(id: string): any
 			realtime: 'Live',
 			noScreenshot: '(no screenshot — about:blank or browser not rendering)',
 			noActivePages: 'No active browser pages',
-			noActiveHint: 'Pages will appear here as the agent browses with ego_*',
+			noActiveHint: 'Pages will appear here as the agent browses with bcdp_*',
 			openExternal: 'Open real page',
 		raiseWindow: 'Pop out window',
 		raiseWindowHint: 'Raise the agent browser as a real window (a headless instance is replaced by a visible one on the same profile)',
@@ -233,7 +233,7 @@ declare function require(id: string): any
 			refresh: 'Refresh',
 			backToLive: '← Back to live',
 			dragHint: 'Drag to move panel',
-			loginTitle: 'Log in via the ego-lite agent browser window on your desktop',
+			loginTitle: 'Log in via the CDP browser bridge window on your desktop',
 			loginBtn: 'Logged in, save',
 			loginSaving: 'Saving…',
 			loginSaved: 'Saved {n} sessions',
@@ -241,7 +241,7 @@ declare function require(id: string): any
 			loginFailed: 'Save failed',
 			loginDismiss: 'Dismiss',
 			captchaTitle: '⚠️ CAPTCHA detected',
-			captchaHint: 'Complete verification in the ego-lite agent browser window; the agent will continue.',
+			captchaHint: 'Complete verification in the CDP browser bridge window; the agent will continue.',
 			captchaDismiss: 'Dismiss',
 			hintReset: 'Reset · scroll to pan · Ctrl+scroll to zoom · double-click to reset',
 			hintPan: 'Ctrl+scroll to zoom · Ctrl+drag to pan · double-click to reset',
@@ -262,7 +262,7 @@ declare function require(id: string): any
 			realtime: '正在实时浏览',
 			noScreenshot: '（暂无截图 — about:blank 或浏览器未渲染）',
 			noActivePages: '暂无活跃浏览器页',
-			noActiveHint: '当 agent 开始用 ego_* 操作网页时，这里会实时显示',
+			noActiveHint: '当 agent 开始用 bcdp_* 操作网页时，这里会实时显示',
 			openExternal: '⧉ 打开真实页',
 		raiseWindow: '弹出窗口',
 		raiseWindowHint: '把 agent 浏览器弹出为真实窗口（无头实例会被同 Profile 的有头实例替换，标签页保留）',
@@ -285,7 +285,7 @@ declare function require(id: string): any
 			refresh: '刷新',
 			backToLive: '← 返回实时',
 			dragHint: '拖动移动面板',
-			loginTitle: '需要账号登录时，请到桌面上那个 「ego lite — agent」 Chrome 窗口完成登录。',
+			loginTitle: '需要账号登录时，请到桌面上那个 「CDP 浏览器代理」 Chrome 窗口完成登录。',
 			loginBtn: '已登录，保存',
 			loginSaving: '保存中…',
 			loginSaved: '已保存 {n} 条会话',
@@ -293,7 +293,7 @@ declare function require(id: string): any
 			loginFailed: '保存失败',
 			loginDismiss: '关闭提示',
 			captchaTitle: '⚠️ 检测到人机验证',
-			captchaHint: '请在桌面那个 「ego lite — agent」 浏览器窗口手动完成验证，agent 会继续。',
+			captchaHint: '请在桌面那个 「CDP 浏览器代理」 浏览器窗口手动完成验证，agent 会继续。',
 			captchaDismiss: '关闭提示',
 			hintReset: '已复位 · 滚轮滚动页面 · Ctrl+滚轮缩放 · 双击复位',
 			hintPan: 'Ctrl+滚轮缩放 · Ctrl+拖动平移 · 双击复位',
@@ -318,9 +318,9 @@ declare function require(id: string): any
 		function initialSettingsState() {
 			return {
 				status: 'idle',        // 'idle' | 'loading' | 'ready'
-				available: false,      // true after a successful /ego/api/get
+				available: false,      // true after a successful /bcdp/api/get
 				writable: false,       // false when settings service is absent
-				draft: { isolateSpaces: false, idleTimeoutMin: '0', chromePath: '', captureBackend: 'auto', streamProfile: 'balanced', cdpFps: '20', cdpQuality: '55', cdpMaxWidth: '960', cdpBackstopIntervalMs: '3000', ffmpegFps: '20', ffmpegMaxWidth: '1280', ffmpegBitrateKbps: '4000', ffmpegEncoder: 'auto', ffmpegPath: '', githubMirror: '', egoCliArgs: '', chromeArgs: '', cdpTargets: [], activeTargetId: '', cdpMode: 'auto' },
+				draft: { isolateSpaces: false, idleTimeoutMin: '0', chromePath: '', captureBackend: 'auto', streamProfile: 'balanced', cdpFps: '20', cdpQuality: '55', cdpMaxWidth: '960', cdpBackstopIntervalMs: '3000', ffmpegFps: '20', ffmpegMaxWidth: '1280', ffmpegBitrateKbps: '4000', ffmpegEncoder: 'auto', ffmpegPath: '', githubMirror: '', runtimeArgs: '', chromeArgs: '', cdpTargets: [], activeTargetId: '', cdpMode: 'auto' },
 				ffmpegStatus: { state: 'checking', canDownload: false, canSelectFfmpeg: false },
 				dirty: false,
 				applyState: { kind: 'idle' }, // 'idle' | 'saving' | 'saved' | 'error'
@@ -344,7 +344,7 @@ declare function require(id: string): any
 			var self = this
 			var gen = ++this.generation
 			this.store.update(function (s) { s.status = 'loading' })
-			fetch('/ego/api/get', {
+			fetch('/bcdp/api/get', {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
 				body: '{}',
@@ -376,7 +376,7 @@ declare function require(id: string): any
 				captureBackend: config.captureBackend === 'ffmpeg' && !ffmpegStatus.canSelectFfmpeg ? 'cdp' : (config.captureBackend || 'auto'), streamProfile: config.streamProfile || 'balanced',
 				cdpFps: String(config.cdpFps ?? 20), cdpQuality: String(config.cdpQuality ?? 55), cdpMaxWidth: String(config.cdpMaxWidth ?? 960), cdpBackstopIntervalMs: String(config.cdpBackstopIntervalMs ?? 3000),
 				ffmpegFps: String(config.ffmpegFps ?? 20), ffmpegMaxWidth: String(config.ffmpegMaxWidth ?? 1280), ffmpegBitrateKbps: String(config.ffmpegBitrateKbps ?? 4000), ffmpegEncoder: config.ffmpegEncoder || 'auto', ffmpegPath: config.ffmpegPath || '', githubMirror: config.githubMirror || '',
-				egoCliArgs: config.egoCliArgs || '', chromeArgs: config.chromeArgs || '',
+				runtimeArgs: config.runtimeArgs || '', chromeArgs: config.chromeArgs || '',
 				cdpTargets: Array.isArray(config.cdpTargets) ? config.cdpTargets.map(function (t) { return Object.assign({ id: '', label: '', endpoint: '', enabled: true, note: '', probeStatus: 'unknown', probeLatencyMs: 0, probeError: '', probeCode: '', probeAt: 0 }, t) }) : [],
 				activeTargetId: typeof config.activeTargetId === 'string' ? config.activeTargetId : '',
 				cdpMode: config.cdpMode === 'local' || config.cdpMode === 'remote' ? config.cdpMode : 'auto',
@@ -487,7 +487,7 @@ declare function require(id: string): any
 			self.stagedComplex.cdpTargets = targets
 			self.store.update(function (s) { s.draft.cdpTargets = targets; s.dirty = true; s.applyState = { kind: 'idle' } })
 		}
-		fetch('/ego/api/cdp-probe', {
+		fetch('/bcdp/api/cdp-probe', {
 			method: 'POST',
 			headers: { 'content-type': 'application/json' },
 			body: JSON.stringify({ endpoint: endpoint }),
@@ -515,7 +515,7 @@ declare function require(id: string): any
 		}
 		EgoBrowserSettingsController.prototype._ffmpegRequest = function (method, body) {
 			var self = this
-			return fetch('/ego/api/' + method, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body || {}) })
+			return fetch('/bcdp/api/' + method, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body || {}) })
 				.then(function (res) { return res.json().catch(function () { return null }) })
 				.then(function (parsed) {
 					if (!parsed || parsed.ok !== true || !parsed.value) throw new Error(parsed && parsed.error ? parsed.error.message : 'FFmpeg request failed')
@@ -577,7 +577,7 @@ declare function require(id: string): any
 				return
 			}
 			this.store.update(function (s) { s.applyState = { kind: 'saving' } })
-			fetch('/ego/api/set', {
+			fetch('/bcdp/api/set', {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
 				body: JSON.stringify({ patch: patch }),
@@ -604,7 +604,7 @@ declare function require(id: string): any
 				captureBackend: config.captureBackend === 'ffmpeg' && ffmpegStatus && !ffmpegStatus.canSelectFfmpeg ? 'cdp' : (config.captureBackend || 'auto'), streamProfile: config.streamProfile || 'balanced',
 				cdpFps: String(config.cdpFps ?? 20), cdpQuality: String(config.cdpQuality ?? 55), cdpMaxWidth: String(config.cdpMaxWidth ?? 960), cdpBackstopIntervalMs: String(config.cdpBackstopIntervalMs ?? 3000),
 				ffmpegFps: String(config.ffmpegFps ?? 20), ffmpegMaxWidth: String(config.ffmpegMaxWidth ?? 1280), ffmpegBitrateKbps: String(config.ffmpegBitrateKbps ?? 4000), ffmpegEncoder: config.ffmpegEncoder || 'auto', ffmpegPath: config.ffmpegPath || '', githubMirror: config.githubMirror || '',
-				egoCliArgs: config.egoCliArgs || '', chromeArgs: config.chromeArgs || '',
+				runtimeArgs: config.runtimeArgs || '', chromeArgs: config.chromeArgs || '',
 			// R1: the CDP sequence is part of the draft. Omitting these three
 			// here made every target vanish from the panel the instant a save
 			// succeeded (the server had them; the draft rebuild dropped them).
@@ -736,7 +736,7 @@ declare function require(id: string): any
 			function run(dryRun) {
 				setRunning(true)
 				setResult(null)
-				fetch('/api/ego/login-import', {
+				fetch('/api/bcdp/login-import', {
 					method: 'POST',
 					headers: { 'content-type': 'application/json' },
 					body: JSON.stringify({
@@ -814,7 +814,7 @@ declare function require(id: string): any
 			useEffect(function () {
 				var alive = true
 				function poll() {
-					fetch('/ego/api/cdp-status', {
+					fetch('/bcdp/api/cdp-status', {
 						method: 'POST',
 						headers: { 'content-type': 'application/json' },
 						body: '{}',
@@ -993,7 +993,7 @@ declare function require(id: string): any
 						h(SettingsField, { id: 'plugin-config-dsh-browser-cdp-ffpath', label: t('ffmpegPath'), value: state.draft.ffmpegPath, placeholder: 'ffmpeg', disabled: busy, onEdit: function (v) { controller.edit('ffmpegPath', v) },
 						}),
 						h(SettingsField, { id: 'plugin-config-dsh-browser-cdp-ghmirror', label: t('githubMirror'), value: state.draft.githubMirror, hint: t('githubMirrorHint'), placeholder: 'https://gh-proxy.com/github.com', disabled: busy, onEdit: function (v) { controller.edit('githubMirror', v) } }),
-						h(SettingsField, { id: 'plugin-config-dsh-browser-cdp-ego-cli-args', label: t('egoCliArgs'), value: state.draft.egoCliArgs, hint: t('egoCliArgsHint'), placeholder: '--sdk-path /path/to/harness.js', disabled: busy, onEdit: function (v) { controller.edit('egoCliArgs', v) } }),
+						h(SettingsField, { id: 'plugin-config-dsh-browser-cdp-ego-cli-args', label: t('runtimeArgs'), value: state.draft.runtimeArgs, hint: t('runtimeArgsHint'), placeholder: '--sdk-path /path/to/harness.js', disabled: busy, onEdit: function (v) { controller.edit('runtimeArgs', v) } }),
 						h(SettingsField, { id: 'plugin-config-dsh-browser-cdp-chrome-args', label: t('chromeArgs'), value: state.draft.chromeArgs, hint: t('chromeArgsHint'), placeholder: '--disable-features=Translate --window-size=1024,768', disabled: busy, onEdit: function (v) { controller.edit('chromeArgs', v) } }),
 						h(LoginImportBlock, { t: t }),
 						h(CdpTargetsBlock, { t: t, controller: controller, targets: state.draft.cdpTargets, activeTargetId: state.draft.activeTargetId, cdpMode: state.draft.cdpMode, busy: busy }),
@@ -1039,13 +1039,13 @@ declare function require(id: string): any
 			return (value / (1024 * 1024)).toFixed(1) + ' MiB'
 		}
 
-		const SPACES_ROUTE = '/api/ego/spaces'
-		const EGO_CLOSE_ROUTE = '/api/ego/close'
-		const WATCH_START_ROUTE = '/api/ego/watch/start'
-		const WATCH_SWITCH_ROUTE = '/api/ego/watch/switch'
-		const WATCH_STOP_ROUTE = '/api/ego/watch/stop'
-		const WATCH_STATUS_ROUTE = '/api/ego/watch/status'
-		const VIDEO_ROUTE = '/api/ego/video'
+		const SPACES_ROUTE = '/api/bcdp/spaces'
+		const EGO_CLOSE_ROUTE = '/api/bcdp/close'
+		const WATCH_START_ROUTE = '/api/bcdp/watch/start'
+		const WATCH_SWITCH_ROUTE = '/api/bcdp/watch/switch'
+		const WATCH_STOP_ROUTE = '/api/bcdp/watch/stop'
+		const WATCH_STATUS_ROUTE = '/api/bcdp/watch/status'
+		const VIDEO_ROUTE = '/api/bcdp/video'
 
 		function postJson(path, body) {
 			return fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body || {}) }).then(function (res) { return res.json().catch(function () { return {} }) })
@@ -1500,20 +1500,20 @@ declare function require(id: string): any
 		var betterSidebarService
 		try { betterSidebarService = typeof ctx.get === 'function' ? ctx.get('betterSidebar') : undefined } catch (e) { betterSidebarService = undefined }
 		if (betterSidebarService !== undefined) {
-			ctx.effect(() => mountSidebarTab(ctx, betterSidebarService), 'ego-browser sidebar tab')
+			ctx.effect(() => mountSidebarTab(ctx, betterSidebarService), 'dsh-browser-cdp sidebar tab')
 		} else {
 			var disposeFloating = null
 			ctx.effect(() => {
 				disposeFloating = mountFloatingWatch(ctx)
 				return function () { if (disposeFloating) { var d = disposeFloating; disposeFloating = null; d() } }
-			}, 'ego-browser watch panel')
+			}, 'dsh-browser-cdp watch panel')
 			if (typeof ctx.inject === 'function') {
 				ctx.inject(['betterSidebar'], function (sidebarCtx) {
 					var svc
 					try { svc = typeof sidebarCtx.get === 'function' ? sidebarCtx.get('betterSidebar') : sidebarCtx.betterSidebar } catch (e) { svc = undefined }
 					if (!svc) return
 					if (disposeFloating) { var d2 = disposeFloating; disposeFloating = null; d2() }
-					sidebarCtx.effect(function () { return mountSidebarTab(sidebarCtx, svc) }, 'ego-browser sidebar tab')
+					sidebarCtx.effect(function () { return mountSidebarTab(sidebarCtx, svc) }, 'dsh-browser-cdp sidebar tab')
 				})
 			}
 		}
@@ -1585,7 +1585,7 @@ declare function require(id: string): any
 				const loginNote = panel.querySelector('#dsh-ego-login-note')
 				const captchaEl = panel.querySelector('#dsh-ego-captcha')
 				const captchaKindEl = panel.querySelector('#dsh-ego-captcha-kind')
-				const FLUSH_ROUTE = '/api/ego/flush'
+				const FLUSH_ROUTE = '/api/bcdp/flush'
 
 				// Guide strips that the user can dismiss (×). Once closed in this
 				// panel lifecycle they stay closed, so they never permanently eat
@@ -1701,7 +1701,7 @@ declare function require(id: string): any
 				let pendingLiveFrame = null
 				let liveFlushRaf = null
 				// pageMeta: targetId -> { url, title }, kept authoritative for the
-				// auto-follow path. Polled /api/ego/spaces data lags the SSE frame
+				// auto-follow path. Polled /api/bcdp/spaces data lags the SSE frame
 				// stream, so a brand-new page (frame-first, list-later) would never
 				// be findable in lastList in time to follow it. We merge updates
 				// from both sources here and follow from this map instead.
@@ -1744,7 +1744,7 @@ declare function require(id: string): any
 				}
 
 				// ── browser interaction: map panel pointer → real browser pixels ──
-				const INPUT_ROUTE = '/api/ego/input'
+				const INPUT_ROUTE = '/api/bcdp/input'
 				let inputBusy = false
 				/**
 				 * Send a pointer/wheel intention to the agent browser. Coordinates
@@ -2054,7 +2054,7 @@ declare function require(id: string): any
 					// Keep pageMeta authoritative for the auto-follow AND for the
 					// viewport-based coordinate mapping. Merge (do not overwrite) so
 					// vw/vh learned from an SSE frame are not lost on the next poll;
-					// also pick up viewportW/H now that /api/ego/spaces carries them.
+					// also pick up viewportW/H now that /api/bcdp/spaces carries them.
 					for (const s of lastList) {
 						const prev = pageMeta.get(s.targetId) || { targetId: s.targetId }
 						pageMeta.set(s.targetId, {
@@ -2174,7 +2174,7 @@ declare function require(id: string): any
 					raiseBtn.title = wt('raiseWindowHint')
 					raiseBtn.textContent = wt('raiseWindow')
 					raiseBtn.addEventListener('click', () => {
-						fetch('/api/ego/raise', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
+						fetch('/api/bcdp/raise', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
 							.then((r) => r.json().catch(() => null))
 							.catch(() => null)
 					})
@@ -2200,7 +2200,7 @@ declare function require(id: string): any
 
 				// ── spaces loading ────────────────────────────────────────────
 				// The watch panel is now pure SSE-driven (spaces + frame events
-				// from /api/ego/stream). This `refresh` is NO LONGER called on a
+				// from /api/bcdp/stream). This `refresh` is NO LONGER called on a
 				// timer — it is only used as a one-shot fallback when:
 				//   • the SSE stream errors / reconnects (to re-sync the tab list),
 				//   • the user manually clicks the refresh button,
@@ -2229,13 +2229,13 @@ declare function require(id: string): any
 				}
 
 				// ── realtime SSE: live frames + active-page auto-follow ──
-				// The cast worker pushes two kinds of events on /api/ego/stream:
+				// The cast worker pushes two kinds of events on /api/bcdp/stream:
 				//   • `frame`  — per-repaint JPEG for any page (real-time video)
 				//   • `spaces` — pure metadata (url/title/active/viewport/humanCheck),
 				//                broadcast on every keepalive tick (~500ms) and on
 				//                tab churn, so the tab bar + main view stay in sync
 				//                WITHOUT any client-side polling.
-				// The panel no longer polls /api/ego/spaces on a timer. A one-shot
+				// The panel no longer polls /api/bcdp/spaces on a timer. A one-shot
 				// `refresh()` is only called on initial mount and on SSE reconnect
 				// (via the `onerror` debouncer below) to re-sync after a stream gap.
 				let sse = null
@@ -2310,7 +2310,7 @@ declare function require(id: string): any
 					fetch(WATCH_STATUS_ROUTE, { cache: 'no-store' }).then((res) => res.ok ? res.json() : null).then(applyCaptureStatus).catch(() => {})
 					try { if (sse) sse.close() } catch {}
 					doConnected = false
-					sse = new EventSource('/api/ego/stream')
+					sse = new EventSource('/api/bcdp/stream')
 					sse.onopen = () => { doConnected = true }
 					// A frame event looks like: { targetId, data (base64 jpeg), ts, vw, vh }.
 					sse.addEventListener('frame', (ev) => {
@@ -2326,7 +2326,7 @@ declare function require(id: string): any
 					})
 				// The worker also sends the live list on open (and on tab
 				// churn); treat it as the authoritative tab-list + main-view
-				// update. This replaces the old /api/ego/spaces polling loop.
+				// update. This replaces the old /api/bcdp/spaces polling loop.
 					sse.addEventListener('spaces', (ev) => {
 					if (disposed) return
 					try {
@@ -2345,7 +2345,7 @@ declare function require(id: string): any
 				})
 				// Debounced reconnect fallback: when the SSE stream drops,
 				// EventSource auto-reconnects, but we also kick off a one-shot
-				// /api/ego/spaces fetch so the panel re-syncs immediately on the
+				// /api/bcdp/spaces fetch so the panel re-syncs immediately on the
 				// next successful connect (without waiting for the worker's next
 				// keepalive broadcast). The 1.5s delay gives EventSource room to
 				// reconnect cleanly first, avoiding a redundant fetch on a
@@ -2521,7 +2521,7 @@ clearTimeout((panel as any)._dshHideT)
 					captchaEl.classList.toggle('show', show)
 					if (show && captchaKindEl) captchaKindEl.textContent = hit.humanCheck.kind || 'captcha'
 				}
-				// "已登录，保存" → POST /api/ego/flush, which forces the agent
+				// "已登录，保存" → POST /api/bcdp/flush, which forces the agent
 				// browser's persistent cookies down to its on-disk profile so a
 				// later DSH/browser restart does not drop the login.
 				loginBtn.addEventListener('click', () => {
@@ -2575,11 +2575,11 @@ clearTimeout((panel as any)._dshHideT)
 
 		// ── Sidebar Tab (React UI + vanilla LivePreviewController) ─────────────
 		// Registered via ctx.betterSidebar.registerTab() when the sidebar service
-		// is available. The Tab reuses the same /api/ego/spaces + /api/ego/stream
+		// is available. The Tab reuses the same /api/bcdp/spaces + /api/bcdp/stream
 		// data sources as the floating panel but renders through React into the
 		// sidebar's tab content area instead of a fixed-position overlay.
-		var INPUT_ROUTE = '/api/ego/input'
-		var FLUSH_ROUTE = '/api/ego/flush'
+		var INPUT_ROUTE = '/api/bcdp/input'
+		var FLUSH_ROUTE = '/api/bcdp/flush'
 		var FRAME_FOLLOW_MIN_MS = 350
 
 		// ── Tab CSS (scoped under .dsh-ego-side-root) ──────────────────────────
@@ -2751,7 +2751,7 @@ clearTimeout((panel as any)._dshHideT)
 		// to the live <img> element (set via setLiveImg) so it can swap src in
 		// place at rAF cadence without triggering React re-renders per frame.
 		// `ctx` is stored so the controller can call ctx.get('betterSidebar')
-		// to auto-open the Tab on the first ego_* tool call.
+		// to auto-open the Tab on the first bcdp_* tool call.
 		/**
 		 * M1.6 / T5.6–T5.7 — write a picked element into the conversation.
 		 * Client-side seam, verified against dsh-better-sidebar's appendToDraft:
@@ -2819,7 +2819,7 @@ clearTimeout((panel as any)._dshHideT)
 			function post(enabledNow, targetId) {
 				var body: { enabled: unknown; targetId?: string } = { enabled: enabledNow }
 				if (targetId) body.targetId = targetId
-				return fetch('/api/ego/pick', {
+				return fetch('/api/bcdp/pick', {
 					method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
 				}).then(function (r) { return r.json().catch(function () { return null }) }).catch(function () { return null })
 			}
@@ -2857,7 +2857,7 @@ clearTimeout((panel as any)._dshHideT)
 			}
 			function pollOnce() {
 				if (request) return
-				request = fetch('/api/ego/pick').then(function (r) { return r.json().catch(function () { return null }) }).catch(function () { return null })
+				request = fetch('/api/bcdp/pick').then(function (r) { return r.json().catch(function () { return null }) }).catch(function () { return null })
 				request.then(function (res) {
 					request = null
 					if (res && res.ok !== false && res.state) applyState(res.state)
@@ -2890,7 +2890,7 @@ clearTimeout((panel as any)._dshHideT)
 			// via a server-side hit test instead of an Overlay inspect event.
 			function clickAt(x, y, targetId) {
 				if (!enabled || !targetId) return
-				fetch('/api/ego/pick/click', {
+				fetch('/api/bcdp/pick/click', {
 					method: 'POST', headers: { 'content-type': 'application/json' },
 					body: JSON.stringify({ targetId: targetId, x: x, y: y }),
 				}).then(function (r) { return r.json().catch(function () { return null }) }).catch(function () { return null })
@@ -3256,7 +3256,7 @@ clearTimeout((panel as any)._dshHideT)
 			var self = this
 			fetch(WATCH_STATUS_ROUTE, { cache: 'no-store' }).then(function (res) { return res.ok ? res.json() : null }).then(function (status) { self._applyCaptureStatus(status) }).catch(function () {})
 			try {
-				this.sse = new EventSource('/api/ego/stream')
+				this.sse = new EventSource('/api/bcdp/stream')
 			} catch (e) { return }
 			this.sse.addEventListener('frame', function (ev) {
 				try {
@@ -3289,7 +3289,7 @@ clearTimeout((panel as any)._dshHideT)
 				} catch (e) {}
 			})
 			// Debounced reconnect fallback: EventSource auto-reconnects on
-			// error; we also kick off a one-shot /api/ego/spaces fetch so the
+			// error; we also kick off a one-shot /api/bcdp/spaces fetch so the
 			// panel re-syncs immediately after a successful reconnect, without
 			// waiting for the worker's next keepalive broadcast. The 1.5s
 			// delay lets EventSource reconnect first, avoiding a redundant
@@ -3469,7 +3469,7 @@ clearTimeout((panel as any)._dshHideT)
 			var now = Date.now()
 			if (now - this._lastUnwiredAt < 5e3) return
 			this._lastUnwiredAt = now
-			try { console.warn('[ego-browser] live view not wired (liveImgTargetId=' + this.liveImgTargetId + ', current=' + this.currentActiveId + ') — input dropped') } catch (e) {}
+			try { console.warn('[dsh-browser-cdp] live view not wired (liveImgTargetId=' + this.liveImgTargetId + ', current=' + this.currentActiveId + ') — input dropped') } catch (e) {}
 			this._showHint(wt('hintNotCaptured'))
 		}
 		LivePreviewController.prototype._applyZoom = function () {
@@ -3813,7 +3813,7 @@ clearTimeout((panel as any)._dshHideT)
 								className: 'dsh-ego-side-back', type: 'button',
 								title: wt('raiseWindowHint'),
 								onClick: function () {
-									fetch('/api/ego/raise', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
+									fetch('/api/bcdp/raise', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
 										.then(function (r) { return r.json().catch(function () { return null }) })
 										.catch(function () { return null })
 								},
@@ -3878,7 +3878,7 @@ clearTimeout((panel as any)._dshHideT)
 			)
 		}
 
-		// ── mountSidebarTab: register the ego-browser watch tab ────────────────
+		// ── mountSidebarTab: register the CDP browser bridge watch tab ────────────────
 		function mountSidebarTab(ctx, betterSidebar) {
 			if (!betterSidebar) return function () {}
 			// Inject Tab CSS once (cleaned up on dispose)
@@ -3900,13 +3900,13 @@ clearTimeout((panel as any)._dshHideT)
 
 			// ── Auto-open probe (SSE-driven, no polling) ─────────────────────
 			// Listens for `tool-call` events on the SSE stream to detect when
-			// the agent first calls an ego_* tool, then opens the sidebar Tab.
-			// No /api/ego/spaces polling — the host-side markEgoToolCall()
+			// the agent first calls an bcdp_* tool, then opens the sidebar Tab.
+			// No /api/bcdp/spaces polling — the host-side markEgoToolCall()
 			// pushes the event into the SSE stream the moment a tool runs.
 			//
 			// Why "increase beyond baseline" not "0 → >0": toolCallCount is a
 			// host-process counter that persists across page reloads. The
-			// baseline is fetched ONCE at mount via a single /api/ego/spaces
+			// baseline is fetched ONCE at mount via a single /api/bcdp/spaces
 			// request; after that, only a NEW tool call (count goes up)
 			// triggers the open.
 			//
@@ -3950,7 +3950,7 @@ clearTimeout((panel as any)._dshHideT)
 			// opens its OWN EventSource so it works even before the Tab is
 			// mounted (the Tab's controller only connects after the Tab opens).
 			var probeSse = null
-			try { probeSse = new EventSource('/api/ego/stream') } catch (e) {}
+			try { probeSse = new EventSource('/api/bcdp/stream') } catch (e) {}
 			if (probeSse) {
 				probeSse.addEventListener('tool-call', function (ev) {
 					if (probeDisposed) return

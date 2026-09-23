@@ -6192,7 +6192,7 @@ async function captureMarked(call, sessionId, options = {}) {
 }
 
 //#endregion
-//#region src/worker/ego-cast-worker.ts
+//#region src/worker/cdp-cast-worker.ts
 const SENTINEL = "@@DSH_RESULT@@";
 const HOME = homedir() || process.env.HOME || process.env.USERPROFILE || "/root";
 const IS_WIN = platform() === "win32";
@@ -6252,7 +6252,7 @@ function ensurePickChannel() {
 		pickChannel = new PickChannel({
 			cdp: active.cdp,
 			sessions: active.sessions,
-			onError: (code, message) => process.stderr.write(`[ego-cast-worker] pick ${code}: ${message}\n`)
+			onError: (code, message) => process.stderr.write(`[cdp-cast-worker] pick ${code}: ${message}\n`)
 		});
 		pickChannelWsUrl = active.wsUrl;
 	}
@@ -6567,7 +6567,7 @@ function sleep(ms) {
 }
 function stopSiblingWorkers() {
 	const self = process.pid;
-	const SCRIPT_ARG_RE = /node(?:\.exe)?"?\s+"?[^"\s]*ego-cast-worker\.mjs(?:["\s]|$)/i;
+	const SCRIPT_ARG_RE = /node(?:\.exe)?"?\s+"?[^"\s]*cdp-cast-worker\.mjs(?:["\s]|$)/i;
 	if (IS_WIN) {
 		const ps = [
 			`$self = ${self}`,
@@ -6575,7 +6575,7 @@ function stopSiblingWorkers() {
 			`$anc = @{}`,
 			`$cur = $procs | Where-Object { $_.ProcessId -eq $self } | Select-Object -First 1`,
 			`while ($cur) { $anc[[int]$cur.ProcessId] = $true; $cur = $procs | Where-Object { $_.ProcessId -eq $cur.ParentProcessId } | Select-Object -First 1 }`,
-			`$procs | Where-Object { $_.Name -eq 'node.exe' -and $_.CommandLine -match 'node(\\.exe)?"?\\s+"?[^"\\s]*ego-cast-worker\\.mjs(["\\s]|$)' -and -not $anc[[int]$_.ProcessId] } | Select-Object -ExpandProperty ProcessId`
+			`$procs | Where-Object { $_.Name -eq 'node.exe' -and $_.CommandLine -match 'node(\\.exe)?"?\\s+"?[^"\\s]*cdp-cast-worker\\.mjs(["\\s]|$)' -and -not $anc[[int]$_.ProcessId] } | Select-Object -ExpandProperty ProcessId`
 		].join("; ");
 		try {
 			const output = execFileSync("powershell.exe", [
@@ -6933,13 +6933,13 @@ async function main() {
 		port,
 		pid: process.pid
 	})}`);
-	connectLoop().catch((error) => console.error("ego-cast-worker: connect loop failed", error));
+	connectLoop().catch((error) => console.error("cdp-cast-worker: connect loop failed", error));
 }
 main().catch((error) => {
-	console.error("ego-cast-worker failed:", error.stack || error.message);
+	console.error("cdp-cast-worker failed:", error.stack || error.message);
 	process.exit(1);
 });
 
 //#endregion
 export {  };
-//# sourceMappingURL=ego-cast-worker.mjs.map
+//# sourceMappingURL=cdp-cast-worker.mjs.map

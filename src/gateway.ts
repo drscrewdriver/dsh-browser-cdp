@@ -1,5 +1,5 @@
 // src/gateway.ts — host-side HTTP gateway exposing the `ego-browser` config
-// to the browser through a self-hosted `/ego/api` route.
+// to the browser through a self-hosted `/bcdp/api` route.
 //
 // The DSH typertGateway `/api` RPC dispatch was the original channel
 // (TypertRemoteService + @Remote), but the host's SRC discovery
@@ -8,11 +8,11 @@
 // mirrors the better-sidebar / dsh-plugin-interpreters pattern:
 // `ctx.webServer.register` claims a prefix route, the handler reads/writes
 // the settings seam in-process (no wire-layer allowlist gate), and the
-// browser reaches it through `fetch('/ego/api/<method>')`.
+// browser reaches it through `fetch('/bcdp/api/<method>')`.
 //
 // Route shape:
-//   POST /ego/api/get  → { ok: true, value: { config: ResolvedConfig } }
-//   POST /ego/api/set  body: { patch: Partial<Config> }
+//   POST /bcdp/api/get  → { ok: true, value: { config: ResolvedConfig } }
+//   POST /bcdp/api/set  body: { patch: Partial<Config> }
 //                        → { ok: true, value: { config: ResolvedConfig } }
 // Errors carry { ok: false, error: { code, message } }.
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -35,14 +35,14 @@ export interface SettingsBridge {
 }
 
 /** HTTP route prefix owning every ego-browser API request. */
-const API_PREFIX = '/ego/api'
+const API_PREFIX = '/bcdp/api'
 
 /** Config keys the `set` endpoint accepts (allow-list; unknown keys are dropped). */
 const ALLOWED_KEYS = new Set<string>([
   'isolateSpaces', 'idleTimeoutMin',
   'chromePath', 'captureBackend', 'streamProfile', 'cdpFps', 'cdpQuality',
   'cdpMaxWidth', 'cdpBackstopIntervalMs', 'ffmpegFps', 'ffmpegMaxWidth', 'ffmpegBitrateKbps',
-  'ffmpegEncoder', 'ffmpegPath', 'githubMirror', 'egoCliArgs', 'chromeArgs',
+  'ffmpegEncoder', 'ffmpegPath', 'githubMirror', 'runtimeArgs', 'chromeArgs',
   // ── R1: CDP sequence + activation ───────────────────────────────────────
   'cdpTargets', 'activeTargetId', 'cdpMode', 'cdpProbeTimeoutMs',
   'cursorHud', 'cursorName', 'allowLocalFallback', 'localHeadless', 'localUserDataDir',
@@ -67,7 +67,7 @@ interface CodedErrorLike extends Error {
 }
 
 /**
- * Register the `/ego/api` HTTP route on the host's web server.
+ * Register the `/bcdp/api` HTTP route on the host's web server.
  *
  * The route reads/writes the `ego-browser` settings namespace in-process
  * through the bridge + `ctx.settings`. The settings service is optional:
@@ -189,7 +189,7 @@ export function registerEgoBrowserGateway(
         }
       },
     })
-  }, 'ego-browser: /ego/api routes')
+  }, 'ego-browser: /bcdp/api routes')
 }
 
 /**

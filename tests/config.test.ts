@@ -7,9 +7,9 @@ describe("dual capture config", () => {
       chromePath: "", captureBackend: "auto", streamProfile: "balanced",
       cdpFps: 20, cdpQuality: 55, cdpMaxWidth: 960, cdpBackstopIntervalMs: 3000,
       ffmpegFps: 20, ffmpegMaxWidth: 1280, ffmpegBitrateKbps: 4000, ffmpegEncoder: "auto", ffmpegPath: "", githubMirror: "",
-      egoCliArgs: "", chromeArgs: "", isolateSpaces: false, idleTimeoutMin: 0,
+      runtimeArgs: "", chromeArgs: "", isolateSpaces: false, idleTimeoutMin: 0,
       cdpTargets: [], activeTargetId: "", cdpMode: "auto", cdpProbeTimeoutMs: 3000,
-      cursorHud: true, cursorName: "DeepSeek", allowLocalFallback: false, localHeadless: false, localUserDataDir: "",
+      cursorHud: true, cursorName: "DeepSeek", allowLocalFallback: false, localHeadless: false, localUserDataDir: "", legacyEgoToolNames: false,
     });
   });
 
@@ -18,9 +18,9 @@ describe("dual capture config", () => {
       chromePath: "", captureBackend: "auto", streamProfile: "balanced",
       cdpFps: 30, cdpQuality: 70, cdpMaxWidth: 1200, cdpBackstopIntervalMs: 5000,
       ffmpegFps: 20, ffmpegMaxWidth: 1280, ffmpegBitrateKbps: 4000, ffmpegEncoder: "auto", ffmpegPath: "", githubMirror: "",
-      egoCliArgs: "", chromeArgs: "", isolateSpaces: false, idleTimeoutMin: 0,
+      runtimeArgs: "", chromeArgs: "", isolateSpaces: false, idleTimeoutMin: 0,
       cdpTargets: [], activeTargetId: "", cdpMode: "auto", cdpProbeTimeoutMs: 3000,
-      cursorHud: true, cursorName: "DeepSeek", allowLocalFallback: false, localHeadless: false, localUserDataDir: "",
+      cursorHud: true, cursorName: "DeepSeek", allowLocalFallback: false, localHeadless: false, localUserDataDir: "", legacyEgoToolNames: false,
     });
     expect(resolveConfig({ cdpFps: 15, castFpsCap: 30 }).cdpFps).toBe(15);
   });
@@ -43,26 +43,26 @@ describe("dual capture config", () => {
   });
 });
 
-// ── user-defined extra CLI args (egoCliArgs / chromeArgs) ───────────────────
+// ── user-defined extra CLI args (runtimeArgs / chromeArgs) ───────────────────
 
 describe("user-defined extra CLI args", () => {
-  it("resolveConfig defaults egoCliArgs / chromeArgs to empty strings", () => {
+  it("resolveConfig defaults runtimeArgs / chromeArgs to empty strings", () => {
     const c = resolveConfig({});
-    expect(c.egoCliArgs).toBe("");
+    expect(c.runtimeArgs).toBe("");
     expect(c.chromeArgs).toBe("");
   });
 
   it("resolveConfig passes through non-string as empty string", () => {
-    const c = resolveConfig({ egoCliArgs: 123, chromeArgs: null } as any);
-    expect(c.egoCliArgs).toBe("");
+    const c = resolveConfig({ runtimeArgs: 123, chromeArgs: null } as any);
+    expect(c.runtimeArgs).toBe("");
     expect(c.chromeArgs).toBe("");
   });
 
   it("resolveConfig preserves the raw string (filtering happens at call site)", () => {
-    const c = resolveConfig({ egoCliArgs: "--status --sdk-path /x", chromeArgs: "--headless --proxy-server=bad" });
+    const c = resolveConfig({ runtimeArgs: "--status --sdk-path /x", chromeArgs: "--headless --proxy-server=bad" });
     // Stored raw; blocklist is applied by filterArgs at spawn time so a saved
     // value is not silently mutated by a later blocklist change.
-    expect(c.egoCliArgs).toBe("--status --sdk-path /x");
+    expect(c.runtimeArgs).toBe("--status --sdk-path /x");
     expect(c.chromeArgs).toBe("--headless --proxy-server=bad");
   });
 });

@@ -4,7 +4,7 @@
  * Standalone data module: HUMAN_CHECK_PROBE is a string that gets serialized
  * into a `page.evaluate` call to identify reCAPTCHA / hCaptcha / Turnstile /
  * Cloudflare / generic captcha. When changing probe heuristics, note that
- * bin/ego-cast-worker.mjs (now src/worker/ego-cast-worker.ts) has a similar
+ * bin/cdp-cast-worker.mjs (now src/worker/cdp-cast-worker.ts) has a similar
  * probe (HUMAN_PROBE_JS) — the two must stay in sync.
  */
 export const HUMAN_CHECK_PROBE = `(() => {

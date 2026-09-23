@@ -8,7 +8,7 @@ describe("idle browser reaper (issue #47)", () => {
     expect(shouldReapBrowser(now, now - 999_999_999, 0)).toBe(false);
   });
 
-  it("never reaps when no ego_* call has ever happened", () => {
+  it("never reaps when no bcdp_* call has ever happened", () => {
     expect(shouldReapBrowser(now, 0, 30)).toBe(false);
   });
 

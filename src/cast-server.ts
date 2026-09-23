@@ -1,8 +1,8 @@
 /**
  * ego-browser cast-server — host half of the realtime watch panel.
  *
- * Bridges the client UI (/api/ego/*) to the ego-cast worker
- * (bin/ego-cast-worker.mjs) that attaches to the agent's live browser and
+ * Bridges the client UI (/api/bcdp/*) to the ego-cast worker
+ * (bin/cdp-cast-worker.mjs) that attaches to the agent's live browser and
  * streams screencast JPEGs. Everything the agent's own browser does is pushed;
  * this host route only *reads* the worker's loopback JSON. No navigation, no
  * writes, no host env changes — consistent with the plugin's read-only stance.
@@ -20,7 +20,7 @@ import type { FfmpegInstallationManager, FfmpegStatus } from './ffmpeg-installat
 import type { LoginImportOptions, LoginImportReport } from './login-import.ts'
 import { EGO_LINUX_CDP_URL } from './cdp-targets.ts'
 
-const WORKER_BIN = fileURLToPath(new URL('../bin/ego-cast-worker.mjs', import.meta.url))
+const WORKER_BIN = fileURLToPath(new URL('../bin/cdp-cast-worker.mjs', import.meta.url))
 
 // ── R1: activated CDP endpoint for the watch/stream worker ────────────────
 // The cast worker is a separate long-lived process that attaches to the SAME
@@ -75,35 +75,35 @@ export async function recycleWorker(reason: string): Promise<boolean> {
   return true
 }
 
-export const EGO_SPACES_ROUTE = '/api/ego/spaces'
-export const EGO_STREAM_ROUTE = '/api/ego/stream'
-export const EGO_HEALTH_ROUTE = '/api/ego/health'
-export const EGO_CLOSE_ROUTE = '/api/ego/close'
-export const EGO_FLUSH_ROUTE = '/api/ego/flush'
-export const EGO_RAISE_ROUTE = '/api/ego/raise'
-export const EGO_MARKS_ROUTE = '/api/ego/marks'
-export const EGO_PICK_ROUTE = '/api/ego/pick'
-export const EGO_LOGIN_IMPORT_ROUTE = '/api/ego/login-import'
-export const EGO_INPUT_ROUTE = '/api/ego/input'
-export const EGO_WATCH_START_ROUTE = '/api/ego/watch/start'
-export const EGO_WATCH_SWITCH_ROUTE = '/api/ego/watch/switch'
-export const EGO_WATCH_STOP_ROUTE = '/api/ego/watch/stop'
-export const EGO_WATCH_STATUS_ROUTE = '/api/ego/watch/status'
-export const EGO_VIDEO_ROUTE = '/api/ego/video'
-export const EGO_VIDEO_STATUS_ROUTE = '/api/ego/video/status'
+export const EGO_SPACES_ROUTE = '/api/bcdp/spaces'
+export const EGO_STREAM_ROUTE = '/api/bcdp/stream'
+export const EGO_HEALTH_ROUTE = '/api/bcdp/health'
+export const EGO_CLOSE_ROUTE = '/api/bcdp/close'
+export const EGO_FLUSH_ROUTE = '/api/bcdp/flush'
+export const EGO_RAISE_ROUTE = '/api/bcdp/raise'
+export const EGO_MARKS_ROUTE = '/api/bcdp/marks'
+export const EGO_PICK_ROUTE = '/api/bcdp/pick'
+export const EGO_LOGIN_IMPORT_ROUTE = '/api/bcdp/login-import'
+export const EGO_INPUT_ROUTE = '/api/bcdp/input'
+export const EGO_WATCH_START_ROUTE = '/api/bcdp/watch/start'
+export const EGO_WATCH_SWITCH_ROUTE = '/api/bcdp/watch/switch'
+export const EGO_WATCH_STOP_ROUTE = '/api/bcdp/watch/stop'
+export const EGO_WATCH_STATUS_ROUTE = '/api/bcdp/watch/status'
+export const EGO_VIDEO_ROUTE = '/api/bcdp/video'
+export const EGO_VIDEO_STATUS_ROUTE = '/api/bcdp/video/status'
 
 // ── tool-call signal (auto-open sidebar Tab) ─────────────────────────────
 // Module-level counter bumped by markEgoToolCall() from the tool execute
 // path (src/index.ts: defineEgoTool). When a new tool call lands, we
 // broadcast a `tool-call` SSE event to every connected watch-panel client
 // so the sidebar auto-opens instantly — NO client-side polling needed.
-// (Previously the client polled /api/ego/spaces every 2s to detect this;
+// (Previously the client polled /api/bcdp/spaces every 2s to detect this;
 //  that loop is now gone.) Process-local; resets to 0 on host restart,
 // which is fine — the auto-open is a one-shot per session anyway.
 let toolCallCount = 0
 const sseClients = new Set<ServerResponse>()
 
-/** Timestamp of the last ego_* tool call — the idle reaper's activity signal. */
+/** Timestamp of the last bcdp_* tool call — the idle reaper's activity signal. */
 let lastEgoActivity = 0
 export function getLastEgoActivity(): number {
   return lastEgoActivity
@@ -569,7 +569,7 @@ export function initCastServer(
     return
   }
 
-  // ── trust fence for /api/ego/* ────────────────────────────────────────────
+  // ── trust fence for /api/bcdp/* ────────────────────────────────────────────
   // Exact-path routes match BEFORE the host's `/api` prefix trust-fence route,
   // so every handler below would otherwise answer unauthenticated requests.
   // The host issues a `dsh-auth-<processKey>` cookie that is HttpOnly AND
@@ -636,7 +636,7 @@ export function initCastServer(
     },
   })
 
-  // GET /api/ego/stream — Server-Sent Events: real-time screencast frames and
+  // GET /api/bcdp/stream — Server-Sent Events: real-time screencast frames and
   // the live tab/spaces list. The web shell supports exact HTTP routes and this
   // handler keeps the connection open for the worker->panel fan-out.
   const disposeStream = server.register({
@@ -653,7 +653,7 @@ export function initCastServer(
     },
   })
 
-  // POST /api/ego/input — forward a watch-panel pointer/wheel intention to the
+  // POST /api/bcdp/input — forward a watch-panel pointer/wheel intention to the
   // real agent page. Coordinates are already in browser CSS pixels (the panel
   // maps them). The web shell passes the raw body through to the worker.
   const disposeInput = server.register({
@@ -671,7 +671,7 @@ export function initCastServer(
     },
   })
 
-  // POST /api/ego/close — close a browser tab by targetId.
+  // POST /api/bcdp/close — close a browser tab by targetId.
   const disposeClose = server.register({
     kind: 'exact',
     path: EGO_CLOSE_ROUTE,
@@ -690,9 +690,9 @@ export function initCastServer(
     },
   })
 
-  // POST /api/ego/marks — 阶段 3 / R4: set-of-marks capture (image + numbered
+  // POST /api/bcdp/marks — 阶段 3 / R4: set-of-marks capture (image + numbered
   // element map) through the worker's resident connection. Same trust fence and
-  // forwarding shape as /api/ego/close.
+  // forwarding shape as /api/bcdp/close.
   const disposeMarks = server.register({
     kind: 'exact',
     path: EGO_MARKS_ROUTE,
@@ -749,7 +749,7 @@ export function initCastServer(
     },
   })
 
-  // POST /api/ego/flush — force login cookies down to the disk profile.
+  // POST /api/bcdp/flush — force login cookies down to the disk profile.
   const disposeFlush = server.register({
     kind: 'exact',
     path: EGO_FLUSH_ROUTE,
@@ -763,7 +763,7 @@ export function initCastServer(
     },
   })
 
-  // POST /api/ego/raise — pop the agent browser out as a REAL visible window
+  // POST /api/bcdp/raise — pop the agent browser out as a REAL visible window
   // (issue #51): when the backing browser runs headless, the runtime's
   // `ego-browser --open` replaces it with a headed instance on the SAME
   // profile (tabs restore); when it is already visible, --open just raises
@@ -783,10 +783,10 @@ export function initCastServer(
     },
   })
 
-  // POST /api/ego/login-import — the settings card's entry point for the
+  // POST /api/bcdp/login-import — the settings card's entry point for the
   // login-cookie importer (issue #46). The heavy lifting (system browser
   // probe, ABE-safe CDP read, write into the agent browser) is injected by
-  // the host plugin; the body mirrors ego_login_import's arguments.
+  // the host plugin; the body mirrors bcdp_login_import's arguments.
   const disposeLoginImport = server.register({
     kind: 'exact',
     path: EGO_LOGIN_IMPORT_ROUTE,

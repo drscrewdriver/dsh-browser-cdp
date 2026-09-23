@@ -185,7 +185,10 @@ export async function boxModel(
 }
 
 export interface AxNode {
+  /** The AX node id, which Chrome also uses as the DOM backend node id. */
   nodeId: string
+  /** Numeric form of `nodeId`, ready for `Overlay.highlightNode`. 0 when unparsable. */
+  backendNodeId: number
   role: string
   name: string
   ignored: boolean
@@ -215,6 +218,7 @@ export function flattenAxTree(nodes: readonly RawAxNode[]): AxNode[] {
     const focusable = properties.find((property) => property.name === 'focusable')
     out.push({
       nodeId: typeof node.nodeId === 'string' ? node.nodeId : '',
+      backendNodeId: Number.parseInt(typeof node.nodeId === 'string' ? node.nodeId : '', 10) || 0,
       role: typeof node.role?.value === 'string' ? node.role.value : '',
       name: typeof node.name?.value === 'string' ? node.name.value : '',
       ignored: node.ignored === true,

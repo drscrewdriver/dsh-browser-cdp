@@ -340,8 +340,8 @@ describe('M0.5 hit testing + identity', () => {
       { nodeId: '2', role: { value: 'generic' }, ignored: true },
     ])
     expect(nodes).toEqual([
-      { nodeId: '1', role: 'button', name: 'Go', ignored: false, keyboardFocusable: true },
-      { nodeId: '2', role: 'generic', name: '', ignored: true, keyboardFocusable: false },
+      { nodeId: '1', backendNodeId: 1, role: 'button', name: 'Go', ignored: false, keyboardFocusable: true },
+      { nodeId: '2', backendNodeId: 2, role: 'generic', name: '', ignored: true, keyboardFocusable: false },
     ])
   })
 

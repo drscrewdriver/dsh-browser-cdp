@@ -5408,6 +5408,7 @@ function flattenAxTree(nodes) {
 		const focusable = (node.properties ?? []).find((property) => property.name === "focusable");
 		out.push({
 			nodeId: typeof node.nodeId === "string" ? node.nodeId : "",
+			backendNodeId: Number.parseInt(typeof node.nodeId === "string" ? node.nodeId : "", 10) || 0,
 			role: typeof node.role?.value === "string" ? node.role.value : "",
 			name: typeof node.name?.value === "string" ? node.name.value : "",
 			ignored: node.ignored === true,

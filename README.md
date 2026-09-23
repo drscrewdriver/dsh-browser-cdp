@@ -1,4 +1,4 @@
-# ego-browser — 看得见的 Agent 浏览器
+# dsh-browser-cdp — 看得见的 Agent 浏览器（CDP 接入）
 
 <p align="center">
   <a href="https://dshfind.com/zh/plugins/Fisfzy/ego-browser?ref=badge"><img src="https://dshfind.com/api/badge/Fisfzy/ego-browser?lang=zh" alt="dshfind - ego-browser"></a>
@@ -121,21 +121,21 @@
 
 ## 安装
 
-> **包名迁移（DSH Desktop 2.0.5+）**：本插件包名是 **`dsh-ego-browser`**（非 `@dsh-external/ego-browser`）。DSH Desktop 2.0.5 起增加了「profile 依赖名 == 包实际 name」的一致性校验，若 profile 仍用旧名 `@dsh-external/ego-browser` 引用，启动会挂进恢复模式（`profile package identity is invalid for @dsh-external/ego-browser`）。升级到 2.0.5 后请把 profile 的 `package.json` 依赖键 **和** `dsh.profile.bundles` 条目**两处**都改为 `dsh-ego-browser`：
+> **包名迁移（DSH Desktop 2.0.5+）**：本插件包名是 **`dsh-browser-cdp`**（曾用名 `dsh-ego-browser`、别名 `@dsh-external/ego-browser`）。DSH Desktop 2.0.5 起增加了「profile 依赖名 == 包实际 name」的一致性校验，若 profile 仍用旧名引用，启动会挂进恢复模式。升级后请把 profile 的 `package.json` 依赖键 **和** `dsh.profile.bundles` 条目**两处**都改为 `dsh-browser-cdp`：
 
    ```diff
    - "@dsh-external/ego-browser": "git+https://github.com/Fisfzy/ego-browser.git",
-   + "dsh-ego-browser": "git+https://github.com/Fisfzy/ego-browser.git",
+   + "dsh-browser-cdp": "git+https://github.com/Fisfzy/ego-browser.git",
    ```
 
    ```diff
    - "@dsh-external/ego-browser",
-   + "dsh-ego-browser",
+   + "dsh-browser-cdp",
    ```
 
 ```sh
-dshx install ego-browser <ego-browser.tgz>                             # tarball 或 git URL 均可
-dshx list                                                # 应显示：[on] ego-browser
+dshx install dsh-browser-cdp <dsh-browser-cdp.tgz>                    # tarball 或 git URL 均可
+dshx list                                                # 应显示：[on] dsh-browser-cdp
 ```
 
 观察窗设置中可选 `captureBackend=auto|cdp|ffmpeg`（默认 `auto`，当前解析为 CDP）、画质档位、CDP FPS/JPEG 质量/最大宽度，以及 FFmpeg FPS/最大宽度/码率/编码器/自定义路径。插件先检测自定义路径、系统 PATH 和托管缓存；检测到兼容 FFmpeg 前，设置页禁止选择 FFmpeg，并提供固定版本的一键下载。GitHub 下载可用 `githubMirror` 替换 `https://github.com`，例如 `https://gh-proxy.com/github.com`。FFmpeg 码率范围为 500-20000 kbps，低/平衡/高档默认 2000/4000/8000 kbps。

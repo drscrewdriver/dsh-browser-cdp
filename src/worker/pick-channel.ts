@@ -48,6 +48,14 @@ export interface PickElement {
   documentRect: { x: number; y: number; width: number; height: number } | null
   /** Single-line serialisation fed to the conversation. */
   describe: string
+  /** Where this element lives — lets the agent find it in the DOM again. */
+  source?: {
+    /** CDP connection origin (e.g. ws://host:port) the page belongs to. */
+    endpoint: string
+    targetId: string
+    pageUrl: string
+    pageTitle: string
+  }
 }
 
 export interface PickState {
@@ -68,6 +76,8 @@ export interface PickState {
 export interface PickChannelOptions {
   cdp: CdpClient
   sessions: TargetSessions
+  /** CDP connection origin of the resident connection (for pick provenance). */
+  getEndpoint?: () => string
   onPick?: (element: PickElement) => void
   /** Fired once per chosen action, AFTER the in-page confirm is drawn. */
   onAction?: (element: PickElement, action: PickAction) => void
@@ -89,6 +99,7 @@ export class PickChannel {
   #cdp: CdpClient
   #sessions: TargetSessions
   #onPick?: (element: PickElement) => void
+  #getEndpoint?: () => string
   #onAction?: (element: PickElement, action: PickAction) => void
   #onError?: (code: string, message: string) => void
   #affinity = new DomainAffinity()
@@ -109,6 +120,7 @@ export class PickChannel {
   constructor(options: PickChannelOptions) {
     this.#cdp = options.cdp
     this.#sessions = options.sessions
+    this.#getEndpoint = options.getEndpoint
     this.#onPick = options.onPick
     this.#onAction = options.onAction
     this.#onError = options.onError
@@ -242,6 +254,18 @@ export class PickChannel {
     }
     const box = await boxModel(call, sessionId, { backendNodeId }, { scroll: scrollOffset })
 
+    // Pick provenance: which CDP connection + which page this element lives
+    // in, so the quoted reference can be traced back to its DOM (G7 lineage).
+    let pageUrl = ''
+    let pageTitle = ''
+    try {
+      const result = (await call('Target.getTargets', {}, { sessionId })) as { targetInfos?: Array<{ targetId?: unknown; url?: unknown; title?: unknown }> }
+      const me = (result.targetInfos || []).find((t) => t.targetId === targetId)
+      if (me) {
+        pageUrl = typeof me.url === 'string' ? me.url : ''
+        pageTitle = typeof me.title === 'string' ? me.title : ''
+      }
+    } catch { /* page metadata is best-effort */ }
     const element: PickElement = {
       backendNodeId,
       tag: semantics.tag,
@@ -252,6 +276,12 @@ export class PickChannel {
       rect: box.ok ? box.rect : null,
       documentRect: box.ok ? box.documentRect : null,
       describe: describeElement(semantics),
+      source: {
+        endpoint: this.#getEndpoint ? this.#getEndpoint() : '',
+        targetId,
+        pageUrl,
+        pageTitle,
+      },
     }
     this.#state = { ...this.#state, lastPick: element, lastAction: null, picks: this.#state.picks + 1 }
     this.#onPick?.(element)

@@ -1,3 +1,13 @@
+## [0.14.0] - 2026-09-23 — 点选引用按页聚合为字典块，附来源 CDP 连接
+
+### 变更
+- **按页聚合**：一次引用只承载一个网页的内容——同页多元素合并进**同一个块**，异页点选产生新块。
+- **字典包裹**（类比图片附件的前置成块）：草稿中的块形如
+  `[CDP-PICKS page="…" targetId="…" endpoint="…"]` + JSON（`cdpEndpoint`/`targetId`/`pageUrl`/`pageTitle`/`elements[]`）+ `[/CDP-PICKS]`。
+- **来源可追溯**：块内 `cdpEndpoint`（worker 由 `active.wsUrl` 去掉 `/devtools/*` 得到）+ `targetId`；`elements[]` 每项含 `backendNodeId`——`bcdp_cdp` 用 `DOM.describeNode({backendNodeId})` 可直接回查元素所在 DOM 结构；另附 `pageUrl`/`pageTitle`。
+- worker：`PickElement.source` 新增（`Target.getTargets` 抓页面元数据 + `getEndpoint` 注入连接源）。
+- 语义延续：无自动发送（v0.13.0），同页 `n` 续号。
+
 ## [0.13.0] - 2026-09-23 — 点选投递改为编号引用，取消自动发送
 
 ### 变更（Breaking）

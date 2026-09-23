@@ -5811,6 +5811,7 @@ var PickChannel = class {
 	#cdp;
 	#sessions;
 	#onPick;
+	#getEndpoint;
 	#onAction;
 	#onError;
 	#affinity = new DomainAffinity();
@@ -5830,6 +5831,7 @@ var PickChannel = class {
 	constructor(options) {
 		this.#cdp = options.cdp;
 		this.#sessions = options.sessions;
+		this.#getEndpoint = options.getEndpoint;
 		this.#onPick = options.onPick;
 		this.#onAction = options.onAction;
 		this.#onError = options.onError;
@@ -5953,6 +5955,15 @@ var PickChannel = class {
 			return;
 		}
 		const box = await boxModel(call, sessionId, { backendNodeId }, { scroll: scrollOffset });
+		let pageUrl = "";
+		let pageTitle = "";
+		try {
+			const me = ((await call("Target.getTargets", {}, { sessionId })).targetInfos || []).find((t) => t.targetId === targetId);
+			if (me) {
+				pageUrl = typeof me.url === "string" ? me.url : "";
+				pageTitle = typeof me.title === "string" ? me.title : "";
+			}
+		} catch {}
 		const element = {
 			backendNodeId,
 			tag: semantics.tag,
@@ -5962,7 +5973,13 @@ var PickChannel = class {
 			keyboardFocusable: semantics.keyboardFocusable,
 			rect: box.ok ? box.rect : null,
 			documentRect: box.ok ? box.documentRect : null,
-			describe: describeElement(semantics)
+			describe: describeElement(semantics),
+			source: {
+				endpoint: this.#getEndpoint ? this.#getEndpoint() : "",
+				targetId,
+				pageUrl,
+				pageTitle
+			}
 		};
 		this.#state = {
 			...this.#state,
@@ -6249,6 +6266,7 @@ function ensurePickChannel() {
 		pickChannel = new PickChannel({
 			cdp: active.cdp,
 			sessions: active.sessions,
+			getEndpoint: () => active ? active.wsUrl.replace(/\/devtools\/.*$/, "") : "",
 			onError: (code, message) => process.stderr.write(`[cdp-cast-worker] pick ${code}: ${message}\n`)
 		});
 		pickChannelWsUrl = active.wsUrl;

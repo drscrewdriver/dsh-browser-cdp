@@ -2752,12 +2752,15 @@ clearTimeout((panel as any)._dshHideT)
 		// to auto-open the Tab on the first bcdp_* tool call.
 		/**
 		 * M1.6 — quote a picked element into the conversation composer.
-		 * 2026-09-23 revision: NO auto-submit, ever. Every delivery appends a
-		 * numbered line `[pick N] <describe>` to the existing draft (N continues
-		 * the sequence already in the composer), and the user sends it when they
-		 * choose — Enter or the send button, their call.
-		 * Gates kept: a pick without a resolved describe is refused here AGAIN
-		 * (second layer beyond the worker's G7 check).
+		 * 2026-09-23 revision 2: NO auto-submit, ever. Elements from ONE page
+		 * accumulate into ONE dictionary block, wrapped like the image
+		 * attachments are — the block carries its source CDP connection
+		 * (endpoint + targetId) so the agent can find the element's DOM again
+		 * (backendNodeId is directly addressable via bcdp_cdp DOM.describeNode).
+		 * Format inside the draft:
+		 *   [CDP-PICKS page="..." targetId="..." endpoint="..."]
+		 *   {"cdpEndpoint":..., "targetId":..., "pageUrl":..., "elements":[{n,backendNodeId,tag,id,name,focusable,describe}]}
+		 *   [/CDP-PICKS]
 		 */
 		function deliverPickToConversation(ctx, element, action) {
 			try {
@@ -2774,15 +2777,43 @@ clearTimeout((panel as any)._dshHideT)
 				if (!input || typeof input.setDraft !== 'function') return { ok: false, code: 'no-input-facade' }
 				var snap = input.state && input.state.getSnapshot ? input.state.getSnapshot() : null
 				var draft = snap && typeof snap.draft === 'string' ? snap.draft : ''
-				var max = 0, mm
-				var re = /\[pick (\d+)\]/g
-				while ((mm = re.exec(draft)) !== null) {
-					var n = parseInt(mm[1], 10)
-					if (n > max) max = n
+				var src = element.source || { endpoint: '', targetId: '', pageUrl: '', pageTitle: '' }
+				var entry: any = {
+					backendNodeId: element.backendNodeId,
+					tag: element.tag, id: element.id, name: element.name,
+					focusable: !!element.keyboardFocusable,
+					describe: describe,
 				}
-				var line = '[pick ' + (max + 1) + '] ' + describe
-				input.setDraft(draft ? draft + (draft.charAt(draft.length - 1) === '\n' ? '' : '\n') + line : line)
-				return { ok: true, code: 'drafted', index: max + 1 }
+				// Find the block for THIS page (same targetId + endpoint) and
+				// merge into it; one page = one block, several pages = several.
+				var re = /\[CDP-PICKS[^\]]*\]\n([\s\S]*?)\n\[\/CDP-PICKS\]/g
+				var found = null, mm, header = ''
+				while ((mm = re.exec(draft)) !== null) {
+					try {
+						var obj = JSON.parse(mm[1])
+						if (obj && obj.targetId === src.targetId && obj.cdpEndpoint === src.endpoint) { found = mm; header = mm[0].split('\n')[0]; break }
+					} catch (e) { /* user-edited or truncated block: rebuild below */ }
+				}
+				var elements = [Object.assign({ n: 1 }, entry)]
+				var page: any = { cdpEndpoint: src.endpoint, targetId: src.targetId, pageUrl: src.pageUrl, pageTitle: src.pageTitle }
+				if (found) {
+					try {
+						var prev = JSON.parse(found[1])
+						var list = prev && prev.elements ? prev.elements : []
+						var maxN = 0
+						for (var k = 0; k < list.length; k++) if (list[k].n > maxN) maxN = list[k].n
+						entry.n = maxN + 1
+						list.push(entry)
+						page.elements = list
+						draft = draft.slice(0, found.index) + draft.slice(found.index + found[0].length)
+					} catch (e) { /* rebuild fresh */ }
+				}
+				if (!page.elements) page.elements = elements
+				var headerLine = '[CDP-PICKS page="' + String(src.pageTitle || src.pageUrl || '').replace(/"/g, "'") + '" targetId="' + src.targetId + '" endpoint="' + src.endpoint + '"]'
+				var block = headerLine + '\n' + JSON.stringify(page, null, 2) + '\n[/CDP-PICKS]'
+				draft = draft ? draft + (draft.charAt(draft.length - 1) === '\n' ? '' : '\n') + block : block
+				input.setDraft(draft)
+				return { ok: true, code: 'drafted', count: page.elements.length }
 			} catch (err) {
 				return { ok: false, code: 'deliver-failed', message: String((err && err.message) || err) }
 			}
@@ -2820,7 +2851,7 @@ clearTimeout((panel as any)._dshHideT)
 					deliveredPicks = state.picks
 					var result = deliver(state.lastPick, state.lastAction)
 					if (result && result.ok) {
-						emit('picked', wt('pickQuoted') + ' #' + result.index)
+						emit('picked', wt('pickQuoted') + ' (' + result.count + ')')
 					} else {
 						emit('failed', wt('pickDeliverFailed') + (result && result.code ? ' (' + result.code + ')' : ''))
 					}

@@ -139,6 +139,7 @@ describe('M1.4 PickChannel pick handling', () => {
       rect: { x: 0, y: 0, width: 100, height: 50 },
       documentRect: { x: 10, y: 20, width: 100, height: 50 },
       describe: 'button #go name="Search" focusable',
+      source: { endpoint: '', targetId: 'T1', pageUrl: '', pageTitle: '' },
     })
     const state = h.channel.state()
     expect(state).toMatchObject({ enabled: false, code: 'picked', picks: 1 })

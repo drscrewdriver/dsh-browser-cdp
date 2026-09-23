@@ -113,6 +113,7 @@ function ensurePickChannel(): PickChannel | null {
     pickChannel = new PickChannel({
       cdp: active.cdp,
       sessions: active.sessions,
+      getEndpoint: () => (active ? active.wsUrl.replace(/\/devtools\/.*$/, '') : ''),
       onError: (code, message) => process.stderr.write(`[cdp-cast-worker] pick ${code}: ${message}\n`),
     })
     pickChannelWsUrl = active.wsUrl

@@ -9,7 +9,7 @@ describe("dual capture config", () => {
       ffmpegFps: 20, ffmpegMaxWidth: 1280, ffmpegBitrateKbps: 4000, ffmpegEncoder: "auto", ffmpegPath: "", githubMirror: "",
       runtimeArgs: "", chromeArgs: "", isolateSpaces: false, idleTimeoutMin: 0,
       cdpTargets: [], activeTargetId: "", cdpMode: "auto", cdpProbeTimeoutMs: 3000,
-      cursorHud: true, cursorName: "DeepSeek", allowLocalFallback: false, localHeadless: false, localUserDataDir: "", legacyEgoToolNames: false,
+      cursorHud: true, cursorName: "DeepSeek", allowLocalFallback: false, localHeadless: false, localUserDataDir: "", legacyEgoToolNames: false, remoteEnabled: true,
     });
   });
 
@@ -20,7 +20,7 @@ describe("dual capture config", () => {
       ffmpegFps: 20, ffmpegMaxWidth: 1280, ffmpegBitrateKbps: 4000, ffmpegEncoder: "auto", ffmpegPath: "", githubMirror: "",
       runtimeArgs: "", chromeArgs: "", isolateSpaces: false, idleTimeoutMin: 0,
       cdpTargets: [], activeTargetId: "", cdpMode: "auto", cdpProbeTimeoutMs: 3000,
-      cursorHud: true, cursorName: "DeepSeek", allowLocalFallback: false, localHeadless: false, localUserDataDir: "", legacyEgoToolNames: false,
+      cursorHud: true, cursorName: "DeepSeek", allowLocalFallback: false, localHeadless: false, localUserDataDir: "", legacyEgoToolNames: false, remoteEnabled: true,
     });
     expect(resolveConfig({ cdpFps: 15, castFpsCap: 30 }).cdpFps).toBe(15);
   });

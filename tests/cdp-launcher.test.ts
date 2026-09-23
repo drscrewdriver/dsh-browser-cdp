@@ -40,7 +40,7 @@ describe('launcher args assembly', () => {
 
 /** T2.12/T2.13 — launch readiness + singleton reuse, all IO injected. */
 describe('launcher lifecycle', () => {
-  function fakeIo(options: { port: number; pid: number; failFirstProbes?: number; bin?: string } = {}) {
+  function fakeIo(options: { port?: number; pid?: number; failFirstProbes?: number; bin?: string } = {}) {
     const bin = options.bin ?? 'C:/x/chrome.exe'
     let probes = 0
     const calls: string[] = []
@@ -55,8 +55,9 @@ describe('launcher lifecycle', () => {
       isAlive: (pid: number) => alive.has(pid),
       killTree: (pid: number) => { alive.delete(pid); calls.push(`kill:${pid}`) },
       spawn: (bin: string, args: readonly string[]) => {
-        spawned.push({ bin, args }); alive.add(options.pid); calls.push(`spawn:${bin}`)
-        return { pid: options.pid }
+        const pid = options.pid ?? 4242
+        spawned.push({ bin, args }); alive.add(pid); calls.push(`spawn:${bin}`)
+        return { pid }
       },
       fetchVersion: async (url: string) => {
         probes += 1
@@ -66,7 +67,7 @@ describe('launcher lifecycle', () => {
       },
       now: (() => { let t = 1000; return () => (t += 300) })(),
       sleep: async () => undefined,
-      makePort: async () => options.port,
+      makePort: async () => options.port ?? 9444,
     }
     return { io, spawned, calls, state }
   }

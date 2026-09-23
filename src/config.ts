@@ -58,6 +58,7 @@ export const Config = z.object({
   allowLocalFallback: z.boolean().description('auto mode may fall back to launching a local browser when the activated target is unreachable. Off by default: the fallback must be explicit.'),
   legacyEgoToolNames: z.boolean().description('ALSO register the tools under their old ego_* names for scripts written before the bcdp_* rename. Off by default; mutually exclusive with installing the upstream ego-browser plugin (same tool names).'),
   localHeadless: z.boolean().description('Run the locally launched browser headless.'),
+  remoteEnabled: z.boolean().description('Master switch for REMOTE attach. Off = the configured target sequence is preserved but inert (nothing probes or connects remotely); flip back on any time. Does not affect cdpMode=local.'),
   localUserDataDir: z.string().description('Profile dir for the locally launched browser. Empty = managed dir; never point at your daily Chrome profile.'),
   // Deprecated read-compatible keys. The settings UI only writes canonical keys.
   castFpsCap: z.number().min(0).max(60).step(1),
@@ -244,6 +245,7 @@ export function resolveConfig(config: RawConfig = {}): ResolvedConfig {
     legacyEgoToolNames: Boolean(config.legacyEgoToolNames),
     localHeadless: config.localHeadless === undefined ? false : Boolean(config.localHeadless),
     localUserDataDir: typeof config.localUserDataDir === 'string' ? config.localUserDataDir : '',
+    remoteEnabled: config.remoteEnabled === undefined ? true : Boolean(config.remoteEnabled),
   }
 }
 

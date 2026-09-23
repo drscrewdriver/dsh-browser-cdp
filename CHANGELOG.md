@@ -1,3 +1,10 @@
+## [0.16.0] - 2026-09-23 — 阶段 2b 收尾 + 远端 CDP 软禁用开关
+
+### 新增
+- **`remoteEnabled` 总开关（T2.18）**：不删除目标序列即可临时禁用远端 CDP——关闭后序列原样保留，但停止一切远端探测与连接；`bcdp_*` 调用得到显式 `remote-disabled` 错误；设置卡开关 + `bcdp_doctor` 可见；随时重新打开。与 `allowLocalFallback` 正交（关远端后 auto 可回落本地启动器）。
+- **`cdpMode=local` 接入自建启动器（2b 收尾）**：本地模式现在由 M0.9 启动受管浏览器并注入其端点，内置运行时附着其上，不再自行冷启动；缓存标 `endpointSource: local`。
+- **`bcdp_doctor` 新增两行**：`remote CDP: enabled/DISABLED` 与 `attach: <status> (source: …) @ <endpoint>`（T2.16 三处可见性补齐）。
+
 ## [0.15.0] - 2026-09-23 — 本地浏览器启动器（阶段 2b / M0.9）
 
 ### 新增

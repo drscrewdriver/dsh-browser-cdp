@@ -220,6 +220,8 @@ export type AttachDecision =
 
 export interface DecideInput {
   mode: CdpMode
+  /** T2.18 — the remote switch is off (sequence preserved). */
+  remoteDisabled?: boolean
   /** Whether the sequence has an enabled activated entry at all. */
   hasActive: boolean
   status: AttachStatus
@@ -246,6 +248,14 @@ export interface DecideInput {
 export function decideAttach(input: DecideInput): AttachDecision {
   if (input.mode === 'local') {
     return { kind: 'local', message: 'local mode: using local browser control' }
+  }
+  if (input.remoteDisabled) {
+    return {
+      kind: 'error',
+      code: 'remote-disabled',
+      message:
+        'Remote CDP is disabled by the remoteEnabled switch (the target sequence is preserved). Flip the switch back on, or set cdpMode=local to use a local browser.',
+    }
   }
   if (!input.hasActive) {
     return {
@@ -322,6 +332,12 @@ export interface RefreshInput {
     localHeadless?: boolean
     userDataDir?: string
   }
+  /** T2.18 — master switch: remote attach off WITHOUT deleting the sequence. */
+  remoteEnabled?: boolean
+  /** Gate: only the host turns the launcher on (tests keep the short-circuit). */
+  useLauncher?: boolean
+  /** Injectable launcher IO for fixtures. */
+  launcherIo?: unknown
 }
 
 /**
@@ -347,7 +363,57 @@ export async function refreshAttach(input: RefreshInput): Promise<AttachState> {
     suggested.targetId = ''
     suggested.endpoint = ''
     suggested.resolvedAt = now()
+    // 2b completion (T2.12): local mode uses the MANAGED launcher — the
+    // vendored runtime then ATTACHES to it instead of cold-starting its own.
+    if (input.useLauncher) {
+      const launch = await launchLocalBrowser({
+        chromePath: input.fallback?.chromePath,
+        chromeArgs: input.fallback?.chromeArgs,
+        localHeadless: input.fallback?.localHeadless,
+        userDataDir: input.fallback?.userDataDir,
+      }, input.launcherIo as never)
+      if (launch.ok) {
+        const localProbe = await probeEndpoint(launch.endpoint, { timeoutMs: input.timeoutMs, now })
+        if (localProbe.ok && localProbe.wsUrl) {
+          return cache.patch({
+            ...suggested,
+            status: 'ready',
+            endpoint: launch.endpoint,
+            wsUrl: localProbe.wsUrl,
+            code: '',
+            message: launch.reused ? 'local mode: reused managed browser' : 'local mode: managed browser launched',
+            latencyMs: localProbe.latencyMs,
+            endpointSource: 'local',
+          })
+        }
+        return cache.patch({
+          ...suggested,
+          status: 'unreachable',
+          code: 'local-launch-not-ready',
+          message: `managed local browser launched but its endpoint did not answer: ${localProbe.message}`,
+        })
+      }
+      return cache.patch({
+        ...suggested,
+        status: 'unreachable',
+        code: `local-${launch.code}`,
+        message: launch.message,
+      })
+    }
     return cache.patch(suggested)
+  }
+  // T2.18 — the remote switch: off means the sequence is INERT but preserved.
+  if (input.remoteEnabled === false) {
+    return cache.patch({
+      ...suggested,
+      status: 'no-active',
+      targetId: input.activeTargetId,
+      endpoint: '',
+      wsUrl: '',
+      code: 'remote-disabled',
+      message: 'remote CDP is disabled by the remoteEnabled switch; the target sequence is preserved and can be re-enabled at any time',
+      resolvedAt: now(),
+    })
   }
   const target = activeTarget(input.targets, input.activeTargetId)
   if (!target) {

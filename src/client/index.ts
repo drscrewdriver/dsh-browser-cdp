@@ -111,6 +111,10 @@ declare function require(id: string): any
 			cdpModeAuto: 'auto — use activated target',
 			cdpModeRemote: 'remote — only the activated target',
 			cdpModeLocal: 'local — always a local browser',
+			remoteEnabled: 'Remote CDP attach',
+			remoteEnabledHint: 'Master switch without deleting the target sequence. Off: the sequence is preserved but nothing probes or connects remotely.',
+			remoteEnabledOn: 'Enabled (sequence active)',
+			remoteEnabledOff: 'Disabled (sequence preserved, inert)',
 			cdpNoTargets: 'No targets yet. Add one to connect to a running browser.',
 			cdpAdd: 'Add target',
 			cdpEndpoint: 'Endpoint',
@@ -174,6 +178,10 @@ declare function require(id: string): any
 			cdpModeAuto: 'auto — 使用被激活的目标',
 			cdpModeRemote: 'remote — 仅连接被激活的目标',
 			cdpModeLocal: 'local — 始终用本地浏览器',
+			remoteEnabled: '远端 CDP 连接',
+			remoteEnabledHint: '总开关：关闭后目标序列原样保留但暂停一切远端探测与连接，随时可重新打开。不影响 cdpMode=local。',
+			remoteEnabledOn: '开启（序列生效）',
+			remoteEnabledOff: '关闭（序列保留，暂停使用）',
 			cdpNoTargets: '还没有目标。添加一个以连接到运行中的浏览器。',
 			cdpAdd: '添加目标',
 			cdpEndpoint: '接入点',
@@ -318,7 +326,7 @@ declare function require(id: string): any
 				status: 'idle',        // 'idle' | 'loading' | 'ready'
 				available: false,      // true after a successful /bcdp/api/get
 				writable: false,       // false when settings service is absent
-				draft: { isolateSpaces: false, idleTimeoutMin: '0', chromePath: '', captureBackend: 'auto', streamProfile: 'balanced', cdpFps: '20', cdpQuality: '55', cdpMaxWidth: '960', cdpBackstopIntervalMs: '3000', ffmpegFps: '20', ffmpegMaxWidth: '1280', ffmpegBitrateKbps: '4000', ffmpegEncoder: 'auto', ffmpegPath: '', githubMirror: '', runtimeArgs: '', chromeArgs: '', cdpTargets: [], activeTargetId: '', cdpMode: 'auto' },
+				draft: { isolateSpaces: false, idleTimeoutMin: '0', chromePath: '', captureBackend: 'auto', streamProfile: 'balanced', cdpFps: '20', cdpQuality: '55', cdpMaxWidth: '960', cdpBackstopIntervalMs: '3000', ffmpegFps: '20', ffmpegMaxWidth: '1280', ffmpegBitrateKbps: '4000', ffmpegEncoder: 'auto', ffmpegPath: '', githubMirror: '', runtimeArgs: '', chromeArgs: '', cdpTargets: [], activeTargetId: '', cdpMode: 'auto', remoteEnabled: true },
 				ffmpegStatus: { state: 'checking', canDownload: false, canSelectFfmpeg: false },
 				dirty: false,
 				applyState: { kind: 'idle' }, // 'idle' | 'saving' | 'saved' | 'error'
@@ -378,6 +386,7 @@ declare function require(id: string): any
 				cdpTargets: Array.isArray(config.cdpTargets) ? config.cdpTargets.map(function (t) { return Object.assign({ id: '', label: '', endpoint: '', enabled: true, note: '', probeStatus: 'unknown', probeLatencyMs: 0, probeError: '', probeCode: '', probeAt: 0 }, t) }) : [],
 				activeTargetId: typeof config.activeTargetId === 'string' ? config.activeTargetId : '',
 				cdpMode: config.cdpMode === 'local' || config.cdpMode === 'remote' ? config.cdpMode : 'auto',
+				remoteEnabled: config.remoteEnabled !== false,
 			}
 				s.ffmpegStatus = ffmpegStatus
 				s.dirty = false
@@ -609,6 +618,7 @@ declare function require(id: string): any
 			cdpTargets: Array.isArray(config.cdpTargets) ? config.cdpTargets.map(function (t) { return Object.assign({ id: '', label: '', endpoint: '', enabled: true, note: '', probeStatus: 'unknown', probeLatencyMs: 0, probeError: '', probeCode: '', probeAt: 0 }, t) }) : [],
 			activeTargetId: typeof config.activeTargetId === 'string' ? config.activeTargetId : '',
 			cdpMode: config.cdpMode === 'local' || config.cdpMode === 'remote' ? config.cdpMode : 'auto',
+				remoteEnabled: config.remoteEnabled !== false,
 			}
 				if (ffmpegStatus) s.ffmpegStatus = ffmpegStatus
 				s.dirty = false
@@ -992,6 +1002,7 @@ declare function require(id: string): any
 						}),
 						h(SettingsField, { id: 'plugin-config-dsh-browser-cdp-ghmirror', label: t('githubMirror'), value: state.draft.githubMirror, hint: t('githubMirrorHint'), placeholder: 'https://gh-proxy.com/github.com', disabled: busy, onEdit: function (v) { controller.edit('githubMirror', v) } }),
 						h(SettingsField, { id: 'plugin-config-dsh-browser-cdp-ego-cli-args', label: t('runtimeArgs'), value: state.draft.runtimeArgs, hint: t('runtimeArgsHint'), placeholder: '--sdk-path /path/to/harness.js', disabled: busy, onEdit: function (v) { controller.edit('runtimeArgs', v) } }),
+						h(SettingsField, { id: 'plugin-config-dsh-browser-cdp-remote-enabled', label: t('remoteEnabled'), hint: t('remoteEnabledHint'), value: state.draft.remoteEnabled ? 'true' : 'false', options: [{ value: 'true', label: t('remoteEnabledOn') }, { value: 'false', label: t('remoteEnabledOff') }], disabled: busy, onEdit: function (v) { controller.edit('remoteEnabled', v === 'true') } }),
 						h(SettingsField, { id: 'plugin-config-dsh-browser-cdp-chrome-args', label: t('chromeArgs'), value: state.draft.chromeArgs, hint: t('chromeArgsHint'), placeholder: '--disable-features=Translate --window-size=1024,768', disabled: busy, onEdit: function (v) { controller.edit('chromeArgs', v) } }),
 						h(LoginImportBlock, { t: t }),
 						h(CdpTargetsBlock, { t: t, controller: controller, targets: state.draft.cdpTargets, activeTargetId: state.draft.activeTargetId, cdpMode: state.draft.cdpMode, busy: busy }),

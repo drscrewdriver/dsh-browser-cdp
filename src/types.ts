@@ -159,6 +159,7 @@ export interface ResolvedConfig {
   ffmpegPath: string
   githubMirror: string
   runtimeArgs: string
+  remoteEnabled: boolean
   legacyEgoToolNames: boolean
   chromeArgs: string
   // ── R1: CDP sequence + activation ───────────────────────────────────────

@@ -44,7 +44,7 @@ const ALLOWED_KEYS = new Set<string>([
   'cdpMaxWidth', 'cdpBackstopIntervalMs', 'ffmpegFps', 'ffmpegMaxWidth', 'ffmpegBitrateKbps',
   'ffmpegEncoder', 'ffmpegPath', 'githubMirror', 'runtimeArgs', 'chromeArgs',
   // ── R1: CDP sequence + activation ───────────────────────────────────────
-  'cdpTargets', 'activeTargetId', 'cdpMode', 'cdpProbeTimeoutMs',
+  'cdpTargets', 'activeTargetId', 'cdpMode', 'cdpProbeTimeoutMs', 'remoteEnabled',
   'cursorHud', 'cursorName', 'allowLocalFallback', 'localHeadless', 'localUserDataDir',
 ])
 

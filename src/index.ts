@@ -391,6 +391,7 @@ export function decideCdpAttach(cfg: Partial<ResolvedConfig>): AttachDecision {
     code: attach.code,
     message: attach.message,
     allowLocalFallback: Boolean(cfg?.allowLocalFallback),
+    remoteDisabled: attach.code === 'remote-disabled',
     // M0.9 launcher (stage 2b) is wired: an authorized fallback launches a
     // managed local browser inside refreshAttach (async path), so the sync
     // decision table just needs to know the capability exists.
@@ -597,6 +598,7 @@ interface EgoRuntimeConfig {
   readonly allowLocalFallback: boolean
   readonly legacyEgoToolNames: boolean
   readonly localHeadless: boolean
+  readonly remoteEnabled: boolean
   readonly localUserDataDir: string
 }
 
@@ -845,6 +847,7 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
     get allowLocalFallback() { return resolveConfig(bridge.source() as RawConfig).allowLocalFallback },
     get legacyEgoToolNames() { return resolveConfig(bridge.source() as RawConfig).legacyEgoToolNames },
     get localHeadless() { return resolveConfig(bridge.source() as RawConfig).localHeadless },
+    get remoteEnabled() { return resolveConfig(bridge.source() as RawConfig).remoteEnabled },
     get localUserDataDir() { return resolveConfig(bridge.source() as RawConfig).localUserDataDir },
   }
   const reg = (tool: ToolHandle): void => {
@@ -905,6 +908,8 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
             localHeadless: resolved.localHeadless,
             userDataDir: resolved.localUserDataDir,
           },
+          remoteEnabled: resolved.remoteEnabled,
+          useLauncher: true,
         })
         const ws = attach.status === 'ready' && attach.wsUrl !== '' ? attach.wsUrl : null
         if (setAttachEndpoint(ws)) {
@@ -2355,6 +2360,10 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
         const cliArgs = filterArgs(cfg.runtimeArgs ?? '', EGO_CLI_BLOCKED)
         const chrArgs = filterArgs(cfg.chromeArgs ?? '', CHROME_BLOCKED)
         lines.push(`runtimeArgs (effective): ${cliArgs.length ? cliArgs.join(' ') : '(none)'}`)
+        // T2.16/T2.18 — attach provenance + the remote switch, in the doctor.
+        const attachNow = defaultAttachCache.get()
+        lines.push(`remote CDP: ${cfg.remoteEnabled === false ? 'DISABLED by switch (sequence preserved)' : 'enabled'}`)
+        lines.push(`attach: ${attachNow.status}${attachNow.endpointSource ? ` (source: ${attachNow.endpointSource})` : ''}${attachNow.endpoint ? ` @ ${attachNow.endpoint}` : ''}`)
         lines.push(`chromeArgs (effective, next cold start): ${chrArgs.length ? chrArgs.join(' ') : '(none)'}`)
         // state dir + runtime state
         const isWin = process.platform === 'win32'

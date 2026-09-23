@@ -88,7 +88,7 @@ interface Pending {
   timer: unknown
 }
 
-type EventHandler = (params: unknown, sessionId?: string) => void
+type EventHandler = (params: unknown, sessionId?: string, method?: string) => void
 
 export const DEFAULT_CONNECT_TIMEOUT_MS = 5000
 export const DEFAULT_COMMAND_TIMEOUT_MS = 6000
@@ -146,6 +146,11 @@ export class CdpSession {
     this.#replay = [...methods]
   }
 
+  /**
+   * Subscribe to one CDP event method, or to `'*'` for every event — M0.3
+   * routes by domain, which needs a catch-all. A wildcard handler additionally
+   * receives the fired method as its third argument.
+   */
   on(method: string, handler: EventHandler): () => void {
     if (!this.#events.has(method)) this.#events.set(method, new Set())
     this.#events.get(method)!.add(handler)
@@ -275,11 +280,16 @@ export class CdpSession {
       return
     }
     if (message.method === undefined) return
-    for (const handler of this.#events.get(message.method) || []) {
-      try {
-        handler(message.params || {}, message.sessionId)
-      } catch {
-        // One bad consumer must not stop dispatch to the others.
+    const method = message.method
+    const params = message.params || {}
+    // Exact subscribers first, then the `'*'` catch-all M0.3 routes through.
+    for (const key of [method, '*']) {
+      for (const handler of this.#events.get(key) || []) {
+        try {
+          handler(params, message.sessionId, method)
+        } catch {
+          // One bad consumer must not stop dispatch to the others.
+        }
       }
     }
   }

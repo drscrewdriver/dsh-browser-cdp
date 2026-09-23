@@ -70,9 +70,9 @@ declare function require(id: string): any
 		const inject = ['slots', 'locale', 'connection']
 
 		// ── Settings card: locale ─────────────────────────────────────────
-		var SETTINGS_NS = 'ego-browser'
+		var SETTINGS_NS = 'dsh-browser-cdp'
 		var en = {
-			title: 'ego-browser',
+			title: 'dsh-browser-cdp',
 			intro: 'Agent browser integration. Configure the Chrome/Chromium binary path and cast parameters below.',
 			isolateSpaces: 'Space isolation',
 			isolateSpacesHint: 'Disabled: use persistent disk profile, logins stay across restarts. Enabled: memory-only sandbox per task.',
@@ -101,12 +101,41 @@ declare function require(id: string): any
 			chromeArgs: 'Extra Chrome launch args', chromeArgsHint: 'Appended to the Chrome launch argv. Takes effect on the next browser cold start (the browser is a singleton — run `ego-browser --stop` or restart DSH to relaunch). Blocked: --user-data-dir/--remote-debugging-port/--remote-allow-origins/--headless/--no-startup-window/--proxy-server (use EGO_LINUX_PROXY for the proxy).',
 			save: 'Save', saving: 'Saving…', discard: 'Discard',
 			unsaved: 'Unsaved', readOnly: 'Settings are read-only in this deployment.',
-			namespaceUnavailable: 'The ego-browser configuration channel is unavailable. Please retry later.',
+			namespaceUnavailable: 'The dsh-browser-cdp configuration channel is unavailable. Please retry later.',
 			retry: 'Retry',
 			expand: 'Show settings', collapse: 'Hide settings',
+			// ── R1: CDP target sequence + activation ────────────────────────
+			cdpSectionTitle: 'CDP browser targets',
+			cdpSectionIntro: 'Connect to an already-running browser over the DevTools Protocol. Keep an ordered list; the activated entry drives every ego_* call. auto mode never launches a local browser silently.',
+			cdpMode: 'Connection mode',
+			cdpModeAuto: 'auto — use activated target',
+			cdpModeRemote: 'remote — only the activated target',
+			cdpModeLocal: 'local — always a local browser',
+			cdpNoTargets: 'No targets yet. Add one to connect to a running browser.',
+			cdpAdd: 'Add target',
+			cdpEndpoint: 'Endpoint',
+			cdpEndpointHint: 'http(s)://host:port (a browser DevTools endpoint) or ws(s)://… to dial directly.',
+			cdpLabel: 'Label',
+			cdpNote: 'Note',
+			cdpEnabled: 'Enabled',
+			cdpActive: 'Activated',
+			cdpMoveUp: 'Move up',
+			cdpMoveDown: 'Move down',
+			cdpRemove: 'Remove',
+			cdpProbe: 'Probe',
+			cdpProbing: 'Probing…',
+			cdpStatusReady: 'reachable',
+			cdpStatusUnreachable: 'unreachable',
+			cdpStatusProbing: 'probing',
+			cdpStatusNoActive: 'no activated target',
+			cdpStatusLocal: 'local mode',
+			cdpStatusIdle: 'not probed yet',
+			cdpLatency: 'latency',
+			cdpError: 'error',
+			cdpActivateHint: 'Activate one enabled target so ego_* tools connect to it.',
 		}
 		var zh = {
-			title: 'ego-browser',
+			title: 'dsh-browser-cdp',
 			intro: 'Agent 浏览器集成。在下方配置 Chrome/Chromium 浏览器路径及推流参数。',
 			isolateSpaces: '任务空间沙盒隔离',
 			isolateSpacesHint: '默认关闭：使用磁盘持久化 Profile，任务中登录的账号跨电脑重启永久保留；开启后使用内存临时沙盒隔离，任务结束不落盘。',
@@ -135,9 +164,38 @@ declare function require(id: string): any
 			chromeArgs: 'Chrome 启动附加参数', chromeArgsHint: '追加到 Chrome 启动 argv。仅在浏览器下次冷启动时生效（浏览器是单例常驻——需运行 `ego-browser --stop` 或重启 DSH 才会重新启动）。禁止：--user-data-dir/--remote-debugging-port/--remote-allow-origins/--headless/--no-startup-window/--proxy-server（代理请用 EGO_LINUX_PROXY）。',
 			save: '保存', saving: '保存中…', discard: '放弃',
 			unsaved: '未保存', readOnly: '当前部署下设置只读。',
-			namespaceUnavailable: 'ego-browser 配置通道不可用，请稍后重试。',
+			namespaceUnavailable: 'dsh-browser-cdp 配置通道不可用，请稍后重试。',
 			retry: '重试',
 			expand: '展开设置', collapse: '收起设置',
+			// ── R1: CDP 目标序列 + 激活 ──────────────────────────────────────
+			cdpSectionTitle: 'CDP 浏览器目标',
+			cdpSectionIntro: '通过 DevTools 协议连接到已运行的浏览器。维护一个有序列表，被激活的那一项驱动每一次 ego_* 调用。auto 模式绝不悄无声息地启动本地浏览器。',
+			cdpMode: '连接模式',
+			cdpModeAuto: 'auto — 使用被激活的目标',
+			cdpModeRemote: 'remote — 仅连接被激活的目标',
+			cdpModeLocal: 'local — 始终用本地浏览器',
+			cdpNoTargets: '还没有目标。添加一个以连接到运行中的浏览器。',
+			cdpAdd: '添加目标',
+			cdpEndpoint: '接入点',
+			cdpEndpointHint: 'http(s)://host:port（浏览器 DevTools 接入点）或 ws(s)://… 直接拨号。',
+			cdpLabel: '名称',
+			cdpNote: '备注',
+			cdpEnabled: '启用',
+			cdpActive: '已激活',
+			cdpMoveUp: '上移',
+			cdpMoveDown: '下移',
+			cdpRemove: '删除',
+			cdpProbe: '探测',
+			cdpProbing: '探测中…',
+			cdpStatusReady: '可达',
+			cdpStatusUnreachable: '不可达',
+			cdpStatusProbing: '探测中',
+			cdpStatusNoActive: '未激活目标',
+			cdpStatusLocal: '本地模式',
+			cdpStatusIdle: '尚未探测',
+			cdpLatency: '时延',
+			cdpError: '错误',
+			cdpActivateHint: '激活一个已启用的目标，ego_* 工具才会连上它。',
 		}
 
 		// ── Watch panel locale ────────────────────────────────────────────
@@ -246,7 +304,7 @@ declare function require(id: string): any
 				status: 'idle',        // 'idle' | 'loading' | 'ready'
 				available: false,      // true after a successful /ego/api/get
 				writable: false,       // false when settings service is absent
-				draft: { isolateSpaces: false, idleTimeoutMin: '0', chromePath: '', captureBackend: 'auto', streamProfile: 'balanced', cdpFps: '20', cdpQuality: '55', cdpMaxWidth: '960', cdpBackstopIntervalMs: '3000', ffmpegFps: '20', ffmpegMaxWidth: '1280', ffmpegBitrateKbps: '4000', ffmpegEncoder: 'auto', ffmpegPath: '', githubMirror: '', egoCliArgs: '', chromeArgs: '' },
+				draft: { isolateSpaces: false, idleTimeoutMin: '0', chromePath: '', captureBackend: 'auto', streamProfile: 'balanced', cdpFps: '20', cdpQuality: '55', cdpMaxWidth: '960', cdpBackstopIntervalMs: '3000', ffmpegFps: '20', ffmpegMaxWidth: '1280', ffmpegBitrateKbps: '4000', ffmpegEncoder: 'auto', ffmpegPath: '', githubMirror: '', egoCliArgs: '', chromeArgs: '', cdpTargets: [], activeTargetId: '', cdpMode: 'auto' },
 				ffmpegStatus: { state: 'checking', canDownload: false, canSelectFfmpeg: false },
 				dirty: false,
 				applyState: { kind: 'idle' }, // 'idle' | 'saving' | 'saved' | 'error'
@@ -260,6 +318,9 @@ declare function require(id: string): any
 			this.loaded = false
 			this.generation = 0
 			this.staged = new Map()
+			// Array/object fields (CDP target sequence) are not scalar strings,
+			// so they ride in a separate map and are merged wholesale on save.
+			this.stagedComplex = {}
 			this.ffmpegTimer = null
 			void this.load()
 		}
@@ -300,6 +361,9 @@ declare function require(id: string): any
 				cdpFps: String(config.cdpFps ?? 20), cdpQuality: String(config.cdpQuality ?? 55), cdpMaxWidth: String(config.cdpMaxWidth ?? 960), cdpBackstopIntervalMs: String(config.cdpBackstopIntervalMs ?? 3000),
 				ffmpegFps: String(config.ffmpegFps ?? 20), ffmpegMaxWidth: String(config.ffmpegMaxWidth ?? 1280), ffmpegBitrateKbps: String(config.ffmpegBitrateKbps ?? 4000), ffmpegEncoder: config.ffmpegEncoder || 'auto', ffmpegPath: config.ffmpegPath || '', githubMirror: config.githubMirror || '',
 				egoCliArgs: config.egoCliArgs || '', chromeArgs: config.chromeArgs || '',
+				cdpTargets: Array.isArray(config.cdpTargets) ? config.cdpTargets.map(function (t) { return Object.assign({ id: '', label: '', endpoint: '', enabled: true, note: '', probeStatus: 'unknown', probeLatencyMs: 0, probeError: '', probeCode: '', probeAt: 0 }, t) }) : [],
+				activeTargetId: typeof config.activeTargetId === 'string' ? config.activeTargetId : '',
+				cdpMode: config.cdpMode === 'local' || config.cdpMode === 'remote' ? config.cdpMode : 'auto',
 			}
 				s.ffmpegStatus = ffmpegStatus
 				s.dirty = false
@@ -324,6 +388,97 @@ declare function require(id: string): any
 				s.dirty = true
 				s.applyState = { kind: 'idle' }
 			})
+		}
+		// ── R1: CDP target sequence editing ─────────────────────────────────
+		function genCdpTargetId() {
+			return 't-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8)
+		}
+		EgoBrowserSettingsController.prototype._commitCdp = function (patch) {
+			// patch: { cdpTargets?, activeTargetId?, cdpMode? } — staged whole so
+			// the array survives the next save as one unit.
+			if (patch.cdpTargets !== undefined) this.stagedComplex.cdpTargets = patch.cdpTargets
+			if (patch.activeTargetId !== undefined) this.stagedComplex.activeTargetId = patch.activeTargetId
+			if (patch.cdpMode !== undefined) this.stagedComplex.cdpMode = patch.cdpMode
+			this.store.update(function (s) {
+				if (patch.cdpTargets !== undefined) s.draft.cdpTargets = patch.cdpTargets
+				if (patch.activeTargetId !== undefined) s.draft.activeTargetId = patch.activeTargetId
+				if (patch.cdpMode !== undefined) s.draft.cdpMode = patch.cdpMode
+				s.dirty = true
+				s.applyState = { kind: 'idle' }
+			})
+		}
+		EgoBrowserSettingsController.prototype.addTarget = function () {
+			var draft = this.store.getSnapshot().draft
+			var targets = (draft.cdpTargets || []).slice()
+			targets.push({ id: genCdpTargetId(), label: '', endpoint: '', enabled: true, note: '', probeStatus: 'unknown', probeLatencyMs: 0, probeError: '', probeCode: '', probeAt: 0 })
+			this._commitCdp({ cdpTargets: targets })
+		}
+		EgoBrowserSettingsController.prototype.removeTarget = function (id) {
+			var draft = this.store.getSnapshot().draft
+			var targets = (draft.cdpTargets || []).filter(function (t) { return t.id !== id })
+			var patch: { cdpTargets: typeof targets; activeTargetId?: string } = { cdpTargets: targets }
+			if (draft.activeTargetId === id) patch.activeTargetId = ''
+			this._commitCdp(patch)
+		}
+		EgoBrowserSettingsController.prototype.moveTarget = function (id, dir) {
+			var draft = this.store.getSnapshot().draft
+			var targets = (draft.cdpTargets || []).slice()
+			var index = targets.findIndex(function (t) { return t.id === id })
+			if (index === -1) return
+			var wanted = index + dir
+			if (wanted < 0 || wanted >= targets.length) return
+			var moved = targets.splice(index, 1)[0]
+			targets.splice(wanted, 0, moved)
+			this._commitCdp({ cdpTargets: targets })
+		}
+		EgoBrowserSettingsController.prototype.editTarget = function (id, field, value) {
+			var draft = this.store.getSnapshot().draft
+			var targets = (draft.cdpTargets || []).map(function (t) {
+				if (t.id !== id) return t
+				var next = Object.assign({}, t)
+				next[field] = value
+				return next
+			})
+			this._commitCdp({ cdpTargets: targets })
+		}
+		EgoBrowserSettingsController.prototype.setActiveTarget = function (id) {
+			var draft = this.store.getSnapshot().draft
+			var target = (draft.cdpTargets || []).find(function (t) { return t.id === id })
+			if (!target || !target.enabled) return
+			this._commitCdp({ activeTargetId: id })
+		}
+		EgoBrowserSettingsController.prototype.editCdpMode = function (v) {
+			this._commitCdp({ cdpMode: v })
+		}
+		EgoBrowserSettingsController.prototype.probeTarget = function (id) {
+			var self = this
+			var draft = this.store.getSnapshot().draft
+			var target = (draft.cdpTargets || []).find(function (t) { return t.id === id })
+			if (!target || !target.endpoint) return
+			var endpoint = target.endpoint
+		function applyOutcome(o, errorText) {
+			var draftNow = self.store.getSnapshot().draft
+			var targets = (draftNow.cdpTargets || []).map(function (t) {
+				if (t.id !== id) return t
+				var next = Object.assign({}, t)
+				next.probeStatus = o && o.ok ? 'ok' : 'error'
+				next.probeLatencyMs = o ? o.latencyMs : 0
+				next.probeError = o ? (o.message || '') : (errorText || 'no response')
+				next.probeCode = o ? (o.code || '') : ''
+				next.probeAt = Date.now()
+				return next
+			})
+			self.stagedComplex.cdpTargets = targets
+			self.store.update(function (s) { s.draft.cdpTargets = targets; s.dirty = true; s.applyState = { kind: 'idle' } })
+		}
+		fetch('/ego/api/cdp-probe', {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({ endpoint: endpoint }),
+		})
+			.then(function (r) { return r.json().catch(function () { return null }) })
+			.then(function (parsed) { applyOutcome(parsed && parsed.ok && parsed.value ? parsed.value.outcome : null, '') })
+			.catch(function (e) { applyOutcome(null, e instanceof Error ? e.message : String(e)) })
 		}
 		EgoBrowserSettingsController.prototype._setFfmpegStatus = function (status) {
 			var self = this
@@ -389,8 +544,16 @@ declare function require(id: string): any
 					patch[k] = v
 				}
 			})
+			// Array/object fields (CDP targets) are merged in whole — each edit
+			// through the sequence editor already staged the full new array.
+			for (var ck in this.stagedComplex) {
+				if (Object.prototype.hasOwnProperty.call(this.stagedComplex, ck)) {
+					patch[ck] = this.stagedComplex[ck]
+				}
+			}
 			if (Object.keys(patch).length === 0) {
 				this.staged.clear()
+				this.stagedComplex = {}
 				this.store.update(function (s) {
 					s.dirty = false
 					s.applyState = { kind: 'idle' }
@@ -412,9 +575,10 @@ declare function require(id: string): any
 					})
 					return
 				}
-				var config = parsed.value.config || {}
-				var ffmpegStatus = parsed.value.ffmpegStatus || self.store.getSnapshot().ffmpegStatus
-				self.staged.clear()
+			var config = parsed.value.config || {}
+			var ffmpegStatus = parsed.value.ffmpegStatus || self.store.getSnapshot().ffmpegStatus
+			self.staged.clear()
+			self.stagedComplex = {}
 				self.store.update(function (s) {
 				s.applyState = { kind: 'saved' }
 			s.draft = {
@@ -490,6 +654,10 @@ declare function require(id: string): any
 .dsh-ego-card__btn--primary{background:var(--dsw-alias-brand-primary);color:var(--dsw-alias-bg-layer-1)}
 .dsh-ego-card__btn--primary:disabled{background:var(--dsw-alias-bg-module-platform);color:var(--dsw-alias-label-tertiary)}
 .dsh-ego-card__btn:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:-2px}
+.dsh-ego-card__cdp-list{display:flex;flex-direction:column;gap:10px}
+.dsh-ego-card__cdp-target{border:1px solid var(--dsw-alias-border-l2);border-radius:10px;padding:10px;display:flex;flex-direction:column;gap:6px;background:var(--dsw-alias-bg-layer-3)}
+.dsh-ego-card__cdp-target--active{border-color:var(--dsw-alias-brand-primary)}
+.dsh-ego-card__radio{display:inline-flex;align-items:center;gap:8px}
 `
 
 		// Chevron icon (inline SVG — matches dsh-client-ui-primitives
@@ -608,6 +776,106 @@ declare function require(id: string): any
 			)
 		}
 
+		// ── R1: CDP target sequence editor ──────────────────────────────────
+		function CdpTargetsBlock(props) {
+			var t = props.t
+			var controller = props.controller
+			var useState = React.useState
+			var useEffect = React.useEffect
+			var targets = props.targets || []
+			var activeTargetId = props.activeTargetId
+			var cdpMode = props.cdpMode
+			var busy = props.busy
+			// Live attach state for the activated target badge — polled so the
+			// panel reflects the host's re-probe without a manual nudge.
+			var _attach = useState(null), attach = _attach[0], setAttach = _attach[1]
+			useEffect(function () {
+				var alive = true
+				function poll() {
+					fetch('/ego/api/cdp-status', {
+						method: 'POST',
+						headers: { 'content-type': 'application/json' },
+						body: '{}',
+					})
+						.then(function (r) { return r.json().catch(function () { return null }) })
+						.then(function (j) { if (alive && j && j.ok) setAttach(j.value.attach) })
+						.catch(function () { /* ignore */ })
+				}
+				poll()
+				var timer = setInterval(poll, 5000)
+				return function () { alive = false; clearInterval(timer) }
+			}, [])
+			function statusLabel(status) {
+				if (status === 'ready') return t('cdpStatusReady')
+				if (status === 'unreachable') return t('cdpStatusUnreachable')
+				if (status === 'probing') return t('cdpStatusProbing')
+				if (status === 'no-active') return t('cdpStatusNoActive')
+				if (status === 'local') return t('cdpStatusLocal')
+				return t('cdpStatusIdle')
+			}
+			var activeTarget = null
+			for (var i = 0; i < targets.length; i++) { if (targets[i].id === activeTargetId) { activeTarget = targets[i]; break } }
+			var showActiveBadge = !!activeTarget && activeTarget.enabled
+			return h('div', { className: 'dsh-ego-card__ffmpeg' },
+				h('div', { className: 'dsh-ego-card__ffmpeg-title' }, t('cdpSectionTitle')),
+				h('div', { className: 'dsh-ego-card__hint' }, t('cdpSectionIntro')),
+				h(SettingsField, {
+					id: 'plugin-config-dsh-browser-cdp-cdpmode',
+					label: t('cdpMode'),
+					value: cdpMode,
+					options: [
+						{ value: 'auto', label: t('cdpModeAuto') },
+						{ value: 'remote', label: t('cdpModeRemote') },
+						{ value: 'local', label: t('cdpModeLocal') },
+					],
+					disabled: busy,
+					onEdit: function (v) { controller.editCdpMode(v) },
+				}),
+				showActiveBadge
+					? h('div', { className: 'dsh-ego-card__ffmpeg-status', role: 'status' },
+						t('cdpActive') + ': ' + (activeTarget.label || activeTarget.endpoint) + ' · ' + statusLabel(attach ? attach.status : 'idle') +
+						(attach && attach.latencyMs ? ' · ' + t('cdpLatency') + ' ' + attach.latencyMs + 'ms' : '') +
+						(attach && attach.code ? ' · ' + attach.code : ''))
+					: h('div', { className: 'dsh-ego-card__notice' }, t('cdpActivateHint')),
+				targets.length === 0
+					? h('div', { className: 'dsh-ego-card__hint' }, t('cdpNoTargets'))
+					: h('div', { className: 'dsh-ego-card__cdp-list' },
+						targets.map(function (tg, idx) {
+							var isActive = tg.id === activeTargetId
+							return h('div', { key: tg.id, className: 'dsh-ego-card__cdp-target' + (isActive ? ' dsh-ego-card__cdp-target--active' : '') },
+								h('div', { className: 'dsh-ego-card__field-row' },
+									h('label', { className: 'dsh-ego-card__radio', title: t('cdpActive') },
+										h('input', { type: 'radio', checked: isActive, disabled: !tg.enabled || busy, onChange: function () { controller.setActiveTarget(tg.id) } }),
+										h('span', { className: 'dsh-ego-card__unit' }, (idx + 1) + '.'),
+									),
+									h('label', { className: 'dsh-ego-card__radio', title: t('cdpEnabled') },
+										h('input', { type: 'checkbox', checked: !!tg.enabled, disabled: busy, onChange: function (e) { controller.editTarget(tg.id, 'enabled', e.target.checked) } }),
+										h('span', { className: 'dsh-ego-card__unit' }, t('cdpEnabled')),
+									),
+								),
+								h(SettingsField, { id: 'cdp-endpoint-' + tg.id, label: t('cdpEndpoint'), hint: t('cdpEndpointHint'), value: tg.endpoint || '', placeholder: 'http://127.0.0.1:9222', disabled: busy, onEdit: function (v) { controller.editTarget(tg.id, 'endpoint', v) } }),
+								h(SettingsField, { id: 'cdp-label-' + tg.id, label: t('cdpLabel'), value: tg.label || '', disabled: busy, onEdit: function (v) { controller.editTarget(tg.id, 'label', v) } }),
+								h(SettingsField, { id: 'cdp-note-' + tg.id, label: t('cdpNote'), value: tg.note || '', disabled: busy, onEdit: function (v) { controller.editTarget(tg.id, 'note', v) } }),
+								!isActive && tg.probeStatus && tg.probeStatus !== 'unknown'
+									? h('div', { className: 'dsh-ego-card__ffmpeg-status', role: 'status' },
+										(tg.probeStatus === 'ok' ? t('cdpStatusReady') : t('cdpStatusUnreachable')) +
+										(tg.probeLatencyMs ? ' · ' + t('cdpLatency') + ' ' + tg.probeLatencyMs + 'ms' : '') +
+										(tg.probeError ? ' · ' + t('cdpError') + ': ' + tg.probeError : ''))
+									: null,
+								h('div', { className: 'dsh-ego-card__ffmpeg-actions' },
+									h('button', { type: 'button', className: 'dsh-ego-card__btn', disabled: busy || !tg.endpoint, onClick: function () { controller.probeTarget(tg.id) } }, t('cdpProbe')),
+									h('button', { type: 'button', className: 'dsh-ego-card__btn', disabled: busy || idx === 0, onClick: function () { controller.moveTarget(tg.id, -1) } }, t('cdpMoveUp')),
+									h('button', { type: 'button', className: 'dsh-ego-card__btn', disabled: busy || idx === targets.length - 1, onClick: function () { controller.moveTarget(tg.id, 1) } }, t('cdpMoveDown')),
+									h('button', { type: 'button', className: 'dsh-ego-card__btn', disabled: busy, onClick: function () { controller.removeTarget(tg.id) } }, t('cdpRemove')),
+								),
+							)
+						})),
+				h('div', { className: 'dsh-ego-card__ffmpeg-actions' },
+					h('button', { type: 'button', className: 'dsh-ego-card__btn dsh-ego-card__btn--primary', disabled: busy, onClick: function () { controller.addTarget() } }, t('cdpAdd')),
+				),
+			)
+		}
+
 		function EgoBrowserCard(props) {
 			var t = props.t
 			var controller = props.controller
@@ -667,7 +935,7 @@ declare function require(id: string): any
 					saved ? h('p', { className: 'dsh-ego-card__saved', role: 'status' }, t('save')) : null,
 					h('div', { className: 'dsh-ego-card__form' },
 						h(SettingsField, {
-							id: 'plugin-config-ego-browser-isolatespaces',
+							id: 'plugin-config-dsh-browser-cdp-isolatespaces',
 							label: t('isolateSpaces'),
 							hint: t('isolateSpacesHint'),
 							value: state.draft.isolateSpaces ? 'true' : 'false',
@@ -678,9 +946,9 @@ declare function require(id: string): any
 							disabled: busy,
 							onEdit: function (v) { controller.edit('isolateSpaces', v === 'true') },
 						}),
-						h(SettingsField, { id: 'plugin-config-ego-browser-idletimeout', label: t('idleTimeoutMin'), hint: t('idleTimeoutMinHint'), value: state.draft.idleTimeoutMin, numeric: true, narrow: true, unit: t('minUnit'), min: 0, max: 1440, step: 1, disabled: busy, onEdit: function (v) { controller.edit('idleTimeoutMin', v) } }),
+						h(SettingsField, { id: 'plugin-config-dsh-browser-cdp-idletimeout', label: t('idleTimeoutMin'), hint: t('idleTimeoutMinHint'), value: state.draft.idleTimeoutMin, numeric: true, narrow: true, unit: t('minUnit'), min: 0, max: 1440, step: 1, disabled: busy, onEdit: function (v) { controller.edit('idleTimeoutMin', v) } }),
 						h(SettingsField, {
-							id: 'plugin-config-ego-browser-chromepath',
+							id: 'plugin-config-dsh-browser-cdp-chromepath',
 							label: t('chromePath'),
 							hint: t('chromePathHint'),
 							value: state.draft.chromePath || '',
@@ -689,23 +957,24 @@ declare function require(id: string): any
 							onEdit: function (v) { controller.edit('chromePath', v) },
 						}),
 						h(SettingsField, {
-							id: 'plugin-config-ego-browser-backend', label: t('captureBackend'), value: state.draft.captureBackend, options: ['auto', 'cdp', { value: 'ffmpeg', label: ffmpegStatus.canSelectFfmpeg ? 'ffmpeg' : t('ffmpegRequired'), disabled: !ffmpegStatus.canSelectFfmpeg }], disabled: busy, onEdit: function (v) { controller.edit('captureBackend', v) },
+							id: 'plugin-config-dsh-browser-cdp-backend', label: t('captureBackend'), value: state.draft.captureBackend, options: ['auto', 'cdp', { value: 'ffmpeg', label: ffmpegStatus.canSelectFfmpeg ? 'ffmpeg' : t('ffmpegRequired'), disabled: !ffmpegStatus.canSelectFfmpeg }], disabled: busy, onEdit: function (v) { controller.edit('captureBackend', v) },
 						}),
-						h(SettingsField, { id: 'plugin-config-ego-browser-profile', label: t('streamProfile'), value: state.draft.streamProfile, options: ['low', 'balanced', 'high'], disabled: busy, onEdit: function (v) { controller.edit('streamProfile', v) } }),
-						h(SettingsField, { id: 'plugin-config-ego-browser-cdpfps', label: t('cdpFps'), value: state.draft.cdpFps, numeric: true, narrow: true, unit: t('fpsUnit'), min: 5, max: 30, step: 1, disabled: busy, onEdit: function (v) { controller.edit('cdpFps', v) } }),
-						h(SettingsField, { id: 'plugin-config-ego-browser-cdpquality', label: t('cdpQuality'), value: state.draft.cdpQuality, numeric: true, narrow: true, min: 1, max: 100, step: 1, disabled: busy, onEdit: function (v) { controller.edit('cdpQuality', v) } }),
-						h(SettingsField, { id: 'plugin-config-ego-browser-cdpwidth', label: t('cdpMaxWidth'), value: state.draft.cdpMaxWidth, numeric: true, narrow: true, unit: t('pxUnit'), min: 320, max: 1920, step: 40, disabled: busy, onEdit: function (v) { controller.edit('cdpMaxWidth', v) } }),
-						h(SettingsField, { id: 'plugin-config-ego-browser-backstop', label: t('cdpBackstopIntervalMs'), value: state.draft.cdpBackstopIntervalMs, numeric: true, narrow: true, unit: t('msUnit'), min: 1000, max: 10000, step: 100, disabled: busy, onEdit: function (v) { controller.edit('cdpBackstopIntervalMs', v) } }),
-						h(SettingsField, { id: 'plugin-config-ego-browser-fffps', label: t('ffmpegFps'), value: state.draft.ffmpegFps, numeric: true, narrow: true, unit: t('fpsUnit'), min: 5, max: 30, step: 1, disabled: busy, onEdit: function (v) { controller.edit('ffmpegFps', v) } }),
-						h(SettingsField, { id: 'plugin-config-ego-browser-ffwidth', label: t('ffmpegMaxWidth'), value: state.draft.ffmpegMaxWidth, numeric: true, narrow: true, unit: t('pxUnit'), min: 320, max: 1920, step: 40, disabled: busy, onEdit: function (v) { controller.edit('ffmpegMaxWidth', v) } }),
-						h(SettingsField, { id: 'plugin-config-ego-browser-ffbitrate', label: t('ffmpegBitrateKbps'), value: state.draft.ffmpegBitrateKbps, numeric: true, narrow: true, unit: t('kbpsUnit'), min: 500, max: 20000, step: 250, disabled: busy, onEdit: function (v) { controller.edit('ffmpegBitrateKbps', v) } }),
-						h(SettingsField, { id: 'plugin-config-ego-browser-encoder', label: t('ffmpegEncoder'), value: state.draft.ffmpegEncoder, options: ['auto', 'software', 'h264_mf', 'h264_nvenc', 'h264_qsv', 'h264_amf', 'h264_videotoolbox', 'h264_vaapi'], disabled: busy, onEdit: function (v) { controller.edit('ffmpegEncoder', v) } }),
-						h(SettingsField, { id: 'plugin-config-ego-browser-ffpath', label: t('ffmpegPath'), value: state.draft.ffmpegPath, placeholder: 'ffmpeg', disabled: busy, onEdit: function (v) { controller.edit('ffmpegPath', v) },
+						h(SettingsField, { id: 'plugin-config-dsh-browser-cdp-profile', label: t('streamProfile'), value: state.draft.streamProfile, options: ['low', 'balanced', 'high'], disabled: busy, onEdit: function (v) { controller.edit('streamProfile', v) } }),
+						h(SettingsField, { id: 'plugin-config-dsh-browser-cdp-cdpfps', label: t('cdpFps'), value: state.draft.cdpFps, numeric: true, narrow: true, unit: t('fpsUnit'), min: 5, max: 30, step: 1, disabled: busy, onEdit: function (v) { controller.edit('cdpFps', v) } }),
+						h(SettingsField, { id: 'plugin-config-dsh-browser-cdp-cdpquality', label: t('cdpQuality'), value: state.draft.cdpQuality, numeric: true, narrow: true, min: 1, max: 100, step: 1, disabled: busy, onEdit: function (v) { controller.edit('cdpQuality', v) } }),
+						h(SettingsField, { id: 'plugin-config-dsh-browser-cdp-cdpwidth', label: t('cdpMaxWidth'), value: state.draft.cdpMaxWidth, numeric: true, narrow: true, unit: t('pxUnit'), min: 320, max: 1920, step: 40, disabled: busy, onEdit: function (v) { controller.edit('cdpMaxWidth', v) } }),
+						h(SettingsField, { id: 'plugin-config-dsh-browser-cdp-backstop', label: t('cdpBackstopIntervalMs'), value: state.draft.cdpBackstopIntervalMs, numeric: true, narrow: true, unit: t('msUnit'), min: 1000, max: 10000, step: 100, disabled: busy, onEdit: function (v) { controller.edit('cdpBackstopIntervalMs', v) } }),
+						h(SettingsField, { id: 'plugin-config-dsh-browser-cdp-fffps', label: t('ffmpegFps'), value: state.draft.ffmpegFps, numeric: true, narrow: true, unit: t('fpsUnit'), min: 5, max: 30, step: 1, disabled: busy, onEdit: function (v) { controller.edit('ffmpegFps', v) } }),
+						h(SettingsField, { id: 'plugin-config-dsh-browser-cdp-ffwidth', label: t('ffmpegMaxWidth'), value: state.draft.ffmpegMaxWidth, numeric: true, narrow: true, unit: t('pxUnit'), min: 320, max: 1920, step: 40, disabled: busy, onEdit: function (v) { controller.edit('ffmpegMaxWidth', v) } }),
+						h(SettingsField, { id: 'plugin-config-dsh-browser-cdp-ffbitrate', label: t('ffmpegBitrateKbps'), value: state.draft.ffmpegBitrateKbps, numeric: true, narrow: true, unit: t('kbpsUnit'), min: 500, max: 20000, step: 250, disabled: busy, onEdit: function (v) { controller.edit('ffmpegBitrateKbps', v) } }),
+						h(SettingsField, { id: 'plugin-config-dsh-browser-cdp-encoder', label: t('ffmpegEncoder'), value: state.draft.ffmpegEncoder, options: ['auto', 'software', 'h264_mf', 'h264_nvenc', 'h264_qsv', 'h264_amf', 'h264_videotoolbox', 'h264_vaapi'], disabled: busy, onEdit: function (v) { controller.edit('ffmpegEncoder', v) } }),
+						h(SettingsField, { id: 'plugin-config-dsh-browser-cdp-ffpath', label: t('ffmpegPath'), value: state.draft.ffmpegPath, placeholder: 'ffmpeg', disabled: busy, onEdit: function (v) { controller.edit('ffmpegPath', v) },
 						}),
-						h(SettingsField, { id: 'plugin-config-ego-browser-ghmirror', label: t('githubMirror'), value: state.draft.githubMirror, hint: t('githubMirrorHint'), placeholder: 'https://gh-proxy.com/github.com', disabled: busy, onEdit: function (v) { controller.edit('githubMirror', v) } }),
-						h(SettingsField, { id: 'plugin-config-ego-browser-ego-cli-args', label: t('egoCliArgs'), value: state.draft.egoCliArgs, hint: t('egoCliArgsHint'), placeholder: '--sdk-path /path/to/harness.js', disabled: busy, onEdit: function (v) { controller.edit('egoCliArgs', v) } }),
-						h(SettingsField, { id: 'plugin-config-ego-browser-chrome-args', label: t('chromeArgs'), value: state.draft.chromeArgs, hint: t('chromeArgsHint'), placeholder: '--disable-features=Translate --window-size=1024,768', disabled: busy, onEdit: function (v) { controller.edit('chromeArgs', v) } }),
+						h(SettingsField, { id: 'plugin-config-dsh-browser-cdp-ghmirror', label: t('githubMirror'), value: state.draft.githubMirror, hint: t('githubMirrorHint'), placeholder: 'https://gh-proxy.com/github.com', disabled: busy, onEdit: function (v) { controller.edit('githubMirror', v) } }),
+						h(SettingsField, { id: 'plugin-config-dsh-browser-cdp-ego-cli-args', label: t('egoCliArgs'), value: state.draft.egoCliArgs, hint: t('egoCliArgsHint'), placeholder: '--sdk-path /path/to/harness.js', disabled: busy, onEdit: function (v) { controller.edit('egoCliArgs', v) } }),
+						h(SettingsField, { id: 'plugin-config-dsh-browser-cdp-chrome-args', label: t('chromeArgs'), value: state.draft.chromeArgs, hint: t('chromeArgsHint'), placeholder: '--disable-features=Translate --window-size=1024,768', disabled: busy, onEdit: function (v) { controller.edit('chromeArgs', v) } }),
 						h(LoginImportBlock, { t: t }),
+						h(CdpTargetsBlock, { t: t, controller: controller, targets: state.draft.cdpTargets, activeTargetId: state.draft.activeTargetId, cdpMode: state.draft.cdpMode, busy: busy }),
 						h('div', { className: 'dsh-ego-card__ffmpeg' },
 							h('div', { className: 'dsh-ego-card__ffmpeg-title' }, t('ffmpegTitle')),
 							h('div', { className: 'dsh-ego-card__ffmpeg-status', role: 'status' }, t(ffmpegLabelKey) + (ffmpegStatus.reason ? ': ' + ffmpegStatus.reason : '') + (progressText ? ' ' + progressText : '')),
@@ -1159,7 +1428,7 @@ declare function require(id: string): any
 
 		function apply(ctx) {
 			// ── Settings card: register locale + slot (always runs) ──────
-			ctx.effect(() => ctx.locale.register(SETTINGS_NS, { zh, en }), 'ego-browser: settings dictionaries')
+			ctx.effect(() => ctx.locale.register(SETTINGS_NS, { zh, en }), 'dsh-browser-cdp: settings dictionaries')
 			// Inject the settings-card stylesheet once (idempotent — guarded by
 			// a data attribute so HMR / repeated apply() calls don't duplicate).
 			ctx.effect(() => {
@@ -1167,11 +1436,11 @@ declare function require(id: string): any
 				if (document.getElementById(SETTINGS_CARD_STYLE_ID) !== null) return
 				var tag = document.createElement('style')
 				tag.id = SETTINGS_CARD_STYLE_ID
-				tag.dataset.plugin = 'ego-browser'
+				tag.dataset.plugin = 'dsh-browser-cdp'
 				tag.textContent = SETTINGS_CARD_CSS
 				document.head.appendChild(tag)
 				return function () { tag.remove() }
-			}, 'ego-browser: settings card css')
+			}, 'dsh-browser-cdp: settings card css')
 			var controller = new EgoBrowserSettingsController()
 			var useSnapshot = bindSnapshotSelector(controller.store)
 			ctx.effect(() => {
@@ -1186,7 +1455,7 @@ declare function require(id: string): any
 				}
 				var dispose = ctx.on('connection/reset', refresh)
 				return function () { dispose() }
-			}, 'ego-browser: settings invalidation')
+			}, 'dsh-browser-cdp: settings invalidation')
 			ctx.slots.inject('settings.plugin.item', function* () {
 				yield ctx.slots.register({
 					name: 'settings.plugin.item',
@@ -3359,7 +3628,7 @@ clearTimeout((panel as any)._dshHideT)
 			document.head.appendChild(styleEl)
 
 			var disposeTab = betterSidebar.registerTab({
-				id: 'ego-browser:watch',
+				id: 'dsh-browser-cdp:watch',
 				title: function () { return wt('title') },
 				order: 70,
 				single: true,
@@ -3402,7 +3671,7 @@ clearTimeout((panel as any)._dshHideT)
 				try {
 					// The second argument is the session scope; without it the open lands
 					// in whatever sidebar is currently on screen.
-					betterSidebar.openTab({ type: 'ego-browser:watch' }, sessionId ? { sessionId: sessionId } : undefined)
+					betterSidebar.openTab({ type: 'dsh-browser-cdp:watch' }, sessionId ? { sessionId: sessionId } : undefined)
 				} catch (e) {}
 			}
 			// One-shot baseline fetch (NOT a polling loop). After this, the
@@ -3460,5 +3729,5 @@ clearTimeout((panel as any)._dshHideT)
 		}
 
 
-export const name = 'ego-browser'
+export const name = 'dsh-browser-cdp'
 export { apply, inject }

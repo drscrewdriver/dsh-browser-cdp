@@ -18,7 +18,7 @@ describe("dual capture config", () => {
       // first means every run reports a skipped hop for a service nobody can
       // sign up for.
       judgePrefer: "laya,rule", jevChunkSize: 20, jevMaxImageBytes: 0,
-      jevHistoryLimit: 5, jevArchiveImage: false, jevStepBudget: 20, jevWallMs: 120000,
+      jevHistoryLimit: 5, jevArchiveImage: false, jevEvaluate: true, jevStepBudget: 20, jevWallMs: 120000,
     });
   });
 
@@ -38,7 +38,7 @@ describe("dual capture config", () => {
       // first means every run reports a skipped hop for a service nobody can
       // sign up for.
       judgePrefer: "laya,rule", jevChunkSize: 20, jevMaxImageBytes: 0,
-      jevHistoryLimit: 5, jevArchiveImage: false, jevStepBudget: 20, jevWallMs: 120000,
+      jevHistoryLimit: 5, jevArchiveImage: false, jevEvaluate: true, jevStepBudget: 20, jevWallMs: 120000,
     });
     expect(resolveConfig({ cdpFps: 15, castFpsCap: 30 }).cdpFps).toBe(15);
   });
@@ -255,7 +255,7 @@ describe("阶段 10 judge config", () => {
     // of thing that silently breaks when duplicated in three layers.
     expect(settings.prefer).toBe("laya,rule");
     expect(Object.keys(settings).sort()).toEqual([
-      "archiveImage", "chunkSize", "historyLimit", "jevKey", "jevModel", "jevUrl",
+      "archiveImage", "chunkSize", "evaluate", "historyLimit", "jevKey", "jevModel", "jevUrl",
       "layaKey", "layaModel", "layaUrl", "maxImageBytes", "prefer", "stepBudget", "wallMs",
     ]);
   });
@@ -278,5 +278,21 @@ describe("阶段 10 · laya-first, because JEV cannot be registered", () => {
     const config = resolveConfig({ judgePrefer: "jev,laya,rule", jevUrl: "https://j.example", jevKey: "k" } as never);
     expect(config.judgePrefer).toBe("jev,laya,rule");
     expect(config.jevUrl).toBe("https://j.example");
+  });
+});
+
+describe("阶段 10 · the progress-evaluation switch", () => {
+  it("is ON by default, because the loop cannot otherwise see 'nothing changed'", () => {
+    expect(resolveConfig({}).jevEvaluate).toBe(true);
+  });
+
+  it("can be turned off, and the projection carries the switch", () => {
+    expect(resolveConfig({ jevEvaluate: false } as never).jevEvaluate).toBe(false);
+    expect(judgeSettingsOf(resolveConfig({ jevEvaluate: false } as never)).evaluate).toBe(false);
+  });
+
+  it("coerces a non-boolean rather than trusting truthiness", () => {
+    expect(resolveConfig({ jevEvaluate: 0 } as never).jevEvaluate).toBe(false);
+    expect(resolveConfig({ jevEvaluate: true } as never).jevEvaluate).toBe(true);
   });
 });

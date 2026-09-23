@@ -666,6 +666,7 @@ interface EgoRuntimeConfig {
   readonly jevMaxImageBytes: number
   readonly jevHistoryLimit: number
   readonly jevArchiveImage: boolean
+  readonly jevEvaluate: boolean
   readonly jevStepBudget: number
   readonly jevWallMs: number
 }
@@ -948,6 +949,7 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
     get jevMaxImageBytes() { return judgeSettingsOf(resolveConfig(bridge.source() as RawConfig)).maxImageBytes },
     get jevHistoryLimit() { return judgeSettingsOf(resolveConfig(bridge.source() as RawConfig)).historyLimit },
     get jevArchiveImage() { return judgeSettingsOf(resolveConfig(bridge.source() as RawConfig)).archiveImage },
+    get jevEvaluate() { return judgeSettingsOf(resolveConfig(bridge.source() as RawConfig)).evaluate },
     get jevStepBudget() { return judgeSettingsOf(resolveConfig(bridge.source() as RawConfig)).stepBudget },
     get jevWallMs() { return judgeSettingsOf(resolveConfig(bridge.source() as RawConfig)).wallMs },
   }
@@ -2632,6 +2634,7 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
     maxImageBytes: cfg.jevMaxImageBytes,
     historyLimit: cfg.jevHistoryLimit,
     archiveImage: cfg.jevArchiveImage,
+    evaluate: cfg.jevEvaluate,
     stepBudget: cfg.jevStepBudget,
     wallMs: cfg.jevWallMs,
   })

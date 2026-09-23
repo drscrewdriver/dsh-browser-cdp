@@ -51,10 +51,14 @@ import {
   canScroll,
   chapterQuestions,
   controlQuestions,
+  evaluationQuestions,
   pickQuestions,
+  EVALUATION_CHOICE_ID,
   type HistoryStep,
   type IntentSpec,
   type ProgressReport,
+  type ProgressVerdict,
+  PROGRESS_VERDICTS,
 } from './prompt.ts'
 import {
   type AnswerSet,
@@ -137,8 +141,8 @@ export interface LayaExit {
  * reject is a MODELLING problem (an empty candidate list usually means the page
  * has no candidates), and the caller may legitimately want to record it.
  */
-/** The three rounds, in the order they are asked. */
-export type RoundKind = 'control' | 'chapter' | 'pick'
+/** The rounds, in the order they are asked. `evaluate` follows an action. */
+export type RoundKind = 'control' | 'chapter' | 'pick' | 'evaluate'
 
 export interface PipeRound {
   round: RoundKind
@@ -252,9 +256,11 @@ export function buildRound(input: BuildRoundInput): PipeRound {
   const questions =
     input.round === 'control'
       ? controlQuestions(canScroll(input.frame))
-      : input.round === 'chapter'
-        ? chapterQuestions(chapters)
-        : pickQuestions(offered)
+      : input.round === 'evaluate'
+        ? evaluationQuestions()
+        : input.round === 'chapter'
+          ? chapterQuestions(chapters)
+          : pickQuestions(offered)
 
   const issues = validateQuestions(questions)
   const body = buildSystemOneRequest(state, questions, config.model)
@@ -407,6 +413,35 @@ export function readChapter(result: JudgeResponse, chapters: readonly Chapter[])
   const chosen = chapters.find((chapter) => chapter.key === answer.choice)
   if (chosen === undefined) return { kind: 'unknown-chapter', key: answer.choice, top: margin.top, margin: margin.margin }
   return { kind: 'chapter', key: chosen.key, label: chosen.label, nodes: chosen.nodes, top: margin.top, margin: margin.margin }
+}
+
+export type EvaluationOutcome =
+  | { kind: 'verdict'; verdict: ProgressVerdict; top: number; margin: number }
+  | { kind: 'unclear'; code: string; top: number; margin: number }
+  | { kind: 'no-answer'; missing: string[] }
+  | { kind: 'unavailable'; trace: string[] }
+
+/**
+ * Read the progress verdict.
+ *
+ * The option count is FIXED at three, so its bucket is the strictest one: a
+ * three-way question must be answered decisively, because a hesitant verdict is
+ * exactly the case where continuing automatically is worst. Anything unclear
+ * therefore escalates rather than continuing on a coin flip.
+ */
+export function readEvaluation(result: JudgeResponse): EvaluationOutcome {
+  if (result.provider === 'refuse') return { kind: 'unavailable', trace: result.trace }
+  const answer = result.answers[EVALUATION_CHOICE_ID]
+  if (answer === undefined || answer.type !== 'choice') return { kind: 'no-answer', missing: result.missing }
+  const bucket = bucketFor(PROGRESS_VERDICTS.length)
+  const margin = checkChoiceMargin(answer, bucket.minTop, bucket.minMargin)
+  if (!margin.ok) return { kind: 'unclear', code: margin.code, top: margin.top, margin: margin.margin }
+  if (!(PROGRESS_VERDICTS as readonly string[]).includes(answer.choice)) {
+    // A verdict outside the table. Reported, never coerced to `inprogress`:
+    // defaulting to "keep going" on an unrecognised answer is how a loop spins.
+    return { kind: 'unclear', code: `unknown-verdict:${answer.choice}`, top: margin.top, margin: margin.margin }
+  }
+  return { kind: 'verdict', verdict: answer.choice as ProgressVerdict, top: margin.top, margin: margin.margin }
 }
 
 export type PickOutcome =

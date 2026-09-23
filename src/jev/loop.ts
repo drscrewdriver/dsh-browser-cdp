@@ -44,7 +44,7 @@ import {
   controlQuestion,
   pickQuestion,
 } from './prompt.ts'
-import { type PipeConfig, type PipeRound, buildRound, readChapter, readControl, readPick } from './pipe.ts'
+import { type PipeConfig, type PipeRound, buildRound, readChapter, readControl, readEvaluation, readPick } from './pipe.ts'
 import { checkChoiceMargin, bucketFor, validateQuestions } from './wire.ts'
 
 // ── budgets: five ledgers, all enforced BEFORE a spend ─────────────────────
@@ -152,8 +152,52 @@ export type StopReason =
   | 'unavailable'
   /** The effects layer threw. */
   | 'error'
+  /**
+   * HANDED BACK to the caller, on purpose.
+   *
+   * Distinct from `stuck`: `stuck` means the loop exhausted its own ideas, while
+   * `escalate` means the loop reached a decision it should not make alone — a
+   * step that failed, or a `done` claim the page does not support. The
+   * difference matters because the remedy is different: `stuck` wants a new
+   * strategy, `escalate` wants a specific recovery the caller can choose.
+   */
+  | 'escalate'
 
-export type LoopStatus = 'done' | 'blocked' | 'exhausted' | 'stuck' | 'unavailable' | 'error'
+export type LoopStatus = 'done' | 'blocked' | 'exhausted' | 'stuck' | 'unavailable' | 'error' | 'escalate'
+
+/**
+ * A recovery action the caller may take. Named, not executed: the loop reports,
+ * the model decides.
+ */
+export interface RecoveryOption {
+  action: 'reload' | 'recapture' | 'scroll' | 'back' | 'abandon'
+  /** Why this is worth trying, in one line the model can act on. */
+  why: string
+}
+
+/**
+ * What a caller needs in order to take over.
+ *
+ * Structured rather than prose because a model reads it: the point of handing
+ * back is that something OTHER than this loop decides what to do next, and that
+ * decision needs the facts, not a summary.
+ */
+export interface Escalation {
+  reason:
+    | 'step-failed'
+    | 'done-unverified'
+    | 'evaluation-unclear'
+    | 'no-verdict'
+    | 'judge-unavailable'
+  /** The action that led here, e.g. `click button "Pay now"`. */
+  lastAction: string
+  /** The judge's own verdict or failure text that triggered the hand-back. */
+  verdict: string
+  /** Mechanical options, most likely first. Never empty. */
+  recovery: RecoveryOption[]
+  /** One line the caller can act on directly. */
+  suggest: string
+}
 
 export interface LoopStep {
   index: number
@@ -189,6 +233,14 @@ export interface LoopResult {
   remaining: BudgetSnapshot
   /** True when any step ran on a non-first-choice provider. */
   degraded: boolean
+  /**
+   * Present when `status === 'escalate'`.
+   *
+   * The loop stops here rather than continuing, because the two cases that
+   * escalate (a failed step, an unsupported `done`) are exactly the ones where
+   * more of the same is the wrong answer.
+   */
+  escalation?: Escalation
 }
 
 // ── injected effects ───────────────────────────────────────────────────────
@@ -246,6 +298,14 @@ export interface LoopInput {
   unclearLimit?: number
   /** How many consecutive no-progress steps on the same frame become `stuck`. */
   stalledLimit?: number
+  /**
+   * Ask the judge after each successful action whether the step advanced.
+   *
+   * Defaults to FALSE here even though the setting defaults to true: a caller
+   * that wants the extra round trip must say so, so a test or an offline run
+   * cannot accidentally double its judge budget.
+   */
+  evaluate?: boolean
 }
 
 const DEFAULT_UNCLEAR_LIMIT = 3
@@ -266,6 +326,7 @@ export async function runLoop(input: LoopInput): Promise<LoopResult> {
   const ledger = new BudgetLedger(budgets, input.effects.now)
   const unclearLimit = input.unclearLimit ?? DEFAULT_UNCLEAR_LIMIT
   const stalledLimit = input.stalledLimit ?? DEFAULT_STALLED_LIMIT
+  const evaluate = input.evaluate === true
 
   const history: HistoryStep[] = []
   const excluded: number[] = []
@@ -504,13 +565,166 @@ export async function runLoop(input: LoopInput): Promise<LoopResult> {
     }
 
     consecutiveStalls = 0
+    const actionLabel = `${action.action} ${describeNodeName(outcome.node)}`
     // A SUCCESSFUL action is the only thing that goes in `completed`. A failed
     // one must not, or the judge reads progress on work that never landed.
-    completed.push(`${action.action} ${describeNodeName(outcome.node)} in ${outcome.chapterKey ?? 'the page'}`)
+    completed.push(`${actionLabel} in ${outcome.chapterKey ?? 'the page'}`)
     progressNote = ''
     steps.push(step(ledger, steps.length, 'act', outcome.n, action.action, true, describeNodeName(outcome.node), outcome.result, outcome.danger))
+
+    // ── progress evaluation: did that STEP actually move us? ──────────────
+    //
+    // Placed here, after the action and before the next capture, for one reason:
+    // the question is about the step. Asking it later would be asking about
+    // something the judge can no longer see.
+    if (evaluate) {
+      const evalRound = buildRound({
+        frame,
+        intent: input.intent,
+        round: 'evaluate',
+        history,
+        excluded,
+        progress: progressOf(),
+        config: input.pipe,
+      })
+      const askedEval = await ask(ledger, input.effects, evalRound)
+      if (!askedEval.ok) {
+        return finish('exhausted', `budget exhausted: ${askedEval.blockedBy}`, excluded, steps, degraded, ledger, askedEval.blockedBy)
+      }
+      degraded = degraded || askedEval.result.degraded
+      const verdict = readEvaluation(askedEval.result)
+
+      if (verdict.kind === 'verdict' && verdict.verdict === 'inprogress') {
+        // The only verdict that continues silently — and that is the point of
+        // the three states: the common case costs no human attention.
+        steps.push(step(ledger, steps.length, 'evaluate:inprogress', outcome.n, 'evaluate', true, `step advanced (top ${verdict.top.toFixed(2)})`, askedEval.result, outcome.danger))
+        lastRevision = -1
+        continue
+      }
+
+      if (verdict.kind === 'verdict' && verdict.verdict === 'done') {
+        // A `done` verdict is a CLAIM about the step, so it is checked against
+        // the intent's own criteria before the run is allowed to end.
+        let checked: VerifyResult
+        try {
+          checked = await input.effects.verify(input.intent)
+        } catch (error) {
+          return finish('error', `verification threw: ${messageOf(error)}`, excluded, steps, degraded, ledger)
+        }
+        if (checked.satisfied) {
+          steps.push(step(ledger, steps.length, 'evaluate:done', outcome.n, 'verify', true, checked.note, askedEval.result, outcome.danger))
+          return finish('done', checked.note, excluded, steps, degraded, ledger)
+        }
+        // The judge says the goal is met; the page says it is not. That
+        // CONTRADICTION is the most valuable thing the loop can hand back, so it
+        // escalates instead of guessing which of the two is wrong.
+        steps.push(step(ledger, steps.length, 'evaluate:done-unverified', outcome.n, 'verify', false, checked.note, askedEval.result, outcome.danger))
+        return finishEscalated(
+          {
+            reason: 'done-unverified',
+            lastAction: actionLabel,
+            verdict: `judge reported done, but the criteria do not hold on the page (${checked.note})`,
+            recovery: recoveryFor('done-unverified', action.action),
+            suggest: 'The judge believes the goal is met while the page disagrees. Re-capture and re-check, or correct the successCriteria if they are wrong.',
+          },
+          excluded, steps, degraded, ledger,
+        )
+      }
+
+      if (verdict.kind === 'verdict' && verdict.verdict === 'fail') {
+        steps.push(step(ledger, steps.length, 'evaluate:fail', outcome.n, 'evaluate', false, `step did not advance (top ${verdict.top.toFixed(2)})`, askedEval.result, outcome.danger))
+        return finishEscalated(
+          {
+            reason: 'step-failed',
+            lastAction: actionLabel,
+            verdict: 'the judge reports the step did not advance',
+            recovery: recoveryFor('step-failed', action.action),
+            suggest: `The step "${actionLabel}" did not work. Pick a recovery and resume, or stop and report.`,
+          },
+          excluded, steps, degraded, ledger,
+        )
+      }
+
+      if (verdict.kind === 'unavailable') {
+        return finish('unavailable', 'no judge could answer the progress evaluation', excluded, steps, degraded, ledger)
+      }
+
+      // unclear / unknown verdict / no answer: the three-way question is the
+      // STRICTEST bucket, so a hesitant verdict is exactly the case where
+      // continuing automatically is worst. Escalate rather than coin-flip.
+      const detail = verdict.kind === 'unclear' ? verdict.code : verdict.kind
+      steps.push(step(ledger, steps.length, `evaluate:${verdict.kind}`, outcome.n, 'evaluate', false, `verdict unusable (${detail})`, askedEval.result, outcome.danger))
+      return finishEscalated(
+        {
+          reason: verdict.kind === 'no-answer' ? 'no-verdict' : 'evaluation-unclear',
+          lastAction: actionLabel,
+          verdict: `the progress verdict was unusable: ${detail}`,
+          recovery: recoveryFor('evaluation-unclear', action.action),
+          suggest: 'The judge could not say whether the step advanced. Re-capture and re-evaluate, or take over.',
+        },
+        excluded, steps, degraded, ledger,
+      )
+    }
+
     // The action changed something, so the frame is stale BY DESIGN.
     lastRevision = -1
+  }
+}
+
+/**
+ * The recovery options for a failure, DERIVED from what failed.
+ *
+ * Mechanical on purpose, and always non-empty: a hand-back with no suggested
+ * action pushes the whole problem onto the caller, and the caller in practice is
+ * a model that will then guess. Naming `reload` first for a step that failed is
+ * the cheap, high-yield move — a page that half-rendered or lost its session
+ * state is repaired by a reload far more often than by a cleverer selector.
+ */
+export function recoveryFor(reason: Escalation['reason'], lastAction: string): RecoveryOption[] {
+  if (reason === 'done-unverified') {
+    return [
+      { action: 'recapture', why: 'the page may have changed after the last capture, so the criteria could now hold' },
+      { action: 'scroll', why: 'the thing that would prove completion may be below the fold' },
+      { action: 'reload', why: 'a stale render can hide the confirmation that was actually written' },
+      { action: 'abandon', why: 'if the criteria are simply wrong, fix the intent rather than the page' },
+    ]
+  }
+  if (reason === 'judge-unavailable') {
+    return [
+      { action: 'abandon', why: 'no judge answered, which is a configuration problem and not a page problem' },
+    ]
+  }
+  // step-failed / evaluation-unclear
+  const reloadable = lastAction === 'click' || lastAction === 'fill'
+  const options: RecoveryOption[] = []
+  if (reloadable) {
+    options.push({ action: 'reload', why: 'a failed interaction often means the page is in a stale or half-loaded state' })
+  }
+  options.push(
+    { action: 'recapture', why: 'the frame the judge decided on may no longer match the page' },
+    { action: 'scroll', why: 'the target may have moved out of the captured region' },
+    { action: 'back', why: 'the last action may have navigated somewhere unhelpful' },
+    { action: 'abandon', why: 'the intent may not be achievable on this page at all' },
+  )
+  return options
+}
+
+/** Wrap up as a hand-back, with the escalation attached. */
+function finishEscalated(
+  escalation: Escalation,
+  excluded: number[],
+  steps: LoopStep[],
+  degraded: boolean,
+  ledger: BudgetLedger,
+): LoopResult {
+  return {
+    status: 'escalate',
+    reason: escalation.suggest,
+    steps,
+    excluded: [...excluded],
+    remaining: ledger.snapshot(),
+    degraded,
+    escalation,
   }
 }
 

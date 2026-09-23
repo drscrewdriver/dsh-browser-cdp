@@ -105,6 +105,7 @@ export const Config = z.object({
   jevMaxImageBytes: z.number().min(0).step(1024).description('Frame byte budget. 0 = unbounded, which is the measured default: a full-page JPEG was 137 KiB, so chunking for bytes alone slices static pages for nothing.'),
   jevHistoryLimit: z.number().min(0).max(20).step(1).description('How many recent steps the judge is shown. Recency beats completeness in a loop.'),
   jevArchiveImage: z.boolean().description('Embed the base64 screenshot in the archived Laya bundle. Off by default: a bundle that always carries hundreds of KiB is a bundle nobody keeps.'),
+  jevEvaluate: z.boolean().description('After every action, ask the judge whether the step actually advanced: inprogress / done / fail. inprogress continues silently; done is checked against successCriteria; fail hands back to the model for recovery (reload, re-capture, ...). Costs one judgement call per action.'),
   jevStepBudget: z.number().min(1).max(200).step(1).description('Judgement rounds allowed in one bcdp_jev_run before it stops as exhausted.'),
   jevWallMs: z.number().min(1000).max(3600000).step(1000).description('Wall-clock ceiling for one bcdp_jev_run, in ms.'),
 })
@@ -269,6 +270,7 @@ export function judgeSettingsOf(config: ResolvedConfig): JudgeSettings {
     maxImageBytes: config.jevMaxImageBytes,
     historyLimit: config.jevHistoryLimit,
     archiveImage: config.jevArchiveImage,
+    evaluate: config.jevEvaluate,
     stepBudget: config.jevStepBudget,
     wallMs: config.jevWallMs,
   }
@@ -353,6 +355,11 @@ export function resolveConfig(config: RawConfig = {}): ResolvedConfig {
     jevMaxImageBytes: finiteIn(config.jevMaxImageBytes, 0, 512 * 1024 * 1024) ? config.jevMaxImageBytes : 0,
     jevHistoryLimit: finiteIn(config.jevHistoryLimit, 0, 20) ? config.jevHistoryLimit : 5,
     jevArchiveImage: config.jevArchiveImage === undefined ? false : Boolean(config.jevArchiveImage),
+    // ON by default, and the cost is stated rather than hidden: one extra
+    // judgement call per action. Without it the loop can only notice failure
+    // indirectly (an action error, or a run of unclear answers), which misses
+    // the most common case of all — the action succeeded and changed nothing.
+    jevEvaluate: config.jevEvaluate === undefined ? true : Boolean(config.jevEvaluate),
     jevStepBudget: finiteIn(config.jevStepBudget, 1, 200) ? config.jevStepBudget : 20,
     jevWallMs: finiteIn(config.jevWallMs, 1000, 3600000) ? config.jevWallMs : 120_000,
   }

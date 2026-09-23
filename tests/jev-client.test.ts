@@ -33,6 +33,7 @@ const settings = (over: Partial<JudgeSettings> = {}): JudgeSettings => ({
   maxImageBytes: 0,
   historyLimit: 5,
   archiveImage: false,
+  evaluate: true,
   stepBudget: 20,
   wallMs: 120_000,
   ...over,

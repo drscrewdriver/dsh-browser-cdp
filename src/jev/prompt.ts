@@ -441,6 +441,49 @@ export function controlQuestions(canScroll: boolean): Record<string, Question> {
   return { [CONTROL_CHOICE_ID]: controlQuestion(canScroll) }
 }
 
+/** The evaluation round's question id. */
+export const EVALUATION_CHOICE_ID = 'progress'
+
+/** The three progress verdicts. Deliberately three, and deliberately not a score. */
+export const PROGRESS_VERDICTS = ['inprogress', 'done', 'fail'] as const
+export type ProgressVerdict = (typeof PROGRESS_VERDICTS)[number]
+
+/**
+ * The progress evaluation, asked AFTER an action.
+ *
+ * Three options rather than a `score`, because the three outcomes lead to three
+ * different PLACES and an ordinal scale cannot express that:
+ *
+ *   inprogress → the loop continues by itself, nobody is told
+ *   done       → checked against successCriteria, then the run ends
+ *   fail       → handed back to the model with recovery options
+ *
+ * A `score` of 0..4 would need a threshold on top, and the threshold would then
+ * be the thing deciding whether to hand back — one more number to calibrate for
+ * no gain over simply naming the three states.
+ *
+ * The question is about the STEP, not the goal: `done` here means "the action I
+ * just took finished the job", which is why it is worth re-checking rather than
+ * believing. The failure it catches is the commonest one of all — an action that
+ * reports success and changes nothing.
+ */
+export function evaluationQuestion(): ChoiceQuestion {
+  return choice(
+    'The action above has just been carried out. Did it move the intent forward? Pick exactly one.',
+    {
+      inprogress:
+        'the action had an effect and the intent is closer, but more steps are still needed — continue',
+      done: 'the intent is now fully satisfied by what is on screen, so no further action is required',
+      fail: 'the action did not achieve what it was for, or the page did not change as expected — this needs a different approach',
+    },
+  )
+}
+
+/** The evaluation round's question set. */
+export function evaluationQuestions(): Record<string, Question> {
+  return { [EVALUATION_CHOICE_ID]: evaluationQuestion() }
+}
+
 /** The chapter round's question set: one question, keyed `chapter`. */
 export const CHAPTER_CHOICE_ID = 'chapter'
 

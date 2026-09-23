@@ -204,6 +204,8 @@ export interface JudgeSettings {
   maxImageBytes: number
   historyLimit: number
   archiveImage: boolean
+  /** Ask the judge after each action whether the step advanced. */
+  evaluate: boolean
   stepBudget: number
   wallMs: number
 }
@@ -283,6 +285,11 @@ export interface ResolvedConfig {
   jevHistoryLimit: number
   /** Embed the base64 image in the archived Laya bundle. Off: bundles stay small. */
   jevArchiveImage: boolean
+  /**
+   * Ask a judge after every action whether the step advanced
+   * (inprogress / done / fail). Off = the loop only notices failure indirectly.
+   */
+  jevEvaluate: boolean
   /** Judgement rounds allowed in one loop run before `exhausted`. */
   jevStepBudget: number
   /** Wall-clock ceiling for one loop run, in ms. */

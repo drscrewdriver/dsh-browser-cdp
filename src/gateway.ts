@@ -56,7 +56,7 @@ const ALLOWED_KEYS = new Set<string>([
   // hop that can never be enabled.
   'jevUrl', 'jevKey', 'jevModel', 'layaUrl', 'layaKey', 'layaModel',
   'judgePrefer', 'jevChunkSize', 'jevMaxImageBytes', 'jevHistoryLimit',
-  'jevArchiveImage', 'jevStepBudget', 'jevWallMs',
+  'jevArchiveImage', 'jevEvaluate', 'jevStepBudget', 'jevWallMs',
 ])
 
 interface EnvelopeOk<T> { ok: true; value: T }

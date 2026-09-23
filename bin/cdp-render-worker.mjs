@@ -279,6 +279,193 @@ async function gatherInteractive(limit) {
   return out
 }
 
+/**
+ * Act on a numbered candidate, re-measuring first — or reload the page.
+ *
+ * This mirrors `src/jev/act.ts`. That module declares the DISCIPLINE and is
+ * unit-tested plugin-side against a scripted fake; the actual CDP calls have to
+ * live here, because the plugin's Node process has no CDP channel (every
+ * `src/cdp/*` module runs inside a worker like this one).
+ *
+ * The discipline, unchanged: a rect from the frame is NEVER the click target.
+ *     backendNodeId -> DOM.getBoxModel (fresh) -> DOM.getNodeForLocation (pre)
+ *                   -> click -> DOM.getNodeForLocation (post)
+ * The pre-check is what catches an overlay WITHOUT dispatching a stray click.
+ */
+async function actOnCandidate(params) {
+  const backendNodeId = Number(params.backendNodeId)
+  const action = String(params.action || 'click')
+  if (state.sessionId === '') await attachPage(params)
+
+  // `reload` is checked BEFORE the candidate check on purpose: it is a page-level
+  // action with no target, and requiring a backendNodeId would make the one
+  // recovery most likely to help the one that cannot be requested.
+  if (action === 'reload') {
+    await call('Page.reload', { ignoreCache: true }, undefined, 25000)
+    // A reload must settle before the next capture, or the frame shows a
+    // half-built page and the judgement that follows is about nothing. Waited
+    // here rather than in the caller because only this process sees the document.
+    const settled = await waitForLoad(25000)
+    return {
+      ok: true,
+      code: 'ok',
+      action: 'reload',
+      backendNodeId: 0,
+      point: { x: 0, y: 0 },
+      measured: null,
+      drift: 0,
+      settled,
+    }
+  }
+
+  if (!Number.isFinite(backendNodeId) || backendNodeId <= 0) {
+    return { ok: false, code: 'no-candidate', message: 'act needs a positive backendNodeId' }
+  }
+
+  if (action === 'scroll') {
+    const deltaY = Number(params.deltaY)
+    if (!Number.isFinite(deltaY) || deltaY === 0) {
+      return { ok: false, code: 'bad-delta', message: 'scroll needs a non-zero deltaY' }
+    }
+    // A wheel event needs a point; the viewport centre is neutral and needs no
+    // measurement.
+    const centre = await viewportCentre()
+    await call('Input.dispatchMouseEvent', {
+      type: 'mouseWheel', x: centre.x, y: centre.y, deltaX: 0, deltaY, button: 'none', buttons: 0, clickCount: 0,
+    })
+    return { ok: true, code: 'ok', action: 'scroll', backendNodeId: 0, point: centre, measured: null, drift: 0 }
+  }
+
+  if (action === 'fill') {
+    const text = String(params.text ?? '')
+    if (text === '') return { ok: false, code: 'empty-text', message: 'fill needs non-empty text' }
+    const measured = await measure(backendNodeId)
+    if (!measured.ok) return measured
+    // Focus then insert. NEVER assign `.value`: a controlled input re-renders
+    // from its own state and would wipe it, and no input/change event fires, so
+    // the page believes the field is empty while a screenshot shows text.
+    await call('DOM.focus', { backendNodeId })
+    await call('Input.insertText', { text })
+    return { ok: true, code: 'ok', action: 'fill', backendNodeId, point: measured.centre, measured: measured.rect, drift: measured.drift }
+  }
+
+  const measured = await measure(backendNodeId)
+  if (!measured.ok) return measured
+
+  // PRE-check: is this node still the topmost thing at the measured point? Run
+  // before dispatching, so an overlay costs nothing instead of costing a click.
+  const hit = await call('DOM.getNodeForLocation', {
+    x: Math.round(measured.centre.x), y: Math.round(measured.centre.y), includeUserAgentShadowDOM: false,
+  })
+  if (Number(hit?.backendNodeId) !== backendNodeId) {
+    const at = Math.round(measured.centre.x) + ',' + Math.round(measured.centre.y)
+    return {
+      ok: false,
+      code: 'click-missed',
+      message: 'candidate measured to ' + at + ' but that point resolves to backendNodeId ' +
+        String(hit?.backendNodeId) + ' - something is on top of it or the page moved',
+    }
+  }
+
+  for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased']) {
+    await call('Input.dispatchMouseEvent', {
+      type,
+      x: Math.round(measured.centre.x),
+      y: Math.round(measured.centre.y),
+      button: 'left',
+      buttons: type === 'mousePressed' ? 1 : 0,
+      clickCount: type === 'mouseMoved' ? 0 : 1,
+    })
+  }
+
+  // POST-check: a mid-flight re-layout is reported, not hidden.
+  const after = await call('DOM.getNodeForLocation', {
+    x: Math.round(measured.centre.x), y: Math.round(measured.centre.y), includeUserAgentShadowDOM: false,
+  })
+  if (Number(after?.backendNodeId) !== backendNodeId) {
+    return { ok: false, code: 'click-missed', message: 'the click dispatched but the point now resolves to a different node' }
+  }
+  return { ok: true, code: 'ok', action: 'click', backendNodeId, point: measured.centre, measured: measured.rect, drift: measured.drift }
+}
+
+/** A current box model plus the point to act on, for one node. */
+async function measure(backendNodeId) {
+  let model
+  try {
+    model = await call('DOM.getBoxModel', { backendNodeId })
+  } catch (error) {
+    return { ok: false, code: 'no-box-model', message: error instanceof Error ? error.message : String(error) }
+  }
+  const rect = quadToRect(model?.model?.content)
+  if (rect === null) return { ok: false, code: 'no-box-model', message: 'DOM.getBoxModel returned no usable content quad' }
+  // CDP boxes are DOCUMENT space; input coordinates are VIEWPORT space. Adding
+  // the scroll offset back is what keeps a click on the right element after the
+  // page has scrolled - the bug that only shows up on scrolled pages, i.e.
+  // never during a smoke test.
+  const scroll = await readScroll()
+  const viewportRect = { ...rect, x: rect.x - scroll.x, y: rect.y - scroll.y }
+  return {
+    ok: true,
+    rect: viewportRect,
+    centre: { x: viewportRect.x + viewportRect.width / 2, y: viewportRect.y + viewportRect.height / 2 },
+    drift: 0,
+  }
+}
+
+/** The page's scroll offset; zero when it cannot be read. */
+async function readScroll() {
+  try {
+    const result = await call('Runtime.evaluate', { expression: '[window.scrollX, window.scrollY]', returnByValue: true })
+    const value = result?.result?.value
+    if (Array.isArray(value) && value.length >= 2) return { x: Number(value[0]) || 0, y: Number(value[1]) || 0 }
+  } catch { /* a missing scroll offset must not fail the action */ }
+  return { x: 0, y: 0 }
+}
+
+/** The viewport centre, for an action that needs a point but no target. */
+async function viewportCentre() {
+  try {
+    const metrics = await call('Page.getLayoutMetrics', {})
+    const visual = metrics?.cssVisualViewport || metrics?.visualViewport
+    const w = Number(visual?.clientWidth) || 0
+    const h = Number(visual?.clientHeight) || 0
+    if (w > 0 && h > 0) return { x: Math.round(w / 2), y: Math.round(h / 2) }
+  } catch { /* fall through to the origin */ }
+  return { x: 0, y: 0 }
+}
+
+/**
+ * Wait for the document to finish loading, bounded.
+ *
+ * Polls `document.readyState` rather than subscribing to `Page.loadEventFired`,
+ * because the event may already have fired between the reload ack and this call,
+ * and a listener added after the fact waits forever. Bounded because a page that
+ * never reaches `complete` (a hanging resource) must not hang the worker.
+ */
+async function waitForLoad(timeoutMs) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    try {
+      const result = await call('Runtime.evaluate', { expression: 'document.readyState', returnByValue: true }, undefined, 5000)
+      const readyState = result?.result?.value
+      if (readyState === 'complete' || readyState === 'interactive') return true
+    } catch { /* keep polling until the deadline */ }
+    await new Promise((resolve) => setTimeout(resolve, 150))
+  }
+  return false
+}
+
+/** A CDP quad is 8 numbers: x1,y1 .. x4,y4. */
+function quadToRect(quad) {
+  if (!Array.isArray(quad) || quad.length < 8) return null
+  const xs = [Number(quad[0]), Number(quad[2]), Number(quad[4]), Number(quad[6])]
+  const ys = [Number(quad[1]), Number(quad[3]), Number(quad[5]), Number(quad[7])]
+  if ([...xs, ...ys].some((value) => !Number.isFinite(value))) return null
+  const x = Math.min(...xs)
+  const y = Math.min(...ys)
+  return { x, y, width: Math.max(...xs) - x, height: Math.max(...ys) - y }
+}
+
 async function viewportInfo() {
   const fallback = { width: 0, height: 0, scrollX: 0, scrollY: 0, devicePixelRatio: 1 }
   try {

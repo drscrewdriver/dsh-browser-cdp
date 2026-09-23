@@ -1,3 +1,24 @@
+## [Unreleased] — 连接类型多态化：本机 ego CLI 连接对象（阶段 9 / R7，分支 stage9-ego-cli）
+
+### 新增
+- **连接序列类型化**：`BrowserLink = CdpLink | EgoCliLink`（判别字段 `kind: 'cdp' | 'ego-cli'`）。数组顺序**仍是优先级**，`activeTargetId` 可指向任一类型。
+- **本机 ego CLI 连接**（`kind='ego-cli'`，**仅限本机，全局至多一条**）：
+  - CLI 解析四级链：显式 `cliPath` → PATH 的 `ego-browser` → macOS app 包内 helper（`/Applications/ego lite.app/…/Helpers/ego-browser`）→ 内置运行时；
+  - **spawn 形态探测**：先**直接执行**，遇 `EACCES`/`ENOEXEC`/`ENOENT` 则回退 `node <path>`（真 CLI 是 app 包里的可执行文件，`ego-browser-v2`/内置版是 JS——两种形态都真实存在，猜后缀会全线不可用）；
+  - **不注入 `EGO_LINUX_CDP_URL`**：该 env 只属于内置 Linux 移植版，macOS 原生 CLI 不读；这正是本类型存在的理由；
+  - **就绪探测以最小 heredoc 为准**（与干活同一条 `nodejs` 通道）；`--status` 仅作 2s 短超时的**机会性**快速路径（CLI 报 `unknown option` 或非 JSON 时静默降级、**不判败**）；
+  - 失败码五类且**不静默回落**：`cli-not-found` / `cli-not-executable` / `cli-probe-timeout` / `cli-probe-failed` / `cli-sdk-path-unsupported`。
+- **`--sdk-path` 为可选能力**：默认不传（用 CLI 自带的官方配对 harness）；显式开启时若被拒（`unknown option`）→ 记 `cli-sdk-path-unsupported` 并**自动重试一次不带该旗标**。
+- `bcdp_doctor` 新增：`links: n (cdp x, ego-cli y)`、`cli: <path> (<origin>, shape <shape>)`、`naming: … legacy ego_* aliases OFF/ON`、上游插件同机安装时 `conflict:` 警告。
+
+### 变更（Breaking）
+- 设置键 `cdpTargets` → **`links`**（旧键**一版兜底读取**，其行等价于 `kind='cdp'`，**零丢失**）。
+- `cdpMode='remote'` 与激活项为本机 CLI 组合 → 显式 `mode-kind-mismatch`（不再静默改用其它项）。
+- `remoteEnabled` 语义收窄为**只管远端 CDP**：本机 CLI 连接不受其影响。
+
+### 修复
+- `makeWhich` 的路径分隔符与 PATH 分隔符改为跟随**被模拟的平台**（原用 `node:path` 的宿主值，darwin/linux 查找在 Windows 上会拼成 `dir\file` 而永远找不到）。
+
 ## [0.16.0] - 2026-09-23 — 阶段 2b 收尾 + 远端 CDP 软禁用开关
 
 ### 新增

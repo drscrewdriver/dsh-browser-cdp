@@ -35,7 +35,7 @@
  * 加工具：在 registerActionTools 里 reg(t({...}))，并同步 EGO_HELP_INDEX，跑 npm run build。
  */
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import { existsSync } from 'node:fs'
+import { existsSync, readdirSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { importLoginCookies } from './login-import.ts'
@@ -52,9 +52,12 @@ import {
   decideAttach,
   defaultAttachCache,
   refreshAttach,
+  sanitizeLinks,
   type AttachDecision,
+  EGO_CLI_KIND,
 } from './cdp-targets.ts'
-import type { EgoContext, RawConfig, ResolvedConfig, SubprocessService, ToolExec, WebServerLike, CdpTarget, CdpMode } from './types.ts'
+import { createSubprocessCliIo, resolveCliBinary, spawnArgvFor, type SpawnShape } from './cdp/cli-link.ts'
+import type { EgoContext, RawConfig, ResolvedConfig, SubprocessService, ToolExec, WebServerLike, BrowserLink, CdpMode } from './types.ts'
 
 export const name = 'dsh-browser-cdp'
 // Platform-aware host services: the web shell exposes `webServer`, other Web
@@ -392,6 +395,9 @@ export function decideCdpAttach(cfg: Partial<ResolvedConfig>): AttachDecision {
     message: attach.message,
     allowLocalFallback: Boolean(cfg?.allowLocalFallback),
     remoteDisabled: attach.code === 'remote-disabled',
+    // R7 — the decision table needs the activated kind: an `ego-cli` link
+    // bypasses the endpoint branches entirely.
+    ...(attach.linkKind ? { linkKind: attach.linkKind } : {}),
     // M0.9 launcher (stage 2b) is wired: an authorized fallback launches a
     // managed local browser inside refreshAttach (async path), so the sync
     // decision table just needs to know the capability exists.
@@ -510,7 +516,7 @@ async function openAgentWindow(ctx: EgoContext, cfg: EgoRuntimeConfig): Promise<
     const gate = cdpAttachError(cfg)
     if (gate) return { ok: false, error: gate }
     const handle = ctx.subprocess.spawn({
-      argv: [process.execPath, cfg.egoBin, '--open'],
+      argv: [...cfg.egoArgvPrefix, '--open'],
       cwd: process.cwd(),
       env: resolveEgoEnv(cfg),
       stdio: {
@@ -561,6 +567,29 @@ function parseSentinel(stdout: string): Record<string, unknown> | undefined {
   return undefined
 }
 
+/**
+ * R7 — is the upstream plugin installed anywhere under this DSH home?
+ *
+ * Reported (never enforced): the two plugins can coexist now that tool names
+ * and routes no longer overlap, but both driving ONE local ego-lite would
+ * fight over the same task spaces, and the upstream handoff API has no
+ * ownership check. A warning is the honest limit of what we can do here.
+ */
+export function findUpstreamPluginInstall(
+  home: string = process.env.HOME || process.env.USERPROFILE || homedir(),
+): string {
+  const profiles = `${home}/.dsh/profiles`
+  try {
+    for (const profile of readdirSync(profiles)) {
+      const dir = `${profiles}/${profile}/node_modules/dsh-ego-browser`
+      if (existsSync(dir)) return dir
+    }
+  } catch {
+    /* no profiles directory: nothing to report */
+  }
+  return ''
+}
+
 /** The live runtime config object built in apply() (getters read the settings bridge). */
 interface EgoRuntimeConfig {
   egoBin: string
@@ -586,8 +615,17 @@ interface EgoRuntimeConfig {
   readonly idleTimeoutMin: number
   readonly chromeArgs: string
   readonly isolateSpaces: boolean
-  // ── R1: CDP sequence + activation ───────────────────────────────────────
-  readonly cdpTargets: CdpTarget[]
+  // ── R1/R7: connection sequence + activation ─────────────────────────────
+  readonly links: BrowserLink[]
+  /** R7 — extra `ego-cli` rows that sanitize dropped (local-only singleton). */
+  readonly droppedEgoCli: number
+  /**
+   * R7 — shape-aware argv prefix for the ego CLI. `[node, <file>]` for the
+   * bundled port / `ego-browser-v2`, `[<file>]` for a real executable (the
+   * macOS app-bundle helper). Computed from the attach cache, which knows the
+   * probed shape.
+   */
+  readonly egoArgvPrefix: string[]
   readonly activeTargetId: string
   readonly cdpMode: CdpMode
   readonly cdpProbeTimeoutMs: number
@@ -616,7 +654,7 @@ async function runEgoScript(subprocess: SubprocessService, script: string, exec:
     const extraCliArgs = filterArgs(cfg.runtimeArgs ?? '', EGO_CLI_BLOCKED)
     handle = subprocess.spawn({
       // Run through the node interpreter so the vendored CLI needs no +x bit.
-      argv: [process.execPath, cfg.egoBin, 'nodejs', ...extraCliArgs],
+      argv: [...cfg.egoArgvPrefix, 'nodejs', ...extraCliArgs],
       cwd: process.cwd(),
       env: resolveEgoEnv(cfg),
       stdio: {
@@ -838,7 +876,23 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
     get isolateSpaces() { return resolveConfig(bridge.source() as RawConfig).isolateSpaces },
     get idleTimeoutMin() { return resolveConfig(bridge.source() as RawConfig).idleTimeoutMin },
     // ── R1: CDP sequence + activation ────────────────────────────────────
-    get cdpTargets() { return resolveConfig(bridge.source() as RawConfig).cdpTargets },
+    get links() { return resolveConfig(bridge.source() as RawConfig).links },
+    // Read from the RAW source on purpose: the drop count only exists before
+    // resolveConfig folds the sequence, so it cannot come from `links`.
+    get droppedEgoCli() {
+      const raw = bridge.source() as RawConfig
+      return sanitizeLinks(raw.links ?? raw.cdpTargets).droppedEgoCli
+    },
+    // R7 — the CLI argv prefix follows the PROBED link: an `ego-cli` link
+    // knows its path and spawn shape; everything else keeps the vendored
+    // runtime behind the node interpreter.
+    get egoArgvPrefix() {
+      const attach = defaultAttachCache.get()
+      if (attach.linkKind === EGO_CLI_KIND && attach.cliPath) {
+        return spawnArgvFor((attach.cliShape === 'node' ? 'node' : 'direct') as SpawnShape, attach.cliPath, [])
+      }
+      return [process.execPath, this.egoBin]
+    },
     get activeTargetId() { return resolveConfig(bridge.source() as RawConfig).activeTargetId },
     get cdpMode() { return resolveConfig(bridge.source() as RawConfig).cdpMode },
     get cdpProbeTimeoutMs() { return resolveConfig(bridge.source() as RawConfig).cdpProbeTimeoutMs },
@@ -894,7 +948,7 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
       try {
         const resolved = resolveConfig(bridge.source() as RawConfig)
         const attach = await refreshAttach({
-          targets: resolved.cdpTargets,
+          targets: resolved.links,
           activeTargetId: resolved.activeTargetId,
           mode: resolved.cdpMode,
           timeoutMs: resolved.cdpProbeTimeoutMs,
@@ -910,6 +964,11 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
           },
           remoteEnabled: resolved.remoteEnabled,
           useLauncher: true,
+          // R7 — the local ego CLI link probes through the host subprocess
+          // service, and gets our bundled harness only when it opts in.
+          cliIo: createSubprocessCliIo(ctx.subprocess),
+          sdkPath: fileURLToPath(new URL('../runtime/ego-browser/dist/out/index.js', import.meta.url)),
+          bundledCli: VENDORED_EGO_BIN,
         })
         const ws = attach.status === 'ready' && attach.wsUrl !== '' ? attach.wsUrl : null
         if (setAttachEndpoint(ws)) {
@@ -1107,7 +1166,7 @@ function registerEgoStatus(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool: T
         withEgoLock(async () => {
           try {
             const handle = ctx.subprocess.spawn({
-              argv: [process.execPath, cfg.egoBin, '--status'],
+              argv: [...cfg.egoArgvPrefix, '--status'],
               cwd: process.cwd(),
               env: resolveEgoEnv(cfg),
               stdio: {
@@ -2364,6 +2423,26 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
         const attachNow = defaultAttachCache.get()
         lines.push(`remote CDP: ${cfg.remoteEnabled === false ? 'DISABLED by switch (sequence preserved)' : 'enabled'}`)
         lines.push(`attach: ${attachNow.status}${attachNow.endpointSource ? ` (source: ${attachNow.endpointSource})` : ''}${attachNow.endpoint ? ` @ ${attachNow.endpoint}` : ''}`)
+        // ── R7: connection kinds, the local CLI, and the conflict guard ────
+        const kindCount = (kind: string): number => cfg.links.filter((link) => link.kind === kind).length
+        const dropped = cfg.droppedEgoCli
+        lines.push(`links: ${cfg.links.length} (cdp ${kindCount('cdp')}, ego-cli ${kindCount(EGO_CLI_KIND)})${dropped > 0 ? ` — ${dropped} extra ego-cli row(s) dropped (local-only singleton)` : ''}`)
+        // Resolve the CLI for real (no process is spawned for resolution) so the
+        // doctor reports what a call would actually launch, not what was probed.
+        const cliLink = cfg.links.find((link) => link.kind === EGO_CLI_KIND)
+        if (cliLink && cliLink.kind === EGO_CLI_KIND) {
+          const resolved = resolveCliBinary({ cliPath: cliLink.cliPath, bundled: VENDORED_EGO_BIN }, createSubprocessCliIo(ctx.subprocess))
+          lines.push(resolved.ok
+            ? `cli: ${resolved.path} (${resolved.origin}${attachNow.cliShape ? `, shape ${attachNow.cliShape}` : ''})`
+            : `cli: (missing) — ${resolved.message}`)
+        }
+        const toolCount = ((EGO_HELP_INDEX['tools'] ?? '').match(/bcdp_/g) ?? []).length
+        const legacy = cfg.legacyEgoToolNames === true
+        lines.push(`naming: ${toolCount} bcdp_* tools; legacy ego_* aliases ${legacy ? 'ON (mutually exclusive with the upstream plugin)' : 'OFF (coexists with the upstream plugin)'}`)
+        const upstream = findUpstreamPluginInstall()
+        if (upstream !== '') {
+          lines.push(`conflict: upstream dsh-ego-browser installed at ${upstream} — only one plugin should drive the local ego-lite (they would share its task spaces)`)
+        }
         lines.push(`chromeArgs (effective, next cold start): ${chrArgs.length ? chrArgs.join(' ') : '(none)'}`)
         // state dir + runtime state
         const isWin = process.platform === 'win32'

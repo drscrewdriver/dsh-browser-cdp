@@ -1,6 +1,6 @@
 import z from 'schemastery'
-import type { CdpTarget, RawConfig, ResolvedConfig } from './types.ts'
-import { sanitizeTargets } from './cdp-targets.ts'
+import type { LinkBase, RawConfig, ResolvedConfig } from './types.ts'
+import { sanitizeLinks } from './cdp-targets.ts'
 
 const backend = z.union(['auto', 'cdp', 'ffmpeg'])
 const profile = z.union(['low', 'balanced', 'high'])
@@ -32,23 +32,46 @@ export const Config = z.object({
   // control flags are stripped (see EGO_CLI_BLOCKED / CHROME_BLOCKED below).
   runtimeArgs: z.string().description('Extra args appended to the vendored runtime argv. Takes effect on the next bcdp_* call.'),
   chromeArgs: z.string().description('Extra args appended to the Chrome launch argv. Takes effect on the next browser cold start (the browser is a singleton).'),
-  // ── R1: CDP target sequence + activation ────────────────────────────────
-  // `cdpTargets` is the ordered sequence; `activeTargetId` singles out one of
-  // them. Probe fields ride along so the panel can paint a reachability badge
-  // right after startup, before any probe round-trip has happened.
-  cdpTargets: z.array(z.object({
-    id: z.string(),
-    label: z.string(),
-    endpoint: z.string(),
-    enabled: z.boolean(),
-    note: z.string(),
-    probeStatus: z.union(['unknown', 'ok', 'error']),
-    probeLatencyMs: z.number(),
-    probeError: z.string(),
-    probeCode: z.string(),
-    probeAt: z.number(),
-  })).description('Ordered CDP target sequence. Only the ACTIVATED and enabled entry receives every bcdp_* call.'),
-  activeTargetId: z.string().description('Id of the activated entry in cdpTargets. Empty = nothing activated.'),
+  // ── R1/R7: connection sequence + activation ─────────────────────────────
+  // `links` is the ordered sequence (priority order); `activeTargetId` singles
+  // out one of them. Probe fields ride along so the panel can paint a
+  // reachability badge right after startup, before any probe round-trip.
+  //
+  // R7 widened the element type: `kind:'cdp'` (an endpoint) or `kind:'ego-cli'`
+  // (the local CLI drives its own browser; at most one per machine). The schema
+  // stays PERMISSIVE on purpose — a pre-R7 row has no `kind` at all and must
+  // still validate, because `coerceLink()` is the real gate (it defaults a
+  // missing kind to `cdp` and drops anything unusable).
+  links: z.array(z.union([
+    z.object({
+      kind: z.string(),
+      id: z.string(),
+      label: z.string(),
+      endpoint: z.string(),
+      enabled: z.boolean(),
+      note: z.string(),
+      probeStatus: z.union(['unknown', 'ok', 'error']),
+      probeLatencyMs: z.number(),
+      probeError: z.string(),
+      probeCode: z.string(),
+      probeAt: z.number(),
+    }),
+    z.object({
+      kind: z.string(),
+      id: z.string(),
+      label: z.string(),
+      cliPath: z.string(),
+      useSdkPath: z.boolean(),
+      enabled: z.boolean(),
+      note: z.string(),
+      probeStatus: z.union(['unknown', 'ok', 'error']),
+      probeLatencyMs: z.number(),
+      probeError: z.string(),
+      probeCode: z.string(),
+      probeAt: z.number(),
+    }),
+  ])).description('Ordered connection sequence: CDP endpoints and (at most one) local ego CLI link. Only the ACTIVATED and enabled entry receives every bcdp_* call. Order IS the priority order.'),
+  activeTargetId: z.string().description('Id of the activated entry in links. Empty = nothing activated.'),
   cdpMode: cdpMode.description('auto = use the activated target and never start a local browser silently; remote = only ever connect to the activated target; local = always use local browser control.'),
   cdpProbeTimeoutMs: z.number().min(200).max(30000).step(100).description('Timeout for one CDP endpoint probe (http endpoints answer /json/version).'),
   // ── R4: screenshot material ─────────────────────────────────────────────
@@ -232,10 +255,16 @@ export function resolveConfig(config: RawConfig = {}): ResolvedConfig {
     chromeArgs: typeof config.chromeArgs === 'string' ? config.chromeArgs : '',
     isolateSpaces: typeof config.isolateSpaces === 'boolean' ? config.isolateSpaces : config.isolateSpaces === 'true' || config.isolateSpaces === '1' || config.isolateSpaces === 1,
     idleTimeoutMin: finiteIn(config.idleTimeoutMin, 0, 1440) ? config.idleTimeoutMin : 0,
-    // CDP sequence: every entry is sanitized (bad endpoints dropped) and probe
-    // state is normalized to defaults so a partially written row cannot leave
-    // the panel rendering `undefined` badges.
-    cdpTargets: sanitizeTargets(config.cdpTargets).map(normalizeProbeState),
+    // Connection sequence (R1/R7): every entry is sanitized (unusable rows
+    // dropped, the ego-cli singleton enforced) and probe state normalized so a
+    // partially written row cannot leave the panel rendering `undefined`.
+    //
+    // v0.17.0 rename: cdpTargets -> links. The old key is read one version back
+    // and its rows are indistinguishable from `kind:'cdp'` links, which is
+    // exactly what coerceLink() defaults them to.
+    links: sanitizeLinks(
+      config.links ?? (config as Record<string, unknown>).cdpTargets,
+    ).links.map(normalizeProbeState),
     activeTargetId: typeof config.activeTargetId === 'string' ? config.activeTargetId : '',
     cdpMode: oneOf(config.cdpMode, ['auto', 'local', 'remote'], 'auto'),
     cdpProbeTimeoutMs: finiteIn(config.cdpProbeTimeoutMs, 200, 30000) ? config.cdpProbeTimeoutMs : 3000,
@@ -250,16 +279,17 @@ export function resolveConfig(config: RawConfig = {}): ResolvedConfig {
 }
 
 /**
- * Fill the per-target probe fields so downstream code (panel badge, doctor
- * output) can read them without a null-check ladder.
+ * Fill the per-link probe fields so downstream code (panel badge, doctor
+ * output) can read them without a null-check ladder. Generic over the link
+ * union so the discriminating `kind` (and every kind-specific field) survives.
  */
-export function normalizeProbeState(target: CdpTarget): CdpTarget {
+export function normalizeProbeState<T extends LinkBase>(link: T): T {
   return {
-    ...target,
-    probeStatus: target.probeStatus === 'ok' || target.probeStatus === 'error' ? target.probeStatus : 'unknown',
-    probeLatencyMs: typeof target.probeLatencyMs === 'number' && Number.isFinite(target.probeLatencyMs) ? target.probeLatencyMs : 0,
-    probeError: typeof target.probeError === 'string' ? target.probeError : '',
-    probeCode: typeof target.probeCode === 'string' ? target.probeCode : '',
-    probeAt: typeof target.probeAt === 'number' && Number.isFinite(target.probeAt) ? target.probeAt : 0,
+    ...link,
+    probeStatus: link.probeStatus === 'ok' || link.probeStatus === 'error' ? link.probeStatus : 'unknown',
+    probeLatencyMs: typeof link.probeLatencyMs === 'number' && Number.isFinite(link.probeLatencyMs) ? link.probeLatencyMs : 0,
+    probeError: typeof link.probeError === 'string' ? link.probeError : '',
+    probeCode: typeof link.probeCode === 'string' ? link.probeCode : '',
+    probeAt: typeof link.probeAt === 'number' && Number.isFinite(link.probeAt) ? link.probeAt : 0,
   }
 }

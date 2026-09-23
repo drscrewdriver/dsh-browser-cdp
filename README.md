@@ -140,7 +140,33 @@ dshx list                                                # 应显示：[on] dsh-
 
 无需宿主侧任何配置：`resolveEgoEnv` 自动探测 root / 无显示器并兜底。观察窗 host 路由（`/api/bcdp/spaces` 等）仅在有 HTTP server 时注册，headless 是安全 no-op。
 
-## 工具清单（32 个，前缀 `ego_`，完整索引见 `ego_help`）
+## 连接方式：CDP 端点 / 本机 ego CLI
+
+设置面板里的连接列表是**有序**的——**顺序即优先级**，被激活的那一项驱动每一次 `bcdp_*` 调用。列表元素有两种类型：
+
+| 类型 | 它做什么 | 约束 |
+|---|---|---|
+| **CDP 端点** | 把一个已开调试端口的浏览器地址交给内置运行时（注入 `EGO_LINUX_CDP_URL`），运行时**附着**上去 | 可多条 |
+| **本机 ego CLI** | 由本机 ego CLI **自己**驱动它本机的 ego-lite 浏览器——**不注入任何端点** | **仅限本机，全局至多一条** |
+
+**为什么需要第二种**：注入用的 `EGO_LINUX_CDP_URL` 是**内置 Linux 移植版**的私有契约，macOS 上用 `ego lite` app 附带的那个原生 `ego-browser` **根本不读它**。所以在只有"CDP 端点"这一种类型时，macOS 用户无法用上自己那个已登录的 ego-lite——只能连远端端口，或让移植版另起一个 stock Chromium。本机 CLI 类型补的就是这条路。
+
+解析顺序（`cliPath` 留空时）：显式路径 → PATH 上的 `ego-browser` → macOS app 包内 helper（`/Applications/ego lite.app/…/Helpers/ego-browser`）→ 插件内置运行时。
+
+两个默认值值得知道：
+
+- **`--sdk-path` 默认关闭**：默认用 CLI 自带的 harness（官方配对的那套）；打开后才注入本插件的 harness 包。若 CLI 不认这个旗标，插件会记一条提示并**自动重试一次不带它**——不会因此废掉整条链路。
+- **就绪探测会走一次真实的 heredoc**（与我们干活用的是同一条通道），所以它**不是免费的**：探测可能冷启动后端浏览器（实测内置移植版约 1.3 s）。
+
+与其它开关的关系：
+
+- `cdpMode`：`auto` 按激活项（两种类型都行）；`remote` **只接受 CDP 端点**，激活项是本机 CLI 时会显式报 `mode-kind-mismatch`；`local` 走受管本地启动器。
+- `remoteEnabled`（远端总开关）**只管远端 CDP**，不影响本机 CLI 连接。
+- `allowLocalFallback` / `localHeadless` / `localUserDataDir` 只作用于 CDP 端点的回落与受管启动。
+
+`bcdp_doctor` 会报告当前序列类型计数、CLI 实际解析到的路径与形态，以及（若同机装了上游 `dsh-ego-browser`）一条共存提示。
+
+## 工具清单（33 个，前缀 `bcdp_`，完整索引见 `bcdp_help`）
 
 | 类别 | 工具 |
 |---|---|

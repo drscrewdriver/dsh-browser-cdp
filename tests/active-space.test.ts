@@ -57,7 +57,8 @@ function fakeSubprocess(behavior: Array<{ exitCode: number | null; stdout?: stri
 }
 
 const fakeCfg = (tracker: ReturnType<typeof createActiveSpaceTracker>) => ({
-  egoBin: "x", egoCliArgs: "", graceMs: 5000, maxOutputBytes: 4096,
+  // R7 — runEgoScript builds its argv from this prefix (shape-aware).
+  egoBin: "x", egoArgvPrefix: ["node", "x"], graceMs: 5000, maxOutputBytes: 4096,
   configuredDefaultSpace: "dsh-agent", spaceTracker: tracker,
   get defaultSpace() { return tracker.current() },
 }) as never;

@@ -22,9 +22,10 @@
  *     and never touch a real clock or network.
  */
 
-import type { CdpMode, CdpTarget } from './types.ts'
+import type { BrowserLink, BrowserLinkKind, CdpLink, CdpMode, EgoCliLink } from './types.ts'
 import { discoverWebSocketUrl, normalizeEndpoint, type CdpErrorCode } from './cdp/endpoint.ts'
 import { launchLocalBrowser, stopLocalBrowser } from './cdp/launcher.ts'
+import { probeCliLink, type CliLinkIo } from './cdp/cli-link.ts'
 
 // M0.1 (endpoint resolution) now lives in `src/cdp/endpoint.ts` — the
 // acceptance criterion for that module is that only `ws` leaves it. It is
@@ -38,6 +39,16 @@ export const EGO_LINUX_CDP_URL = 'EGO_LINUX_CDP_URL'
 
 /** Hard ceiling on the sequence length (UI + payload sanity, not semantics). */
 export const MAX_TARGETS = 32
+
+/**
+ * R7 — the local-only link kind. Its VALUE is a discriminator, not an
+ * identifier: nothing in our surface is named after it (the upstream plugin
+ * owns `ego_*` tool names, `ego_browser_settings`, `/api/ego/*`, …).
+ */
+export const EGO_CLI_KIND = 'ego-cli'
+
+/** Default panel label for an ego-cli link (no endpoint to fall back to). */
+export const EGO_CLI_LABEL = '本机 ego CLI'
 
 // Endpoint validation + `/json/version` discovery moved to src/cdp/endpoint.ts
 // (M0.1). Re-exported above; nothing is defined here any more.
@@ -53,78 +64,166 @@ export function newTargetId(): string {
   return `t-${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`
 }
 
-/** Coerce one unknown-shaped sequence entry into a `CdpTarget`, or null when unusable. */
-export function coerceTarget(raw: unknown): CdpTarget | null {
+/** Coerce one unknown-shaped sequence entry into a `BrowserLink`, or null when unusable. */
+export function coerceLink(raw: unknown): BrowserLink | null {
   if (typeof raw !== 'object' || raw === null) return null
   const rec = raw as Record<string, unknown>
-  const endpoint = normalizeEndpoint(rec.endpoint)
-  if (!endpoint.ok) return null
-  const label = typeof rec.label === 'string' ? rec.label.trim() : ''
-  const id = typeof rec.id === 'string' && rec.id.trim() !== '' ? rec.id.trim() : newTargetId()
-  return {
-    id,
-    label: label === '' ? endpoint.endpoint : label,
-    endpoint: endpoint.endpoint,
+  const base = {
+    id: typeof rec.id === 'string' && rec.id.trim() !== '' ? rec.id.trim() : newTargetId(),
     enabled: rec.enabled === undefined ? true : Boolean(rec.enabled),
     note: typeof rec.note === 'string' ? rec.note : '',
   }
+  const label = typeof rec.label === 'string' ? rec.label.trim() : ''
+
+  // Non-CDP kinds are recognized BEFORE the endpoint check, because they
+  // legitimately have no endpoint at all.
+  if (rec.kind === EGO_CLI_KIND) {
+    const cliPath = typeof rec.cliPath === 'string' ? rec.cliPath.trim() : ''
+    return {
+      ...base,
+      kind: EGO_CLI_KIND,
+      label: label === '' ? EGO_CLI_LABEL : label,
+      cliPath,
+      ...(rec.useSdkPath === undefined ? {} : { useSdkPath: Boolean(rec.useSdkPath) }),
+    }
+  }
+
+  const endpoint = normalizeEndpoint(rec.endpoint)
+  if (!endpoint.ok) return null
+  // `kind` is optional on read: the legacy `cdpTargets` key had no discriminator,
+  // and forcing every stored row to carry one would reject all pre-R7 data.
+  return {
+    ...base,
+    kind: 'cdp',
+    label: label === '' ? endpoint.endpoint : label,
+    endpoint: endpoint.endpoint,
+  }
+}
+
+/** Result of folding a raw sequence into a usable one. */
+export interface SanitizeLinksResult {
+  links: BrowserLink[]
+  /** Extra `ego-cli` entries that were dropped to honour the local-only singleton. */
+  droppedEgoCli: number
+  /** Entries dropped because they carried no usable identity at all. */
+  droppedInvalid: number
 }
 
 /**
  * Sanitize the persisted sequence. Dirty data is expected here (hand-edited
  * `settings.yaml`, older schema, unknown keys) so the rule is DROP, never
- * throw: every surviving entry carries a usable endpoint, and duplicate ids
- * additionally get fresh ones so ordering/activation stay unambiguous.
+ * throw: every surviving entry is usable, duplicate ids get fresh ones so
+ * ordering/activation stay unambiguous, and the `ego-cli` singleton keeps the
+ * FIRST entry (dropping the rest and counting them for the doctor).
  */
-export function sanitizeTargets(raw: unknown, max: number = MAX_TARGETS): CdpTarget[] {
-  if (!Array.isArray(raw)) return []
-  const out: CdpTarget[] = []
+export function sanitizeLinks(raw: unknown, max: number = MAX_TARGETS): SanitizeLinksResult {
+  if (!Array.isArray(raw)) return { links: [], droppedEgoCli: 0, droppedInvalid: 0 }
+  const out: BrowserLink[] = []
   const seen = new Set<string>()
+  let droppedEgoCli = 0
+  let droppedInvalid = 0
+  let sawEgoCli = false
   for (const entry of raw) {
-    const target = coerceTarget(entry)
-    if (!target) continue
-    if (seen.has(target.id)) target.id = newTargetId()
-    seen.add(target.id)
-    out.push(target)
+    const link = coerceLink(entry)
+    if (!link) { droppedInvalid += 1; continue }
+    if (link.kind === EGO_CLI_KIND) {
+      // Local-only singleton: the machine has exactly one local ego-lite, so a
+      // second entry could only fight the first over the same backend.
+      if (sawEgoCli) { droppedEgoCli += 1; continue }
+      sawEgoCli = true
+    }
+    if (seen.has(link.id)) link.id = newTargetId()
+    seen.add(link.id)
+    out.push(link)
     if (out.length >= max) break
   }
-  return out
-}
-
-export function findTarget(targets: readonly CdpTarget[], id: string): CdpTarget | null {
-  if (id === '') return null
-  return targets.find((target) => target.id === id) ?? null
+  return { links: out, droppedEgoCli, droppedInvalid }
 }
 
 /**
- * The target that currently owns the tools. A disabled entry never wins even
- * if it is still pointed at by `activeTargetId` — its id may be reactivated
- * later without being removed from the sequence.
+ * @deprecated R7 replaced this with `sanitizeLinks`, which also reports what it
+ * dropped. Kept as a thin adapter so the R1-era tests keep asserting the same
+ * list behaviour without edits.
  */
-export function activeTarget(targets: readonly CdpTarget[], activeTargetId: string): CdpTarget | null {
-  const target = findTarget(targets, activeTargetId)
-  return target && target.enabled ? target : null
+export function sanitizeTargets(raw: unknown, max: number = MAX_TARGETS): BrowserLink[] {
+  return sanitizeLinks(raw, max).links
 }
+
+export function findLink(links: readonly BrowserLink[], id: string): BrowserLink | null {
+  if (id === '') return null
+  return links.find((link) => link.id === id) ?? null
+}
+
+/** @deprecated R7 alias of `findLink`. */
+export const findTarget = findLink
+
+/**
+ * The link that currently owns the tools. A disabled entry never wins even if
+ * it is still pointed at by `activeTargetId` — its id may be reactivated later
+ * without being removed from the sequence.
+ */
+export function activeLink(links: readonly BrowserLink[], activeTargetId: string): BrowserLink | null {
+  const link = findLink(links, activeTargetId)
+  return link && link.enabled ? link : null
+}
+
+/** @deprecated R7 alias of `activeLink`. */
+export const activeTarget = activeLink
+
+/** Why an upsert was refused. Refusals are structured, never silent. */
+export type UpsertRefusalCode = 'ego-cli-already-exists' | 'link-limit-reached' | 'unusable-row'
+
+export type UpsertLinkResult =
+  | { ok: true; links: BrowserLink[]; link: BrowserLink }
+  | { ok: false; code: UpsertRefusalCode; message: string }
 
 /**
  * Insert or replace one entry. Existing fields survive when the patch omits
  * them, so the UI can push a single-field edit without resending the row.
- * The sequence caps at `MAX_TARGETS`; a new id beyond the cap is a no-op.
+ *
+ * Two refusals are structured rather than silent (R7):
+ *  - adding a SECOND `ego-cli` entry (`ego-cli-already-exists`);
+ *  - exceeding `MAX_TARGETS` (`link-limit-reached`).
  */
-export function upsertTarget(targets: readonly CdpTarget[], patch: Partial<CdpTarget> & { endpoint: string }): CdpTarget[] {
+export function upsertLink(
+  links: readonly BrowserLink[],
+  // `kind` is taken from the union explicitly: intersecting the two Partial
+  // shapes collapses it to `never`, which would make it impossible to add a
+  // link at all.
+  patch: Omit<Partial<CdpLink>, 'kind'> & Omit<Partial<EgoCliLink>, 'kind'> & { id?: string; kind?: BrowserLinkKind },
+): UpsertLinkResult {
   const id = typeof patch.id === 'string' && patch.id !== '' ? patch.id : newTargetId()
-  const existing = findTarget(targets, id)
-  const merged = sanitizeTargets([{ ...(existing ?? {}), ...patch, id }])[0]
-  if (!merged) return [...targets]
-  if (!existing) {
-    if (targets.length >= MAX_TARGETS) return [...targets]
-    return [...targets, merged]
+  const existing = findLink(links, id)
+  const merged = coerceLink({ ...(existing ?? {}), ...patch, id })
+  if (!merged) {
+    return { ok: false, code: 'unusable-row', message: 'row carries neither a usable CDP endpoint nor an ego-cli kind' }
   }
-  return targets.map((entry) => (entry.id === id ? merged : entry))
+  if (!existing) {
+    if (merged.kind === EGO_CLI_KIND && links.some((link) => link.kind === EGO_CLI_KIND)) {
+      return {
+        ok: false,
+        code: 'ego-cli-already-exists',
+        message: 'the local ego CLI link already exists — at most one is allowed per machine',
+      }
+    }
+    if (links.length >= MAX_TARGETS) {
+      return { ok: false, code: 'link-limit-reached', message: `the sequence is capped at ${MAX_TARGETS} entries` }
+    }
+    return { ok: true, links: [...links, merged], link: merged }
+  }
+  // A replaced row must not turn one kind into a second singleton either.
+  if (merged.kind === EGO_CLI_KIND && links.some((link) => link.kind === EGO_CLI_KIND && link.id !== id)) {
+    return {
+      ok: false,
+      code: 'ego-cli-already-exists',
+      message: 'the local ego CLI link already exists — at most one is allowed per machine',
+    }
+  }
+  return { ok: true, links: links.map((link) => (link.id === id ? merged : link)), link: merged }
 }
 
-export function removeTarget(targets: readonly CdpTarget[], id: string): CdpTarget[] {
-  return targets.filter((entry) => entry.id !== id)
+export function removeTarget(links: readonly BrowserLink[], id: string): BrowserLink[] {
+  return links.filter((link) => link.id !== id)
 }
 
 /**
@@ -132,12 +231,12 @@ export function removeTarget(targets: readonly CdpTarget[], id: string): CdpTarg
  * slot down; out-of-range and unknown ids return the input unchanged (the UI
  * disables those buttons, this is the second line of defense).
  */
-export function moveTarget(targets: readonly CdpTarget[], id: string, delta: number): CdpTarget[] {
-  const index = targets.findIndex((entry) => entry.id === id)
-  if (index === -1) return [...targets]
+export function moveTarget(links: readonly BrowserLink[], id: string, delta: number): BrowserLink[] {
+  const index = links.findIndex((entry) => entry.id === id)
+  if (index === -1) return [...links]
   const wanted = index + delta
-  if (wanted < 0 || wanted >= targets.length) return [...targets]
-  const copy = [...targets]
+  if (wanted < 0 || wanted >= links.length) return [...links]
+  const copy = [...links]
   const moved = copy.splice(index, 1)[0]!
   copy.splice(wanted, 0, moved)
   return copy
@@ -196,7 +295,12 @@ export interface AttachState {
   latencyMs: number
   resolvedAt: number
   /** T2.16 — how the attach came to be, shown by the panel badge + doctor. */
-  endpointSource?: 'remote' | 'local' | 'local-fallback'
+  endpointSource?: 'remote' | 'local' | 'local-fallback' | 'cli' | 'cli-launch'
+  /** R7 — which kind the activated entry is, so the sync decision table knows. */
+  linkKind?: BrowserLinkKind
+  /** R7 — `ego-cli` only: the resolved CLI path / spawn shape, for the doctor. */
+  cliPath?: string
+  cliShape?: string
 }
 
 export function emptyAttachState(): AttachState {
@@ -216,6 +320,8 @@ export function emptyAttachState(): AttachState {
 export type AttachDecision =
   | { kind: 'inject'; wsUrl: string; targetId: string; source: 'remote' }
   | { kind: 'local'; message: string }
+  /** R7 — the CLI owns its browser; the runtime needs no endpoint. */
+  | { kind: 'cli'; message: string }
   | { kind: 'error'; code: string; message: string }
 
 export interface DecideInput {
@@ -232,14 +338,17 @@ export interface DecideInput {
   allowLocalFallback: boolean
   /** True once the built-in local launcher (M0.9) is wired in. */
   localLauncherReady: boolean
+  /** R7 — kind of the activated entry, when one is activated. */
+  linkKind?: BrowserLinkKind
 }
 
 /**
- * Decide how the next `ego_*` call attaches.
+ * Decide how the next `bcdp_*` call attaches.
  *
  * The rules are deliberately narrow and each branch is a VISIBLE outcome:
  *
  * - `mode=local`  → hand back to local control (explicit user choice).
+ * - `ego-cli`     → the CLI owns its browser; inject nothing.
  * - no activation → error, never a silent local cold start (spec §3.2).
  * - resolved      → inject the ws URL.
  * - not resolved  → error. The ONLY path to a local browser from here is an
@@ -248,6 +357,35 @@ export interface DecideInput {
 export function decideAttach(input: DecideInput): AttachDecision {
   if (input.mode === 'local') {
     return { kind: 'local', message: 'local mode: using local browser control' }
+  }
+  // R7 — `remote` names a CDP endpoint literally, so a local CLI link under
+  // that mode is a configuration mismatch. Refusing is better than quietly
+  // driving a different browser than the mode promises.
+  if (input.mode === 'remote' && input.linkKind === EGO_CLI_KIND) {
+    return {
+      kind: 'error',
+      code: 'mode-kind-mismatch',
+      message:
+        'cdpMode=remote requires a CDP endpoint link, but the activated link is the local ego CLI. Activate a CDP link, or switch cdpMode to auto.',
+    }
+  }
+  // R7 — an activated CLI link bypasses the endpoint table entirely: the CLI
+  // resolves its own browser, and remoteEnabled (a REMOTE switch) does not
+  // apply to it.
+  if (input.hasActive && input.linkKind === EGO_CLI_KIND) {
+    if (input.status === 'ready') return { kind: 'cli', message: input.message || 'local ego CLI ready' }
+    if (input.status === 'idle' || input.status === 'probing') {
+      return {
+        kind: 'error',
+        code: 'endpoint-unresolved',
+        message: 'The local ego CLI has not been probed yet. Wait for the probe to finish and retry the call.',
+      }
+    }
+    return {
+      kind: 'error',
+      code: input.code === '' ? 'cli-probe-failed' : input.code,
+      message: input.message === '' ? 'the local ego CLI is not available' : input.message,
+    }
   }
   if (input.remoteDisabled) {
     return {
@@ -316,7 +454,7 @@ export function createAttachCache(): AttachCache {
 export const defaultAttachCache: AttachCache = createAttachCache()
 
 export interface RefreshInput {
-  targets: readonly CdpTarget[]
+  targets: readonly BrowserLink[]
   activeTargetId: string
   mode: CdpMode
   timeoutMs?: number
@@ -338,6 +476,83 @@ export interface RefreshInput {
   useLauncher?: boolean
   /** Injectable launcher IO for fixtures. */
   launcherIo?: unknown
+  /** R7 — injectable IO for the `ego-cli` probe; the host passes the real one. */
+  cliIo?: CliLinkIo
+  /** R7 — ours to inject with `--sdk-path` when the link opts in. */
+  sdkPath?: string
+  /** R7 — bundled port used as the last-resort CLI ('' disables the fallback). */
+  bundledCli?: string
+}
+
+/**
+ * R7 — publish the readiness of an `ego-cli` link.
+ *
+ * There is no endpoint here and nothing is injected: the CLI owns its browser,
+ * so the only question is whether the CLI itself can be launched and driven.
+ * A CLI that answers while its backing browser is down still counts as ready —
+ * the first real call cold-starts the browser, which is normal for this kind —
+ * and is tagged `cli-launch` so the panel can say so instead of claiming a
+ * live browser.
+ */
+async function refreshCliAttach(
+  input: RefreshInput,
+  cache: AttachCache,
+  suggested: AttachState,
+  link: EgoCliLink,
+  now: () => number,
+): Promise<AttachState> {
+  const base: AttachState = {
+    ...suggested,
+    targetId: link.id,
+    endpoint: '',
+    wsUrl: '',
+    linkKind: EGO_CLI_KIND,
+  }
+  const io = input.cliIo
+  if (!io) {
+    // Explicit, not silent: a host that forgot to hand over the IO must not
+    // look like an unreachable browser.
+    return cache.patch({
+      ...base,
+      status: 'unreachable',
+      code: 'cli-io-missing',
+      message: 'the host did not provide CLI IO for the local ego CLI link',
+      resolvedAt: now(),
+    })
+  }
+  const probe = await probeCliLink({
+    cliPath: link.cliPath,
+    bundled: input.bundledCli ?? '',
+    useSdkPath: link.useSdkPath === true,
+    sdkPath: input.sdkPath ?? '',
+    timeoutMs: input.timeoutMs,
+  }, io)
+  if (!probe.ok) {
+    return cache.patch({
+      ...base,
+      status: 'unreachable',
+      code: probe.code,
+      message: probe.message,
+      cliPath: probe.cliPath,
+      cliShape: probe.shape,
+      latencyMs: probe.latencyMs,
+      resolvedAt: now(),
+    })
+  }
+  const coldStart = probe.running === false
+  return cache.patch({
+    ...base,
+    status: 'ready',
+    endpointSource: coldStart ? 'cli-launch' : 'cli',
+    code: '',
+    message: probe.warning ?? (coldStart
+      ? 'local ego CLI reachable; the backing browser is not running yet and will start on the first call'
+      : 'local ego CLI ready'),
+    cliPath: probe.cliPath,
+    cliShape: probe.shape,
+    latencyMs: probe.latencyMs,
+    resolvedAt: now(),
+  })
 }
 
 /**
@@ -402,8 +617,28 @@ export async function refreshAttach(input: RefreshInput): Promise<AttachState> {
     }
     return cache.patch(suggested)
   }
-  // T2.18 — the remote switch: off means the sequence is INERT but preserved.
-  if (input.remoteEnabled === false) {
+  const target = activeLink(input.targets, input.activeTargetId)
+  if (!target) {
+    // T2.18 vs R7 — with the remote switch off AND nothing activated, saying
+    // "remote is disabled" is the more actionable of the two truths; the
+    // sequence is intact and flipping the switch back is the fix.
+    return cache.patch({
+      ...suggested,
+      status: 'no-active',
+      targetId: input.activeTargetId,
+      endpoint: '',
+      wsUrl: '',
+      code: input.remoteEnabled === false ? 'remote-disabled' : 'no-active-target',
+      message: input.remoteEnabled === false
+        ? 'remote CDP is disabled by the remoteEnabled switch; the target sequence is preserved and can be re-enabled at any time'
+        : 'no activated target in the sequence',
+      resolvedAt: now(),
+    })
+  }
+  // T2.18 — the remote switch is off: the sequence is INERT but preserved.
+  // R7 — it gates REMOTE attach only, so a local `ego-cli` link is unaffected:
+  // it is not a remote connection and has nothing to probe over the network.
+  if (input.remoteEnabled === false && target.kind !== EGO_CLI_KIND) {
     return cache.patch({
       ...suggested,
       status: 'no-active',
@@ -415,19 +650,15 @@ export async function refreshAttach(input: RefreshInput): Promise<AttachState> {
       resolvedAt: now(),
     })
   }
-  const target = activeTarget(input.targets, input.activeTargetId)
-  if (!target) {
-    return cache.patch({
-      ...suggested,
-      status: 'no-active',
-      targetId: input.activeTargetId,
-      endpoint: '',
-      wsUrl: '',
-      code: 'no-active-target',
-      message: 'no activated target in the sequence',
-      resolvedAt: now(),
-    })
+
+  // ── R7: `ego-cli` has no endpoint to probe ──────────────────────────────
+  // Readiness comes from the CLI itself, and nothing is injected: the CLI owns
+  // its browser. Handled before the endpoint path so the two kinds never share
+  // a probe branch.
+  if (target.kind === EGO_CLI_KIND) {
+    return refreshCliAttach(input, cache, suggested, target, now)
   }
+
   const sameTarget = previous.targetId === target.id && previous.endpoint === target.endpoint
   const suggestedProbe: AttachState = {
     ...suggested,

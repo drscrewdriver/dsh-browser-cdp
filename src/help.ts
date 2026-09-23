@@ -6,10 +6,15 @@
  */
 export const EGO_HELP_INDEX: Record<string, string> = {
   overview:
-    'CDP 浏览器代理：结构化浏览器工具。导航/交互/观察/表单/网络/等待/键鼠皆有专项工具，另提供 bcdp_help(本索引)、bcdp_doctor(体检)、bcdp_cli/bcdp_script(自由脚本逃生舱)。' +
+    'CDP 浏览器代理：结构化浏览器工具。导航/交互/观察/表单/网络/等待/键鼠皆有专项工具，另提供 bcdp_help(本索引)、bcdp_doctor(体检)、bcdp_cli/bcdp_script(自由脚本逃生舱)。连接与激活见 topic=links。' +
     '分类见: tools / navigate / observe / input / keyboard-mouse / form / wait / network / login / script / doctor。用 `topic` 查询，或直接给工具名。',
   tools:
     '工具清单: bcdp_status, bcdp_space_open, bcdp_space_close, bcdp_snapshot, bcdp_navigate, bcdp_click(+double), bcdp_fill, bcdp_js, bcdp_cdp, bcdp_screenshot(+selector), bcdp_page_info, bcdp_wait, bcdp_wait_for_selector, bcdp_wait_for_url, bcdp_wait_for_response, bcdp_key(+text/type), bcdp_hover, bcdp_read_element, bcdp_select, bcdp_drag, bcdp_scroll, bcdp_upload, bcdp_check, bcdp_dialog, bcdp_download, bcdp_http, bcdp_captcha, bcdp_auth_flush, bcdp_login_import, bcdp_help, bcdp_doctor, bcdp_cli, bcdp_script。',
+  links:
+    '连接序列（设置面板）：有序列表，顺序即优先级，被激活的一项驱动每一次 bcdp_* 调用。两种类型——' +
+    'CDP 端点（注入 EGO_LINUX_CDP_URL，指向已开调试端口的浏览器）与 本机 ego CLI（不注入端点，由本机 ego CLI 直接驱动 ego-lite 浏览器；' +
+    '仅限本机，全局至多一条）。cdpMode: auto=按激活项；remote=仅接受 CDP 端点；local=受管本地启动器。' +
+    'cdpMode=remote 与「本机 ego CLI」组合会显式报 mode-kind-mismatch。remoteEnabled 只管远端 CDP，不影响本机 CLI 连接。',
   navigate: 'bcdp_navigate: 打开URL或切tab(同任务复用当前tab)。bcdp_wait_for_url: 等跳转(登录/分页)。',
   observe:
     'bcdp_snapshot: 整页语义树(带[ref]/loc供点击); bcdp_page_info: url/标题/视口/滚动/对话框/人机验证; bcdp_read_element: 读单元素文本/HTML/值/属性/可见性/计数; bcdp_screenshot(+selector): 整页或元素截图。',

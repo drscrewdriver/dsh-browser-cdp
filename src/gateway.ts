@@ -16,6 +16,7 @@
 //                        → { ok: true, value: { config: ResolvedConfig } }
 // Errors carry { ok: false, error: { code, message } }.
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { fileURLToPath } from 'node:url'
 import { resolveConfig } from './config.ts'
 import { SETTINGS_NAMESPACE } from './settings.ts'
 import { rewriteGithubUrl } from './ffmpeg-manifest.ts'
@@ -27,6 +28,7 @@ import {
   refreshAttach,
   probeEndpoint,
 } from './cdp-targets.ts'
+import { createSubprocessCliIo } from './cdp/cli-link.ts'
 import { setAttachEndpoint, recycleWorker } from './cast-server.ts'
 
 export interface SettingsBridge {
@@ -43,8 +45,10 @@ const ALLOWED_KEYS = new Set<string>([
   'chromePath', 'captureBackend', 'streamProfile', 'cdpFps', 'cdpQuality',
   'cdpMaxWidth', 'cdpBackstopIntervalMs', 'ffmpegFps', 'ffmpegMaxWidth', 'ffmpegBitrateKbps',
   'ffmpegEncoder', 'ffmpegPath', 'githubMirror', 'runtimeArgs', 'chromeArgs',
-  // ── R1: CDP sequence + activation ───────────────────────────────────────
-  'cdpTargets', 'activeTargetId', 'cdpMode', 'cdpProbeTimeoutMs', 'remoteEnabled',
+  // ── R1/R7: connection sequence + activation ─────────────────────────────
+  // `links` is canonical; `cdpTargets` stays writable for one version so an
+  // older cached panel cannot be locked out of saving the sequence.
+  'links', 'cdpTargets', 'activeTargetId', 'cdpMode', 'cdpProbeTimeoutMs', 'remoteEnabled',
   'cursorHud', 'cursorName', 'allowLocalFallback', 'localHeadless', 'localUserDataDir',
 ])
 
@@ -155,11 +159,16 @@ export function registerEgoBrowserGateway(
             // change.
             const cfg = resolveConfig(bridge.source() as RawConfig)
             const attach = await refreshAttach({
-              targets: cfg.cdpTargets,
+              targets: cfg.links,
               activeTargetId: cfg.activeTargetId,
               mode: cfg.cdpMode,
               timeoutMs: cfg.cdpProbeTimeoutMs,
               cache: defaultAttachCache,
+              // R7 — same wiring as triggerCdpRefresh(): a local ego CLI link
+              // is probed through the host subprocess service.
+              cliIo: createSubprocessCliIo(ctx.subprocess),
+              sdkPath: fileURLToPath(new URL('../runtime/ego-browser/dist/out/index.js', import.meta.url)),
+              bundledCli: fileURLToPath(new URL('../runtime/ego-linux/bin/ego-browser.mjs', import.meta.url)),
             })
             const ws = attach.status === 'ready' && attach.wsUrl !== '' ? attach.wsUrl : null
             if (setAttachEndpoint(ws)) {

@@ -106,7 +106,7 @@ declare function require(id: string): any
 			expand: 'Show settings', collapse: 'Hide settings',
 			// ── R1: CDP target sequence + activation ────────────────────────
 			cdpSectionTitle: 'CDP browser bridge targets',
-			cdpSectionIntro: 'Connect to an already-running browser over the DevTools Protocol. Keep an ordered list; the activated entry drives every bcdp_* call. auto mode never launches a local browser silently.',
+			cdpSectionIntro: 'An ordered connection list; the activated entry drives every bcdp_* call (order IS priority). Two kinds: a CDP endpoint, or the local ego CLI driving the ego-lite browser on this machine (local-only, at most one). auto never launches a local browser silently.',
 			cdpMode: 'Connection mode',
 			cdpModeAuto: 'auto — use activated target',
 			cdpModeRemote: 'remote — only the activated target',
@@ -116,7 +116,19 @@ declare function require(id: string): any
 			remoteEnabledOn: 'Enabled (sequence active)',
 			remoteEnabledOff: 'Disabled (sequence preserved, inert)',
 			cdpNoTargets: 'No targets yet. Add one to connect to a running browser.',
-			cdpAdd: 'Add target',
+			cdpAdd: 'Add CDP endpoint',
+			cdpAddCli: 'Add local ego CLI',
+			cdpAddCliExists: 'The local ego CLI link already exists — it is local-only, so one per machine.',
+			linkKindCdp: 'CDP',
+			linkKindCli: 'Local CLI',
+			cliPath: 'ego CLI path',
+			cliPathHint: 'Empty = auto-detect: PATH → macOS app bundle → bundled runtime. Activates the local ego-lite browser; EGO_LINUX_CDP_URL is not injected for this kind.',
+			cliUseSdkPath: 'Use the bundled harness',
+			cliUseSdkPathHint: 'Pass --sdk-path with our harness bundle. Off = use the harness the CLI ships with (the officially paired one).',
+			cliUseSdkPathOn: 'Bundled harness',
+			cliUseSdkPathOff: "CLI's own harness",
+			cdpStatusCli: 'local CLI ready',
+			cdpStatusCliLaunch: 'local CLI (starts on the first call)',
 			cdpEndpoint: 'Endpoint',
 			cdpEndpointHint: 'http(s)://host:port (a browser DevTools endpoint) or ws(s)://… to dial directly.',
 			cdpLabel: 'Label',
@@ -173,7 +185,7 @@ declare function require(id: string): any
 			expand: '展开设置', collapse: '收起设置',
 			// ── R1: CDP 目标序列 + 激活 ──────────────────────────────────────
 			cdpSectionTitle: 'CDP 浏览器目标',
-			cdpSectionIntro: '通过 DevTools 协议连接到已运行的浏览器。维护一个有序列表，被激活的那一项驱动每一次 bcdp_* 调用。auto 模式绝不悄无声息地启动本地浏览器。',
+			cdpSectionIntro: '有序连接列表，被激活的那一项驱动每一次 bcdp_* 调用（顺序即优先级）。两种类型：CDP 端点，或由本机 ego CLI 直接驱动本机 ego-lite 浏览器（仅限本机，最多一条）。auto 模式绝不悄无声息地启动本地浏览器。',
 			cdpMode: '连接模式',
 			cdpModeAuto: 'auto — 使用被激活的目标',
 			cdpModeRemote: 'remote — 仅连接被激活的目标',
@@ -183,7 +195,19 @@ declare function require(id: string): any
 			remoteEnabledOn: '开启（序列生效）',
 			remoteEnabledOff: '关闭（序列保留，暂停使用）',
 			cdpNoTargets: '还没有目标。添加一个以连接到运行中的浏览器。',
-			cdpAdd: '添加目标',
+			cdpAdd: '添加 CDP 端点',
+			cdpAddCli: '添加本机 ego CLI',
+			cdpAddCliExists: '本机 ego CLI 连接已存在——它仅限本机，一台机器只允许一条。',
+			linkKindCdp: 'CDP',
+			linkKindCli: '本机 CLI',
+			cliPath: 'ego CLI 路径',
+			cliPathHint: '留空 = 自动发现：PATH → macOS app 包内 → 内置运行时。该类型直接驱动本机 ego-lite 浏览器，不注入 EGO_LINUX_CDP_URL。',
+			cliUseSdkPath: '注入内置 harness',
+			cliUseSdkPathHint: '以 --sdk-path 传入本插件的 harness 包。关闭 = 用 CLI 自带的（官方配对）harness。',
+			cliUseSdkPathOn: '内置 harness',
+			cliUseSdkPathOff: 'CLI 自带 harness',
+			cdpStatusCli: '本机 CLI（已就绪）',
+			cdpStatusCliLaunch: '本机 CLI（首调启动浏览器）',
 			cdpEndpoint: '接入点',
 			cdpEndpointHint: 'http(s)://host:port（浏览器 DevTools 接入点）或 ws(s)://… 直接拨号。',
 			cdpLabel: '名称',
@@ -326,7 +350,7 @@ declare function require(id: string): any
 				status: 'idle',        // 'idle' | 'loading' | 'ready'
 				available: false,      // true after a successful /bcdp/api/get
 				writable: false,       // false when settings service is absent
-				draft: { isolateSpaces: false, idleTimeoutMin: '0', chromePath: '', captureBackend: 'auto', streamProfile: 'balanced', cdpFps: '20', cdpQuality: '55', cdpMaxWidth: '960', cdpBackstopIntervalMs: '3000', ffmpegFps: '20', ffmpegMaxWidth: '1280', ffmpegBitrateKbps: '4000', ffmpegEncoder: 'auto', ffmpegPath: '', githubMirror: '', runtimeArgs: '', chromeArgs: '', cdpTargets: [], activeTargetId: '', cdpMode: 'auto', remoteEnabled: true },
+				draft: { isolateSpaces: false, idleTimeoutMin: '0', chromePath: '', captureBackend: 'auto', streamProfile: 'balanced', cdpFps: '20', cdpQuality: '55', cdpMaxWidth: '960', cdpBackstopIntervalMs: '3000', ffmpegFps: '20', ffmpegMaxWidth: '1280', ffmpegBitrateKbps: '4000', ffmpegEncoder: 'auto', ffmpegPath: '', githubMirror: '', runtimeArgs: '', chromeArgs: '', links: [], activeTargetId: '', cdpMode: 'auto', remoteEnabled: true },
 				ffmpegStatus: { state: 'checking', canDownload: false, canSelectFfmpeg: false },
 				dirty: false,
 				applyState: { kind: 'idle' }, // 'idle' | 'saving' | 'saved' | 'error'
@@ -383,7 +407,7 @@ declare function require(id: string): any
 				cdpFps: String(config.cdpFps ?? 20), cdpQuality: String(config.cdpQuality ?? 55), cdpMaxWidth: String(config.cdpMaxWidth ?? 960), cdpBackstopIntervalMs: String(config.cdpBackstopIntervalMs ?? 3000),
 				ffmpegFps: String(config.ffmpegFps ?? 20), ffmpegMaxWidth: String(config.ffmpegMaxWidth ?? 1280), ffmpegBitrateKbps: String(config.ffmpegBitrateKbps ?? 4000), ffmpegEncoder: config.ffmpegEncoder || 'auto', ffmpegPath: config.ffmpegPath || '', githubMirror: config.githubMirror || '',
 				runtimeArgs: config.runtimeArgs || '', chromeArgs: config.chromeArgs || '',
-				cdpTargets: Array.isArray(config.cdpTargets) ? config.cdpTargets.map(function (t) { return Object.assign({ id: '', label: '', endpoint: '', enabled: true, note: '', probeStatus: 'unknown', probeLatencyMs: 0, probeError: '', probeCode: '', probeAt: 0 }, t) }) : [],
+				links: mapLinkRows(Array.isArray(config.links) ? config.links : config.cdpTargets),
 				activeTargetId: typeof config.activeTargetId === 'string' ? config.activeTargetId : '',
 				cdpMode: config.cdpMode === 'local' || config.cdpMode === 'remote' ? config.cdpMode : 'auto',
 				remoteEnabled: config.remoteEnabled !== false,
@@ -412,61 +436,88 @@ declare function require(id: string): any
 				s.applyState = { kind: 'idle' }
 			})
 		}
-		// ── R1: CDP target sequence editing ─────────────────────────────────
+		// R7 — one shared mapper so the two load sites (initial load + the
+		// save-success rebuild) can never drift: a field missing from one of
+		// them silently resets that field in the UI. Rows written before R7
+		// carry no `kind`; they are CDP endpoints by definition.
+		var EGO_CLI_KIND = 'ego-cli'
+		function mapLinkRows(raw) {
+			if (!Array.isArray(raw)) return []
+			return raw.map(function (l) {
+				var row = Object.assign({ kind: 'cdp', id: '', label: '', endpoint: '', cliPath: '', useSdkPath: false, enabled: true, note: '', probeStatus: 'unknown', probeLatencyMs: 0, probeError: '', probeCode: '', probeAt: 0 }, l)
+				if (row.kind === EGO_CLI_KIND) { row.cliPath = row.cliPath || ''; row.endpoint = '' }
+				else { row.kind = 'cdp'; row.endpoint = row.endpoint || '' }
+				return row
+			})
+		}
+		// ── R1/R7: connection sequence editing ──────────────────────────────
 		function genCdpTargetId() {
 			return 't-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8)
 		}
 		EgoBrowserSettingsController.prototype._commitCdp = function (patch) {
-			// patch: { cdpTargets?, activeTargetId?, cdpMode? } — staged whole so
-			// the array survives the next save as one unit.
-			if (patch.cdpTargets !== undefined) this.stagedComplex.cdpTargets = patch.cdpTargets
+			// patch: { links?, activeTargetId?, cdpMode? } — staged whole so the
+			// array survives the next save as one unit.
+			if (patch.links !== undefined) this.stagedComplex.links = patch.links
 			if (patch.activeTargetId !== undefined) this.stagedComplex.activeTargetId = patch.activeTargetId
 			if (patch.cdpMode !== undefined) this.stagedComplex.cdpMode = patch.cdpMode
 			this.store.update(function (s) {
-				if (patch.cdpTargets !== undefined) s.draft.cdpTargets = patch.cdpTargets
+				if (patch.links !== undefined) s.draft.links = patch.links
 				if (patch.activeTargetId !== undefined) s.draft.activeTargetId = patch.activeTargetId
 				if (patch.cdpMode !== undefined) s.draft.cdpMode = patch.cdpMode
 				s.dirty = true
 				s.applyState = { kind: 'idle' }
 			})
 		}
-		EgoBrowserSettingsController.prototype.addTarget = function () {
+		/**
+		 * Append one entry. `kind='ego-cli'` is refused when one already exists:
+		 * the local ego CLI is a per-machine singleton, and a second row could
+		 * only fight the first over the same backing browser. The server
+		 * enforces the same rule (upsertLink), so this is the UI half of a
+		 * two-layer guard.
+		 */
+		EgoBrowserSettingsController.prototype.addTarget = function (kind) {
 			var draft = this.store.getSnapshot().draft
-			var targets = (draft.cdpTargets || []).slice()
-			targets.push({ id: genCdpTargetId(), label: '', endpoint: '', enabled: true, note: '', probeStatus: 'unknown', probeLatencyMs: 0, probeError: '', probeCode: '', probeAt: 0 })
-			this._commitCdp({ cdpTargets: targets })
+			var links = (draft.links || []).slice()
+			var isCli = kind === EGO_CLI_KIND
+			if (isCli) {
+				for (var i = 0; i < links.length; i++) { if (links[i].kind === EGO_CLI_KIND) return }
+			}
+			links.push(isCli
+				? { kind: EGO_CLI_KIND, id: genCdpTargetId(), label: '', cliPath: '', useSdkPath: false, enabled: true, note: '', probeStatus: 'unknown', probeLatencyMs: 0, probeError: '', probeCode: '', probeAt: 0 }
+				: { kind: 'cdp', id: genCdpTargetId(), label: '', endpoint: '', enabled: true, note: '', probeStatus: 'unknown', probeLatencyMs: 0, probeError: '', probeCode: '', probeAt: 0 })
+			this._commitCdp({ links: links })
 		}
 		EgoBrowserSettingsController.prototype.removeTarget = function (id) {
 			var draft = this.store.getSnapshot().draft
-			var targets = (draft.cdpTargets || []).filter(function (t) { return t.id !== id })
-			var patch: { cdpTargets: typeof targets; activeTargetId?: string } = { cdpTargets: targets }
+			var targets = (draft.links || []).filter(function (t) { return t.id !== id })
+			var patch: { links: typeof targets; activeTargetId?: string } = { links: targets }
 			if (draft.activeTargetId === id) patch.activeTargetId = ''
 			this._commitCdp(patch)
 		}
 		EgoBrowserSettingsController.prototype.moveTarget = function (id, dir) {
 			var draft = this.store.getSnapshot().draft
-			var targets = (draft.cdpTargets || []).slice()
+			var targets = (draft.links || []).slice()
 			var index = targets.findIndex(function (t) { return t.id === id })
 			if (index === -1) return
 			var wanted = index + dir
 			if (wanted < 0 || wanted >= targets.length) return
 			var moved = targets.splice(index, 1)[0]
 			targets.splice(wanted, 0, moved)
-			this._commitCdp({ cdpTargets: targets })
+			this._commitCdp({ links: targets })
 		}
 		EgoBrowserSettingsController.prototype.editTarget = function (id, field, value) {
 			var draft = this.store.getSnapshot().draft
-			var targets = (draft.cdpTargets || []).map(function (t) {
+			var targets = (draft.links || []).map(function (t) {
 				if (t.id !== id) return t
 				var next = Object.assign({}, t)
 				next[field] = value
 				return next
 			})
-			this._commitCdp({ cdpTargets: targets })
+			this._commitCdp({ links: targets })
 		}
 		EgoBrowserSettingsController.prototype.setActiveTarget = function (id) {
 			var draft = this.store.getSnapshot().draft
-			var target = (draft.cdpTargets || []).find(function (t) { return t.id === id })
+			var target = (draft.links || []).find(function (t) { return t.id === id })
 			if (!target || !target.enabled) return
 			this._commitCdp({ activeTargetId: id })
 		}
@@ -476,12 +527,14 @@ declare function require(id: string): any
 		EgoBrowserSettingsController.prototype.probeTarget = function (id) {
 			var self = this
 			var draft = this.store.getSnapshot().draft
-			var target = (draft.cdpTargets || []).find(function (t) { return t.id === id })
-			if (!target || !target.endpoint) return
+			var target = (draft.links || []).find(function (t) { return t.id === id })
+			// Only a CDP endpoint can be probed directly; the CLI link has its
+			// readiness derived by the host (cdp-refresh) instead.
+			if (!target || target.kind === EGO_CLI_KIND || !target.endpoint) return
 			var endpoint = target.endpoint
 		function applyOutcome(o, errorText) {
 			var draftNow = self.store.getSnapshot().draft
-			var targets = (draftNow.cdpTargets || []).map(function (t) {
+			var targets = (draftNow.links || []).map(function (t) {
 				if (t.id !== id) return t
 				var next = Object.assign({}, t)
 				next.probeStatus = o && o.ok ? 'ok' : 'error'
@@ -491,8 +544,8 @@ declare function require(id: string): any
 				next.probeAt = Date.now()
 				return next
 			})
-			self.stagedComplex.cdpTargets = targets
-			self.store.update(function (s) { s.draft.cdpTargets = targets; s.dirty = true; s.applyState = { kind: 'idle' } })
+			self.stagedComplex.links = targets
+			self.store.update(function (s) { s.draft.links = targets; s.dirty = true; s.applyState = { kind: 'idle' } })
 		}
 		fetch('/bcdp/api/cdp-probe', {
 			method: 'POST',
@@ -612,10 +665,10 @@ declare function require(id: string): any
 				cdpFps: String(config.cdpFps ?? 20), cdpQuality: String(config.cdpQuality ?? 55), cdpMaxWidth: String(config.cdpMaxWidth ?? 960), cdpBackstopIntervalMs: String(config.cdpBackstopIntervalMs ?? 3000),
 				ffmpegFps: String(config.ffmpegFps ?? 20), ffmpegMaxWidth: String(config.ffmpegMaxWidth ?? 1280), ffmpegBitrateKbps: String(config.ffmpegBitrateKbps ?? 4000), ffmpegEncoder: config.ffmpegEncoder || 'auto', ffmpegPath: config.ffmpegPath || '', githubMirror: config.githubMirror || '',
 				runtimeArgs: config.runtimeArgs || '', chromeArgs: config.chromeArgs || '',
-			// R1: the CDP sequence is part of the draft. Omitting these three
-			// here made every target vanish from the panel the instant a save
+			// R1/R7: the connection sequence is part of the draft. Omitting these
+			// three here made every entry vanish from the panel the instant a save
 			// succeeded (the server had them; the draft rebuild dropped them).
-			cdpTargets: Array.isArray(config.cdpTargets) ? config.cdpTargets.map(function (t) { return Object.assign({ id: '', label: '', endpoint: '', enabled: true, note: '', probeStatus: 'unknown', probeLatencyMs: 0, probeError: '', probeCode: '', probeAt: 0 }, t) }) : [],
+			links: mapLinkRows(Array.isArray(config.links) ? config.links : config.cdpTargets),
 			activeTargetId: typeof config.activeTargetId === 'string' ? config.activeTargetId : '',
 			cdpMode: config.cdpMode === 'local' || config.cdpMode === 'remote' ? config.cdpMode : 'auto',
 				remoteEnabled: config.remoteEnabled !== false,
@@ -807,12 +860,12 @@ declare function require(id: string): any
 		}
 
 		// ── R1: CDP target sequence editor ──────────────────────────────────
-		function CdpTargetsBlock(props) {
+		function BrowserLinksBlock(props) {
 			var t = props.t
 			var controller = props.controller
 			var useState = React.useState
 			var useEffect = React.useEffect
-			var targets = props.targets || []
+			var links = props.links || []
 			var activeTargetId = props.activeTargetId
 			var cdpMode = props.cdpMode
 			var busy = props.busy
@@ -835,6 +888,16 @@ declare function require(id: string): any
 				var timer = setInterval(poll, 5000)
 				return function () { alive = false; clearInterval(timer) }
 			}, [])
+			// R7 — the source of the attach refines "ready": a CLI link may be
+			// ready while its browser is still down (it cold-starts on the first
+			// call), and saying "ready" alone would be misleading.
+			function sourceLabel(attach) {
+				if (!attach || attach.status !== 'ready') return ''
+				if (attach.endpointSource === 'cli') return ' · ' + t('cdpStatusCli')
+				if (attach.endpointSource === 'cli-launch') return ' · ' + t('cdpStatusCliLaunch')
+				if (attach.endpointSource === 'local' || attach.endpointSource === 'local-fallback') return ' · ' + t('cdpStatusLocal')
+				return ''
+			}
 			function statusLabel(status) {
 				if (status === 'ready') return t('cdpStatusReady')
 				if (status === 'unreachable') return t('cdpStatusUnreachable')
@@ -844,7 +907,11 @@ declare function require(id: string): any
 				return t('cdpStatusIdle')
 			}
 			var activeTarget = null
-			for (var i = 0; i < targets.length; i++) { if (targets[i].id === activeTargetId) { activeTarget = targets[i]; break } }
+			for (var i = 0; i < links.length; i++) { if (links[i].id === activeTargetId) { activeTarget = links[i]; break } }
+			// Local-only singleton: the add button for the CLI kind is disabled
+			// once one exists (the server refuses a second row as well).
+			var hasCliLink = false
+			for (var k = 0; k < links.length; k++) { if (links[k].kind === EGO_CLI_KIND) { hasCliLink = true; break } }
 			var showActiveBadge = !!activeTarget && activeTarget.enabled
 			return h('div', { className: 'dsh-ego-card__ffmpeg' },
 				h('div', { className: 'dsh-ego-card__ffmpeg-title' }, t('cdpSectionTitle')),
@@ -863,15 +930,17 @@ declare function require(id: string): any
 				}),
 				showActiveBadge
 					? h('div', { className: 'dsh-ego-card__ffmpeg-status', role: 'status' },
-						t('cdpActive') + ': ' + (activeTarget.label || activeTarget.endpoint) + ' · ' + statusLabel(attach ? attach.status : 'idle') +
+						t('cdpActive') + ': ' + (activeTarget.label || activeTarget.endpoint || t('linkKindCli')) + ' · ' + statusLabel(attach ? attach.status : 'idle') +
+						sourceLabel(attach) +
 						(attach && attach.latencyMs ? ' · ' + t('cdpLatency') + ' ' + attach.latencyMs + 'ms' : '') +
 						(attach && attach.code ? ' · ' + attach.code : ''))
 					: h('div', { className: 'dsh-ego-card__notice' }, t('cdpActivateHint')),
-				targets.length === 0
+				links.length === 0
 					? h('div', { className: 'dsh-ego-card__hint' }, t('cdpNoTargets'))
 					: h('div', { className: 'dsh-ego-card__cdp-list' },
-						targets.map(function (tg, idx) {
+						links.map(function (tg, idx) {
 							var isActive = tg.id === activeTargetId
+							var isCli = tg.kind === EGO_CLI_KIND
 							return h('div', { key: tg.id, className: 'dsh-ego-card__cdp-target' + (isActive ? ' dsh-ego-card__cdp-target--active' : '') },
 								h('div', { className: 'dsh-ego-card__field-row' },
 									h('label', { className: 'dsh-ego-card__radio', title: t('cdpActive') },
@@ -882,8 +951,14 @@ declare function require(id: string): any
 										h('input', { type: 'checkbox', checked: !!tg.enabled, disabled: busy, onChange: function (e) { controller.editTarget(tg.id, 'enabled', e.target.checked) } }),
 										h('span', { className: 'dsh-ego-card__unit' }, t('cdpEnabled')),
 									),
+									h('span', { className: 'dsh-ego-card__unit dsh-ego-card__cdp-kind' }, isCli ? t('linkKindCli') : t('linkKindCdp')),
 								),
-								h(SettingsField, { id: 'cdp-endpoint-' + tg.id, label: t('cdpEndpoint'), hint: t('cdpEndpointHint'), value: tg.endpoint || '', placeholder: 'http://127.0.0.1:9222', disabled: busy, onEdit: function (v) { controller.editTarget(tg.id, 'endpoint', v) } }),
+								isCli
+									? h(SettingsField, { id: 'cdp-clipath-' + tg.id, label: t('cliPath'), hint: t('cliPathHint'), value: tg.cliPath || '', placeholder: '/usr/local/bin/ego-browser', disabled: busy, onEdit: function (v) { controller.editTarget(tg.id, 'cliPath', v) } })
+									: h(SettingsField, { id: 'cdp-endpoint-' + tg.id, label: t('cdpEndpoint'), hint: t('cdpEndpointHint'), value: tg.endpoint || '', placeholder: 'http://127.0.0.1:9222', disabled: busy, onEdit: function (v) { controller.editTarget(tg.id, 'endpoint', v) } }),
+								isCli
+									? h(SettingsField, { id: 'cdp-sdkpath-' + tg.id, label: t('cliUseSdkPath'), hint: t('cliUseSdkPathHint'), value: tg.useSdkPath ? 'true' : 'false', options: [{ value: 'false', label: t('cliUseSdkPathOff') }, { value: 'true', label: t('cliUseSdkPathOn') }], disabled: busy, onEdit: function (v) { controller.editTarget(tg.id, 'useSdkPath', v === 'true') } })
+									: null,
 								h(SettingsField, { id: 'cdp-label-' + tg.id, label: t('cdpLabel'), value: tg.label || '', disabled: busy, onEdit: function (v) { controller.editTarget(tg.id, 'label', v) } }),
 								h(SettingsField, { id: 'cdp-note-' + tg.id, label: t('cdpNote'), value: tg.note || '', disabled: busy, onEdit: function (v) { controller.editTarget(tg.id, 'note', v) } }),
 								!isActive && tg.probeStatus && tg.probeStatus !== 'unknown'
@@ -893,15 +968,22 @@ declare function require(id: string): any
 										(tg.probeError ? ' · ' + t('cdpError') + ': ' + tg.probeError : ''))
 									: null,
 								h('div', { className: 'dsh-ego-card__ffmpeg-actions' },
-									h('button', { type: 'button', className: 'dsh-ego-card__btn', disabled: busy || !tg.endpoint, onClick: function () { controller.probeTarget(tg.id) } }, t('cdpProbe')),
+									isCli ? null : h('button', { type: 'button', className: 'dsh-ego-card__btn', disabled: busy || !tg.endpoint, onClick: function () { controller.probeTarget(tg.id) } }, t('cdpProbe')),
 									h('button', { type: 'button', className: 'dsh-ego-card__btn', disabled: busy || idx === 0, onClick: function () { controller.moveTarget(tg.id, -1) } }, t('cdpMoveUp')),
-									h('button', { type: 'button', className: 'dsh-ego-card__btn', disabled: busy || idx === targets.length - 1, onClick: function () { controller.moveTarget(tg.id, 1) } }, t('cdpMoveDown')),
+									h('button', { type: 'button', className: 'dsh-ego-card__btn', disabled: busy || idx === links.length - 1, onClick: function () { controller.moveTarget(tg.id, 1) } }, t('cdpMoveDown')),
 									h('button', { type: 'button', className: 'dsh-ego-card__btn', disabled: busy, onClick: function () { controller.removeTarget(tg.id) } }, t('cdpRemove')),
 								),
 							)
 						})),
 				h('div', { className: 'dsh-ego-card__ffmpeg-actions' },
-					h('button', { type: 'button', className: 'dsh-ego-card__btn dsh-ego-card__btn--primary', disabled: busy, onClick: function () { controller.addTarget() } }, t('cdpAdd')),
+					h('button', { type: 'button', className: 'dsh-ego-card__btn dsh-ego-card__btn--primary', disabled: busy, onClick: function () { controller.addTarget('cdp') } }, t('cdpAdd')),
+					h('button', {
+						type: 'button',
+						className: 'dsh-ego-card__btn',
+						disabled: busy || hasCliLink,
+						title: hasCliLink ? t('cdpAddCliExists') : t('cliPathHint'),
+						onClick: function () { controller.addTarget(EGO_CLI_KIND) },
+					}, t('cdpAddCli')),
 				),
 			)
 		}
@@ -1005,7 +1087,7 @@ declare function require(id: string): any
 						h(SettingsField, { id: 'plugin-config-dsh-browser-cdp-remote-enabled', label: t('remoteEnabled'), hint: t('remoteEnabledHint'), value: state.draft.remoteEnabled ? 'true' : 'false', options: [{ value: 'true', label: t('remoteEnabledOn') }, { value: 'false', label: t('remoteEnabledOff') }], disabled: busy, onEdit: function (v) { controller.edit('remoteEnabled', v === 'true') } }),
 						h(SettingsField, { id: 'plugin-config-dsh-browser-cdp-chrome-args', label: t('chromeArgs'), value: state.draft.chromeArgs, hint: t('chromeArgsHint'), placeholder: '--disable-features=Translate --window-size=1024,768', disabled: busy, onEdit: function (v) { controller.edit('chromeArgs', v) } }),
 						h(LoginImportBlock, { t: t }),
-						h(CdpTargetsBlock, { t: t, controller: controller, targets: state.draft.cdpTargets, activeTargetId: state.draft.activeTargetId, cdpMode: state.draft.cdpMode, busy: busy }),
+						h(BrowserLinksBlock, { t: t, controller: controller, links: state.draft.links, activeTargetId: state.draft.activeTargetId, cdpMode: state.draft.cdpMode, busy: busy }),
 						h('div', { className: 'dsh-ego-card__ffmpeg' },
 							h('div', { className: 'dsh-ego-card__ffmpeg-title' }, t('ffmpegTitle')),
 							h('div', { className: 'dsh-ego-card__ffmpeg-status', role: 'status' }, t(ffmpegLabelKey) + (ffmpegStatus.reason ? ': ' + ffmpegStatus.reason : '') + (progressText ? ' ' + progressText : '')),

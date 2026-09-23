@@ -118,14 +118,25 @@ export interface EgoContext {
   fiber?: { state?: number }
 }
 
-/** Ordered CDP endpoint entry — one slot of the user's target sequence (R1). */
-export interface CdpTarget {
+/**
+ * R7 — the connection sequence is HETEROGENEOUS. Every entry is discriminated
+ * by `kind`:
+ *
+ *  - `cdp`      a CDP endpoint the runtime is pointed at via EGO_LINUX_CDP_URL
+ *  - `ego-cli`  the LOCAL ego CLI drives its own browser (no endpoint injected)
+ *
+ * `ego-cli` is local-only by definition, so at most ONE such entry may exist
+ * (enforced in `sanitizeLinks` / `upsertLink` / the panel). Array order is the
+ * priority order and is unchanged by this widening.
+ */
+export type BrowserLinkKind = 'cdp' | 'ego-cli'
+
+/** Fields every sequence entry shares. */
+export interface LinkBase {
   /** Stable id; never changes as the list is reordered. */
   id: string
-  /** Display name; falls back to the endpoint when empty. */
+  /** Display name; falls back to the endpoint / cliPath / kind default. */
   label: string
-  /** Exactly what the user typed: `http(s)://host:port` or `ws(s)://…`. */
-  endpoint: string
   /** Disabled entries stay in the sequence but can never be activated. */
   enabled: boolean
   note: string
@@ -136,6 +147,36 @@ export interface CdpTarget {
   probeCode?: string
   probeAt?: number
 }
+
+/** `kind: 'cdp'` — exactly what R1 shipped. */
+export interface CdpLink extends LinkBase {
+  kind: 'cdp'
+  /** Exactly what the user typed: `http(s)://host:port` or `ws(s)://…`. */
+  endpoint: string
+}
+
+/**
+ * `kind: 'ego-cli'` — drive the LOCAL ego-lite browser through the ego CLI
+ * itself, instead of pointing a runtime at a CDP endpoint.
+ *
+ * Activating this kind means `EGO_LINUX_CDP_URL` is NOT injected: the CLI owns
+ * its browser. That env var is a property of the bundled Linux port only, so
+ * the native macOS `ego-browser` (which drives the real ego-lite app) ignores
+ * it — this kind is the only way to reach that browser.
+ */
+export interface EgoCliLink extends LinkBase {
+  kind: 'ego-cli'
+  /** '' = auto-resolve (host PATH → darwin app bundle → bundled runtime). */
+  cliPath: string
+  /** Opt-in: pass `--sdk-path <bundled harness>` so OUR patched harness runs. */
+  useSdkPath?: boolean
+}
+
+/** One slot of the user's ordered connection sequence. */
+export type BrowserLink = CdpLink | EgoCliLink
+
+/** @deprecated R7 renamed this to `CdpLink`; kept so R1-era imports still resolve. */
+export type CdpTarget = CdpLink
 
 /** How the plugin decides which browser the bcdp_* tools drive. */
 export type CdpMode = 'auto' | 'local' | 'remote'
@@ -162,10 +203,14 @@ export interface ResolvedConfig {
   remoteEnabled: boolean
   legacyEgoToolNames: boolean
   chromeArgs: string
-  // ── R1: CDP sequence + activation ───────────────────────────────────────
-  /** Ordered target sequence; index order IS the panel order. */
-  cdpTargets: CdpTarget[]
-  /** Id of the single activated target; '' = nothing activated. */
+  // ── R1/R7: connection sequence + activation ─────────────────────────────
+  /**
+   * Ordered connection sequence; index order IS the priority order. R7 widened
+   * the element type to `BrowserLink` (cdp | ego-cli); the legacy `cdpTargets`
+   * key is read one version back and always yields `kind='cdp'` entries.
+   */
+  links: BrowserLink[]
+  /** Id of the single activated entry; '' = nothing activated. */
   activeTargetId: string
   cdpMode: CdpMode
   cdpProbeTimeoutMs: number
@@ -180,6 +225,8 @@ export interface ResolvedConfig {
 
 /** Raw composition-layer config (may contain legacy / extra keys). */
 export interface RawConfig extends Partial<ResolvedConfig> {
+  /** R1 key, superseded by `links` in R7 (read one version back). */
+  cdpTargets?: unknown
   castFpsCap?: number
   screencastQuality?: number
   screencastMaxWidth?: number

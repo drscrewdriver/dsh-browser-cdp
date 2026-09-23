@@ -8,7 +8,7 @@ describe("dual capture config", () => {
       cdpFps: 20, cdpQuality: 55, cdpMaxWidth: 960, cdpBackstopIntervalMs: 3000,
       ffmpegFps: 20, ffmpegMaxWidth: 1280, ffmpegBitrateKbps: 4000, ffmpegEncoder: "auto", ffmpegPath: "", githubMirror: "",
       runtimeArgs: "", chromeArgs: "", isolateSpaces: false, idleTimeoutMin: 0,
-      cdpTargets: [], activeTargetId: "", cdpMode: "auto", cdpProbeTimeoutMs: 3000,
+      links: [], activeTargetId: "", cdpMode: "auto", cdpProbeTimeoutMs: 3000,
       cursorHud: true, cursorName: "DeepSeek", allowLocalFallback: false, localHeadless: false, localUserDataDir: "", legacyEgoToolNames: false, remoteEnabled: true,
     });
   });
@@ -19,7 +19,7 @@ describe("dual capture config", () => {
       cdpFps: 30, cdpQuality: 70, cdpMaxWidth: 1200, cdpBackstopIntervalMs: 5000,
       ffmpegFps: 20, ffmpegMaxWidth: 1280, ffmpegBitrateKbps: 4000, ffmpegEncoder: "auto", ffmpegPath: "", githubMirror: "",
       runtimeArgs: "", chromeArgs: "", isolateSpaces: false, idleTimeoutMin: 0,
-      cdpTargets: [], activeTargetId: "", cdpMode: "auto", cdpProbeTimeoutMs: 3000,
+      links: [], activeTargetId: "", cdpMode: "auto", cdpProbeTimeoutMs: 3000,
       cursorHud: true, cursorName: "DeepSeek", allowLocalFallback: false, localHeadless: false, localUserDataDir: "", legacyEgoToolNames: false, remoteEnabled: true,
     });
     expect(resolveConfig({ cdpFps: 15, castFpsCap: 30 }).cdpFps).toBe(15);
@@ -130,5 +130,56 @@ describe("filterArgs", () => {
 
   it("returns [] when all args are blocked", () => {
     expect(filterArgs("--status --stop --help", EGO_CLI_BLOCKED)).toEqual([]);
+  });
+});
+
+// ── R7: heterogeneous connection sequence ──────────────────────────────────
+
+describe("R7 connection sequence", () => {
+  it("reads the legacy cdpTargets key as kind=cdp links (A22: zero loss)", () => {
+    const config = resolveConfig({
+      cdpTargets: [{ id: "old", label: "Legacy", endpoint: "http://legacy:9222", enabled: true, note: "" }],
+    } as never);
+    expect(config.links).toHaveLength(1);
+    expect(config.links[0]).toMatchObject({ id: "old", kind: "cdp", endpoint: "http://legacy:9222" });
+    expect(config.links[0]!.probeStatus).toBe("unknown");
+  });
+
+  it("prefers links over the legacy key when both are present", () => {
+    const config = resolveConfig({
+      links: [{ kind: "cdp", id: "new", label: "", endpoint: "http://new:1", enabled: true, note: "" }],
+      cdpTargets: [{ id: "old", label: "", endpoint: "http://old:1", enabled: true, note: "" }],
+    } as never);
+    expect(config.links.map((l) => l.id)).toEqual(["new"]);
+  });
+
+  it("keeps at most ONE local ego CLI link, dropping the extras (A17)", () => {
+    const config = resolveConfig({
+      links: [
+        { kind: "ego-cli", id: "cli-1", label: "", cliPath: "/usr/local/bin/ego-browser", enabled: true, note: "" },
+        { kind: "ego-cli", id: "cli-2", label: "", cliPath: "/other/ego-browser", enabled: true, note: "" },
+        { kind: "cdp", id: "cdp-1", label: "", endpoint: "http://a:1", enabled: true, note: "" },
+      ],
+    } as never);
+    expect(config.links.map((l) => l.id)).toEqual(["cli-1", "cdp-1"]);
+    expect(config.links[0]).toMatchObject({ kind: "ego-cli", cliPath: "/usr/local/bin/ego-browser" });
+  });
+
+  it("keeps sequence order intact across both kinds (priority is untouched)", () => {
+    const config = resolveConfig({
+      links: [
+        { kind: "ego-cli", id: "z", label: "", cliPath: "", enabled: true, note: "" },
+        { kind: "cdp", id: "y", label: "", endpoint: "http://y:1", enabled: true, note: "" },
+        { kind: "cdp", id: "x", label: "", endpoint: "http://x:1", enabled: true, note: "" },
+      ],
+    } as never);
+    expect(config.links.map((l) => l.id)).toEqual(["z", "y", "x"]);
+  });
+
+  it("still fills probe state on an ego-cli link so the panel has no undefined badges", () => {
+    const config = resolveConfig({
+      links: [{ kind: "ego-cli", id: "c", label: "", cliPath: "" }],
+    } as never);
+    expect(config.links[0]).toMatchObject({ probeStatus: "unknown", probeLatencyMs: 0, probeError: "", probeCode: "", probeAt: 0 });
   });
 });

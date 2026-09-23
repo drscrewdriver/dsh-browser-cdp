@@ -429,6 +429,26 @@ async function main(): Promise<void> {
           return sendJson(res, 503, { ok: false, code: 'pick-failed', error: (error as Error).message || String(error) })
         }
       }
+      // T5.1b fallback — panel-sent viewport coordinates resolve through a hit
+      // test instead of an Overlay inspect event. Same describe/measure/UI
+      // pipeline as the event path.
+      if (req.method === 'POST' && url.pathname === '/api/pick/click') {
+        const body = await readJson(req)
+        if (!active) return sendJson(res, 409, { ok: false, code: 'browser-disconnected', error: 'no live browser' })
+        const channel = ensurePickChannel()
+        if (channel === null) return sendJson(res, 409, { ok: false, code: 'browser-disconnected', error: 'no live browser' })
+        const targetId = typeof body.targetId === 'string' ? body.targetId : ''
+        const x = typeof body.x === 'number' ? body.x : NaN
+        const y = typeof body.y === 'number' ? body.y : NaN
+        if (!Number.isFinite(x) || !Number.isFinite(y)) {
+          return sendJson(res, 400, { ok: false, code: 'invalid-point', error: 'x/y must be finite numbers' })
+        }
+        try {
+          return sendJson(res, 200, { ok: true, state: await channel.pickAt(targetId, x, y) })
+        } catch (error) {
+          return sendJson(res, 503, { ok: false, code: 'pick-failed', error: (error as Error).message || String(error) })
+        }
+      }
       // The panel polls this to observe a pick; `POST /api/pick` only changes
       // the mode. No page-side polling is involved — the event arrives on the
       // resident connection.

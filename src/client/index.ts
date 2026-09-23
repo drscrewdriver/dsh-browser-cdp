@@ -219,6 +219,9 @@ declare function require(id: string): any
 			picking: 'Picking… click an element in the page',
 			picked: 'Element captured',
 			pickFailed: 'Pick failed',
+			pickSent: '✓ Sent to conversation',
+			pickDrafted: '✓ Written to composer',
+			pickDeliverFailed: 'Delivery failed',
 			noUrl: 'No URL to open',
 			closeTab: 'Close tab',
 			newTab: '(new tab)',
@@ -268,6 +271,9 @@ declare function require(id: string): any
 			picking: '点选中…请点击页面里的元素',
 			picked: '已捕获元素',
 			pickFailed: '点选失败',
+			pickSent: '✓ 已发送到对话',
+			pickDrafted: '✓ 已写入输入框',
+			pickDeliverFailed: '投递失败',
 			noUrl: '无可打开的地址',
 			closeTab: '关闭标签',
 			newTab: '(新标签页)',
@@ -1686,7 +1692,7 @@ declare function require(id: string): any
 						pickBtnEl.textContent = pick === 'failed' ? wt('pickFailed') : pick === 'on' ? wt('picking') : wt('pickMode')
 						pickBtnEl.classList.toggle('dsh-ego-pick-on', pick === 'on')
 					}
-				})
+				}, function (el, a) { return deliverPickToConversation(ctx, el, a) })
 				var pickBtnEl = null
 				var pickUrlLine = null
 				// rAF-coalesced live-frame flush: newest frame is applied at display
@@ -1866,6 +1872,12 @@ declare function require(id: string): any
 
 					img.addEventListener('pointerdown', (e) => {
 						if (e.button !== 0) return // left button only
+						// T5.1b: while picking, a click on the live image IS the pick.
+						if (pickCtl.isEnabled()) {
+							const pp = browserXY(e)
+							if (pp && liveImgTargetId) pickCtl.clickAt(pp.x, pp.y, liveImgTargetId)
+							return
+						}
 						img.setPointerCapture(e.pointerId)
 						sx = e.clientX; sy = e.clientY
 						stx = zoomState.tx; sty = zoomState.ty
@@ -2740,15 +2752,65 @@ clearTimeout((panel as any)._dshHideT)
 		// place at rAF cadence without triggering React re-renders per frame.
 		// `ctx` is stored so the controller can call ctx.get('betterSidebar')
 		// to auto-open the Tab on the first ego_* tool call.
+		/**
+		 * M1.6 / T5.6–T5.7 — write a picked element into the conversation.
+		 * Client-side seam, verified against dsh-better-sidebar's appendToDraft:
+		 * `ctx.sessions.list.getSnapshot().current` → `ctx.sessions.scope(sid)`
+		 * → `ctx.get('conversation').input.for(actx)` → `setDraft` / `submit`.
+		 *
+		 * Gates (T5.4 / T5.7): a pick without a resolved describe is refused
+		 * here AGAIN (second layer beyond the worker's G7 check); the auto-send
+		 * path only fires when `phase === 'plain'`; and because `submit()` is
+		 * void, the result is read back from the phase snapshot rather than
+		 * asserted.
+		 */
+		function deliverPickToConversation(ctx, element, action) {
+			try {
+				var describe = element && typeof element.describe === 'string' ? element.describe : ''
+				if (describe === '') return { ok: false, code: 'empty-describe' }
+				if (action !== 'comment' && action !== 'send') return { ok: false, code: 'bad-action' }
+				var sessionId = ctx.sessions.list.getSnapshot().current
+				if (!sessionId) return { ok: false, code: 'no-active-session' }
+				var actx = ctx.sessions.scope(sessionId)
+				if (!actx) return { ok: false, code: 'no-session-scope' }
+				var conversation = ctx.get('conversation')
+				if (!conversation || !conversation.input) return { ok: false, code: 'no-conversation-service' }
+				var input = conversation.input.for(actx)
+				if (!input || typeof input.setDraft !== 'function') return { ok: false, code: 'no-input-facade' }
+				var snap = input.state && input.state.getSnapshot ? input.state.getSnapshot() : null
+				var draft = snap && typeof snap.draft === 'string' ? snap.draft : ''
+				if (action === 'comment') {
+					// Quoting path: description into the draft, the user adds their
+					// comment and sends it themselves.
+					var next = draft ? draft + (draft.endsWith('\n') ? '' : '\n') + describe : describe
+					input.setDraft(next)
+					return { ok: true, code: 'drafted' }
+				}
+				// Auto-send path: same adjudication pipeline as the send button.
+				if (snap && snap.phase && snap.phase !== 'plain') {
+					return { ok: false, code: 'phase-not-plain', phase: snap.phase }
+				}
+				input.setDraft(draft ? draft + (draft.endsWith('\n') ? '' : '\n') + describe : describe)
+				input.submit()
+				var after = input.state && input.state.getSnapshot ? input.state.getSnapshot() : null
+				return { ok: true, code: 'submitted', phase: after && after.phase }
+			} catch (err) {
+				return { ok: false, code: 'deliver-failed', message: String((err && err.message) || err) }
+			}
+		}
+
 		// T5.3 — the panel pick state machine. Both observation windows share
 		// this control: POST toggles the worker's resident-connection picker,
 		// GET polls the state to observe (`lastPick`/`lastAction` arrive via
 		// the worker's event subscription, never page polling). Tab switches
 		// and unmount disable the mode and strip the injected UI (T5.21).
-		function createPickControl(onState) {
+		// `deliver(element, action)` is the M1.6 seam — the conversation write
+		// path — invoked exactly once per delivered pick.
+		function createPickControl(onState, deliver) {
 			var enabled = false
 			var timer = null
 			var seenPicks = 0
+			var deliveredPicks = -1
 			var request = null
 			function emit(pick, message) { onState(pick, message) }
 			function stopPolling() {
@@ -2763,23 +2825,30 @@ clearTimeout((panel as any)._dshHideT)
 			}
 			function applyState(state) {
 				if (!state || typeof state !== 'object') return
+				// M1.6: deliver exactly once per pick — the worker re-arms fast,
+				// so the reliable trigger is `picks` advancing with an action set.
+				if (state.lastPick && state.lastAction && state.picks !== deliveredPicks && typeof deliver === 'function') {
+					deliveredPicks = state.picks
+					var result = deliver(state.lastPick, state.lastAction)
+					if (result && result.ok) {
+						emit('picked', result.code === 'submitted' ? wt('pickSent') : wt('pickDrafted'))
+					} else {
+						emit('failed', wt('pickDeliverFailed') + (result && result.code ? ' (' + result.code + ')' : ''))
+					}
+				}
 				if (state.picks !== seenPicks) seenPicks = state.picks
 				if (state.enabled) {
 					emit('on', state.code === 'picking' ? wt('picking') : (state.message || wt('picking')))
-				} else if (state.code === 'delivered') {
-					// M1.6 note: the page bar already shows ✓ 已传输到对话; the
-					// host-side conversation.input wiring is the remaining seam.
-					emit('picked', state.lastPick ? state.lastPick.describe : wt('picked'))
-					enabled = false
-					stopPolling()
-				} else if (state.code && state.code !== 'idle') {
+				} else if (state.code && state.code !== 'idle' && state.code !== 'delivered') {
 					emit('failed', state.message || state.code)
 					enabled = false
 					stopPolling()
-				} else {
+				} else if (!state.enabled) {
+					// Delivered or idle: the picker re-arms itself after an action,
+					// so reaching here disabled means the worker is done.
 					enabled = false
 					stopPolling()
-					emit('off', '')
+					if (state.code === 'idle' && !(state.lastPick && state.lastAction)) emit('off', '')
 				}
 			}
 			function pollOnce() {
@@ -2802,10 +2871,24 @@ clearTimeout((panel as any)._dshHideT)
 					}
 					enabled = true
 					seenPicks = state.picks || 0
+					deliveredPicks = state.picks || 0
 					emit('on', wt('picking'))
 					stopPolling()
 					timer = window.setInterval(pollOnce, 1000)
 				})
+			}
+			// T5.1b — coordinate fallback: a click on the live screenshot picks
+			// via a server-side hit test instead of an Overlay inspect event.
+			function clickAt(x, y, targetId) {
+				if (!enabled || !targetId) return
+				fetch('/api/ego/pick/click', {
+					method: 'POST', headers: { 'content-type': 'application/json' },
+					body: JSON.stringify({ targetId: targetId, x: x, y: y }),
+				}).then(function (r) { return r.json().catch(function () { return null }) }).catch(function () { return null })
+					.then(function (res) {
+						if (res && res.ok !== false && res.state) applyState(res.state)
+						else emit('failed', (res && (res.error || res.code)) || wt('pickFailed'))
+					})
 			}
 			function disable() {
 				var wasEnabled = enabled
@@ -2814,7 +2897,10 @@ clearTimeout((panel as any)._dshHideT)
 				emit('off', '')
 				if (wasEnabled) post(false, '')
 			}
-			return { toggle: toggle, disable: disable, isEnabled: function () { return enabled } }
+			return {
+				toggle: toggle, disable: disable, clickAt: clickAt,
+				isEnabled: function () { return enabled },
+			}
 		}
 
 		function LivePreviewController(ctx) {
@@ -2868,7 +2954,7 @@ clearTimeout((panel as any)._dshHideT)
 			this._pick = 'off'
 			this._pickMessage = ''
 			this._pickTargetId = null
-			this.pickControl = createPickControl(function (pick, message) { self._setPickState(pick, message) })
+			this.pickControl = createPickControl(function (pick, message) { self._setPickState(pick, message) }, function (el, a) { return deliverPickToConversation(ctx, el, a) })
 		}
 		LivePreviewController.prototype._initialState = function () {
 			return {
@@ -3416,6 +3502,13 @@ clearTimeout((panel as any)._dshHideT)
 		}
 		LivePreviewController.prototype.handlePointerDown = function (e) {
 			if (e.button !== 0) return
+			// T5.1b: while picking, a click on the live image IS the pick — the
+			// coordinates go to the hit-test fallback instead of the browser.
+			if (this.pickControl.isEnabled()) {
+				var pp = this.browserXY(e)
+				if (pp) this.pickControl.clickAt(pp.x, pp.y, this.liveImgTargetId)
+				return
+			}
 			this._pointerState = {
 				viewPanning: false, browserDrag: false,
 				sx: e.clientX, sy: e.clientY,

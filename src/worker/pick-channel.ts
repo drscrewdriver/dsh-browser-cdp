@@ -30,7 +30,7 @@ import {
   setInspectMode,
   type PageCall,
 } from '../cdp/page.ts'
-import { boxModel, describeNode, flattenAxTree, accessibilityTree } from '../cdp/dom.ts'
+import { boxModel, describeNode, flattenAxTree, accessibilityTree, nodeAtPoint } from '../cdp/dom.ts'
 import { PICK_BINDING, confirmPickUi, parsePickAction, removePickUi, showPickUi, type PickAction } from './pick-ui.ts'
 
 /** The rich identity R6 serialises and the panel draws a frame around. */
@@ -217,6 +217,14 @@ export class PickChannel {
     this.#detachPick = null
     await setInspectMode(call, { mode: 'none', config: DISABLED_HIGHLIGHT_CONFIG, sessionId })
     this.#state = { ...this.#state, enabled: false, code: 'picked', message: '' }
+    await this.#resolvePick(sessionId, backendNodeId)
+  }
+
+  /** Shared describe → measure → inject-UI tail for both pick entry points. */
+  async #resolvePick(sessionId: string, backendNodeId: number): Promise<void> {
+    const targetId = this.#state.targetId
+    const call: PageCall = (method, params, options) =>
+      this.#sessions.call(targetId, method, params, options?.timeoutMs ?? 6000)
 
     const scroll = await readScrollOffset(call, sessionId)
     const scrollOffset = scroll.ok ? { x: scroll.x, y: scroll.y } : { x: 0, y: 0 }
@@ -250,6 +258,28 @@ export class PickChannel {
     const ui = await showPickUi(call, sessionId, element)
     if (!ui.ok) this.#onError?.(ui.code, ui.message)
     this.#subscribeAction(sessionId)
+  }
+
+  /**
+   * T5.1b — the fallback entry point: the panel sends VIEWPORT coordinates
+   * (e.g. a click on the live screenshot) and the node is resolved with a
+   * hit test instead of an Overlay inspect event. Shares the exact describe /
+   * measure / inject-UI pipeline with the event path, so the panel cannot tell
+   * the two apart — including G7 and the post-pick UI.
+   */
+  async pickAt(targetId: string, x: number, y: number): Promise<PickState> {
+    if (targetId === '') return this.#fail('target-required', 'pickAt needs a targetId')
+    const session = await this.#sessions.ensure(targetId)
+    const call: PageCall = (method, params, options) =>
+      this.#sessions.call(targetId, method, params, options?.timeoutMs ?? 6000)
+    const hit = await nodeAtPoint(call, session.sessionId, x, y)
+    if (!hit.ok) {
+      // T5.8 blank-page class: an explicit reason, never a silent idle.
+      return this.#fail(hit.code, hit.message)
+    }
+    this.#state = { ...this.#state, enabled: false, code: 'picked', message: '', targetId }
+    await this.#resolvePick(session.sessionId, hit.backendNodeId)
+    return this.state()
   }
 
   #subscribeAction(sessionId: string): void {

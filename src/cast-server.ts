@@ -710,8 +710,9 @@ export function initCastServer(
 
   // 阶段 5 / R6 (T5.19): pick-mode control. POST forwards {enabled, targetId}
   // to the worker's resident-connection picker; GET polls the pick state the
-  // panel observes (lastPick included). One registration, branched on method —
-  // the worker exposes both on the same path.
+  // panel observes (lastPick included); POST /click forwards the T5.1b
+  // coordinate fallback. One registration, branched on method+path — the
+  // worker exposes both on sibling paths.
   const disposePick = server.register({
     kind: 'exact',
     path: EGO_PICK_ROUTE,
@@ -728,6 +729,23 @@ export function initCastServer(
       }
       const result = await proxyFrom(port, '/api/pick')
       return sendJson(res, 200, result || { ok: false, state: 'idle', reason: 'worker not ready' })
+    },
+  })
+
+  // T5.1b fallback — panel-sent viewport coordinates. Separate exact route so
+  // matching never depends on the host's exact-path semantics.
+  const disposePickClick = server.register({
+    kind: 'exact',
+    path: `${EGO_PICK_ROUTE}/click`,
+    handler: async (reqRaw: unknown, resRaw: unknown) => {
+      const req = reqRaw as IncomingMessage
+      const res = resRaw as ServerResponse
+      const port = await ensureWorker()
+      if (port === null) return sendJson(res, 400, { ok: false, error: 'no live agent browser' })
+      const body = await readJsonBody(req).catch(() => ({}) as Record<string, unknown>)
+      const result = await proxyPost(port, '/api/pick/click', body)
+      if (!result) return sendJson(res, 502, { ok: false, error: 'pick worker unavailable' })
+      return sendJson(res, result.status, result.body)
     },
   })
 
@@ -857,6 +875,7 @@ export function initCastServer(
     try { disposeClose() } catch { /* ignore */ }
     try { disposeMarks() } catch { /* ignore */ }
     try { disposePick() } catch { /* ignore */ }
+    try { disposePickClick() } catch { /* ignore */ }
     try { disposeFlush() } catch { /* ignore */ }
     try { disposeRaise() } catch { /* ignore */ }
     try { disposeLoginImport() } catch { /* ignore */ }

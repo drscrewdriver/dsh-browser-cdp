@@ -15,7 +15,7 @@ const flush = (): Promise<void> => new Promise((resolve) => setImmediate(resolve
 
 type Handler = (params: unknown, sessionId?: string) => void
 
-function harness(overrides: { enableFails?: boolean; describeFails?: boolean } = {}) {
+function harness(overrides: { enableFails?: boolean; describeFails?: boolean; hitBackendNodeId?: number | null } = {}) {
   const calls: Array<{ method: string; params: Record<string, unknown>; sessionId?: string }> = []
   const listeners = new Map<string, Set<Handler>>()
 
@@ -23,6 +23,10 @@ function harness(overrides: { enableFails?: boolean; describeFails?: boolean } =
     calls.push({ method, params, ...(sessionId === undefined ? {} : { sessionId }) })
     if (method === 'DOM.enable' && overrides.enableFails) throw new Error('DOM is not available')
     if (method === 'Runtime.evaluate') return { result: { value: [10, 20] } }
+    if (method === 'DOM.getNodeForLocation') {
+      if (overrides.hitBackendNodeId === null) return {}
+      return { backendNodeId: overrides.hitBackendNodeId ?? 77, nodeId: 9, frameId: 'F1' }
+    }
     if (method === 'DOM.describeNode') {
       if (overrides.describeFails) throw new Error('Node is detached from the document')
       return { node: { nodeName: 'BUTTON', attributes: ['id', 'go', 'aria-label', 'Search'] } }
@@ -287,6 +291,47 @@ describe('M1.5 selection UI + action delivery (T5.10–T5.13)', () => {
     const after = h.callsFor('Runtime.evaluate')
     expect(after.length).toBeGreaterThan(before)
     expect(String(after.at(-1)!.params.expression)).toContain('__dsh-pick-style')
+  })
+})
+
+describe('T5.1b coordinate fallback (pickAt)', () => {
+  it('resolves a viewport point to a described pick through the SAME pipeline', async () => {
+    const h = harness()
+    const state = await h.channel.pickAt('T1', 40, 25)
+    // Hit test happened on the target's page session.
+    const hit = h.callsFor('DOM.getNodeForLocation')[0]!
+    expect(hit.params).toMatchObject({ x: 40, y: 25 })
+    expect(hit.sessionId).toBe('S-T1')
+    // Then describe → box → UI, exactly like the event path.
+    expect(h.callsFor('DOM.describeNode')).toHaveLength(1)
+    expect(state.lastPick).toMatchObject({ backendNodeId: 77, describe: 'button #go name="Search" focusable' })
+    expect(state.picks).toBe(1)
+    // The injected UI is there too.
+    expect(h.callsFor('Runtime.addBinding')).toHaveLength(1)
+  })
+
+  it('refuses a blank point with an explicit reason (T5.8)', async () => {
+    const h = harness({ hitBackendNodeId: null })
+    const state = await h.channel.pickAt('T1', 5, 5)
+    expect(state.enabled).toBe(false)
+    expect(state.code).toBe('no-node-at-point')
+    expect(state.lastPick).toBeNull()
+    // Nothing was described, nothing injected.
+    expect(h.callsFor('DOM.describeNode')).toHaveLength(0)
+  })
+
+  it('refuses without a target before touching the browser', async () => {
+    const h = harness()
+    const state = await h.channel.pickAt('', 1, 2)
+    expect(state.code).toBe('target-required')
+    expect(h.methods()).toEqual([])
+  })
+
+  it('refuses a pick whose node cannot be described, via the fallback too (G7)', async () => {
+    const h = harness({ describeFails: true })
+    const state = await h.channel.pickAt('T1', 1, 2)
+    expect(state.code).toBe('describe-failed')
+    expect(state.lastPick).toBeNull()
   })
 })
 

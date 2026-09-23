@@ -5383,6 +5383,41 @@ async function setInspectMode(call, options) {
 
 //#endregion
 //#region src/cdp/dom.ts
+/** Which element is at a viewport point? Input coordinates, not document ones. */
+async function nodeAtPoint(call, sessionId, x, y, timeoutMs) {
+	if (!Number.isFinite(x) || !Number.isFinite(y)) return {
+		ok: false,
+		code: "invalid-point",
+		message: `point must be finite numbers (got ${x},${y})`
+	};
+	try {
+		const result = await call("DOM.getNodeForLocation", {
+			x: Math.round(x),
+			y: Math.round(y),
+			includeUserAgentShadowDOM: false
+		}, {
+			...sessionId === void 0 ? {} : { sessionId },
+			...timeoutMs === void 0 ? {} : { timeoutMs }
+		});
+		if (typeof result?.backendNodeId !== "number") return {
+			ok: false,
+			code: "no-node-at-point",
+			message: `nothing resolved at ${x},${y}`
+		};
+		return {
+			ok: true,
+			backendNodeId: result.backendNodeId,
+			nodeId: typeof result.nodeId === "number" ? result.nodeId : 0,
+			frameId: typeof result.frameId === "string" ? result.frameId : ""
+		};
+	} catch (error) {
+		return {
+			ok: false,
+			code: "hit-test-failed",
+			message: error instanceof Error ? error.message : String(error)
+		};
+	}
+}
 async function describeNode(call, sessionId, ref, timeoutMs) {
 	if (ref.backendNodeId === void 0 && ref.nodeId === void 0) return {
 		ok: false,
@@ -5857,6 +5892,12 @@ var PickChannel = class {
 			code: "picked",
 			message: ""
 		};
+		await this.#resolvePick(sessionId, backendNodeId);
+	}
+	/** Shared describe → measure → inject-UI tail for both pick entry points. */
+	async #resolvePick(sessionId, backendNodeId) {
+		const targetId = this.#state.targetId;
+		const call = (method, params, options) => this.#sessions.call(targetId, method, params, options?.timeoutMs ?? 6e3);
 		const scroll = await readScrollOffset(call, sessionId);
 		const scrollOffset = scroll.ok ? {
 			x: scroll.x,
@@ -5893,6 +5934,29 @@ var PickChannel = class {
 		const ui = await showPickUi(call, sessionId, element);
 		if (!ui.ok) this.#onError?.(ui.code, ui.message);
 		this.#subscribeAction(sessionId);
+	}
+	/**
+	* T5.1b — the fallback entry point: the panel sends VIEWPORT coordinates
+	* (e.g. a click on the live screenshot) and the node is resolved with a
+	* hit test instead of an Overlay inspect event. Shares the exact describe /
+	* measure / inject-UI pipeline with the event path, so the panel cannot tell
+	* the two apart — including G7 and the post-pick UI.
+	*/
+	async pickAt(targetId, x, y) {
+		if (targetId === "") return this.#fail("target-required", "pickAt needs a targetId");
+		const session = await this.#sessions.ensure(targetId);
+		const call = (method, params, options) => this.#sessions.call(targetId, method, params, options?.timeoutMs ?? 6e3);
+		const hit = await nodeAtPoint(call, session.sessionId, x, y);
+		if (!hit.ok) return this.#fail(hit.code, hit.message);
+		this.#state = {
+			...this.#state,
+			enabled: false,
+			code: "picked",
+			message: "",
+			targetId
+		};
+		await this.#resolvePick(session.sessionId, hit.backendNodeId);
+		return this.state();
 	}
 	#subscribeAction(sessionId) {
 		this.#detachAction?.();
@@ -6613,6 +6677,40 @@ async function main() {
 					return sendJson(res, 200, {
 						ok: true,
 						state: await channel.setEnabled(body.enabled === true, targetId)
+					});
+				} catch (error) {
+					return sendJson(res, 503, {
+						ok: false,
+						code: "pick-failed",
+						error: error.message || String(error)
+					});
+				}
+			}
+			if (req.method === "POST" && url.pathname === "/api/pick/click") {
+				const body = await readJson(req);
+				if (!active) return sendJson(res, 409, {
+					ok: false,
+					code: "browser-disconnected",
+					error: "no live browser"
+				});
+				const channel = ensurePickChannel();
+				if (channel === null) return sendJson(res, 409, {
+					ok: false,
+					code: "browser-disconnected",
+					error: "no live browser"
+				});
+				const targetId = typeof body.targetId === "string" ? body.targetId : "";
+				const x = typeof body.x === "number" ? body.x : NaN;
+				const y = typeof body.y === "number" ? body.y : NaN;
+				if (!Number.isFinite(x) || !Number.isFinite(y)) return sendJson(res, 400, {
+					ok: false,
+					code: "invalid-point",
+					error: "x/y must be finite numbers"
+				});
+				try {
+					return sendJson(res, 200, {
+						ok: true,
+						state: await channel.pickAt(targetId, x, y)
 					});
 				} catch (error) {
 					return sendJson(res, 503, {

@@ -81,6 +81,7 @@ export const EGO_HEALTH_ROUTE = '/api/ego/health'
 export const EGO_CLOSE_ROUTE = '/api/ego/close'
 export const EGO_FLUSH_ROUTE = '/api/ego/flush'
 export const EGO_RAISE_ROUTE = '/api/ego/raise'
+export const EGO_MARKS_ROUTE = '/api/ego/marks'
 export const EGO_LOGIN_IMPORT_ROUTE = '/api/ego/login-import'
 export const EGO_INPUT_ROUTE = '/api/ego/input'
 export const EGO_WATCH_START_ROUTE = '/api/ego/watch/start'
@@ -688,6 +689,24 @@ export function initCastServer(
     },
   })
 
+  // POST /api/ego/marks — 阶段 3 / R4: set-of-marks capture (image + numbered
+  // element map) through the worker's resident connection. Same trust fence and
+  // forwarding shape as /api/ego/close.
+  const disposeMarks = server.register({
+    kind: 'exact',
+    path: EGO_MARKS_ROUTE,
+    handler: async (reqRaw: unknown, resRaw: unknown) => {
+      const req = reqRaw as IncomingMessage
+      const res = resRaw as ServerResponse
+      const port = await ensureWorker()
+      if (port === null) return sendJson(res, 400, { ok: false, error: 'no live agent browser' })
+      const body = await readJsonBody(req).catch(() => ({}) as Record<string, unknown>)
+      const result = await proxyPost(port, '/api/marks', body, 20000)
+      if (!result) return sendJson(res, 502, { ok: false, error: 'marks worker unavailable' })
+      return sendJson(res, result.status, result.body)
+    },
+  })
+
   // POST /api/ego/flush — force login cookies down to the disk profile.
   const disposeFlush = server.register({
     kind: 'exact',
@@ -812,6 +831,7 @@ export function initCastServer(
     try { disposeStream() } catch { /* ignore */ }
     try { disposeInput() } catch { /* ignore */ }
     try { disposeClose() } catch { /* ignore */ }
+    try { disposeMarks() } catch { /* ignore */ }
     try { disposeFlush() } catch { /* ignore */ }
     try { disposeRaise() } catch { /* ignore */ }
     try { disposeLoginImport() } catch { /* ignore */ }

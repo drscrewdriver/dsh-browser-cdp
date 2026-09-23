@@ -11,6 +11,7 @@ import { TargetSessions, CdpCaptureBackend } from './capture-cdp.ts'
 import { CaptureManager } from './capture-manager.ts'
 import { FfmpegCaptureBackend } from './capture-ffmpeg.ts'
 import { PickChannel } from './pick-channel.ts'
+import { captureMarked } from '../cdp/marks.ts'
 
 const SENTINEL = '@@DSH_RESULT@@'
 const HOME = homedir() || process.env.HOME || process.env.USERPROFILE || '/root'
@@ -440,6 +441,37 @@ async function main(): Promise<void> {
           })
         }
         return sendJson(res, 200, { ok: true, state: channel.state() })
+      }
+      // 阶段 3 / R4 (T3.2) — set-of-marks capture on the resident connection:
+      // one call returns the shot AND the numbered element map, with no page
+      // injection. `captureMarked` scopes every call to the target's page
+      // session, so no sessionId is passed here.
+      if (req.method === 'POST' && url.pathname === '/api/marks') {
+        const body = await readJson(req)
+        if (!active) return sendJson(res, 409, { ok: false, code: 'browser-disconnected', error: 'no live browser' })
+        const targetId = typeof body.targetId === 'string' ? body.targetId : ''
+        if (!targetId) return sendJson(res, 400, { ok: false, code: 'target-required', error: 'targetId required' })
+        const targets = await listTargets()
+        if (!targets.some((target) => target.targetId === targetId)) {
+          return sendJson(res, 409, { ok: false, code: 'capture-target-stale', error: 'target is no longer available' })
+        }
+        try {
+          const result = await captureMarked(
+            (method, params, options) => active!.sessions.call(targetId, method, params, options?.timeoutMs ?? 15000),
+            undefined,
+            {
+              limit: typeof body.limit === 'number' ? body.limit : 20,
+              highlightIndex: typeof body.highlightIndex === 'number' ? body.highlightIndex : undefined,
+              measureRects: body.measureRects !== false,
+              format: body.format === 'jpeg' ? 'jpeg' : 'png',
+              quality: typeof body.quality === 'number' ? body.quality : undefined,
+              timeoutMs: 15000,
+            },
+          )
+          return sendJson(res, result.ok ? 200 : 502, result)
+        } catch (error) {
+          return sendJson(res, 503, { ok: false, code: 'marks-failed', error: (error as Error).message || String(error) })
+        }
       }
       if (req.method === 'POST' && url.pathname === '/api/close') { const { targetId } = await readJson(req); if (!active || !targetId) return sendJson(res, 400, { ok: false, error: 'targetId required' }); await active.cdp.call('Target.closeTarget', { targetId }); return sendJson(res, 200, { ok: true }) }
       if (req.method === 'POST' && url.pathname === '/api/flush') { if (!active) return sendJson(res, 409, { ok: false, error: 'no live browser' }); await active.cdp.call('Storage.flushCookies').catch(() => { /* ignore */ }); return sendJson(res, 200, { ok: true }) }

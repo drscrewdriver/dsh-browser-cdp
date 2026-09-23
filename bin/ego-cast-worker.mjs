@@ -5186,6 +5186,105 @@ async function enableDomains(call, sessionId, domains, affinity, targetId, conne
 
 //#endregion
 //#region src/cdp/page.ts
+/**
+* Translate an option set into the exact wire parameters, or explain why it
+* cannot be done. Exported because the decision — not the image — is what the
+* callers and the fixtures need to reason about.
+*/
+function resolveClip(options) {
+	const beyond = options.captureBeyondViewport ?? options.clip !== void 0;
+	if (options.clip === void 0) return {
+		ok: true,
+		clip: null,
+		captureBeyondViewport: beyond
+	};
+	const { x, y, width, height, scale } = options.clip;
+	for (const [name, value] of Object.entries({
+		x,
+		y,
+		width,
+		height
+	})) if (!Number.isFinite(value)) return {
+		ok: false,
+		code: "invalid-clip",
+		message: `clip.${name} must be a finite number`
+	};
+	if (width <= 0 || height <= 0) return {
+		ok: false,
+		code: "invalid-clip",
+		message: `clip width/height must be positive (got ${width}x${height})`
+	};
+	if (options.clipSpace === "viewport") {
+		const scroll = options.scroll;
+		if (scroll === void 0) return {
+			ok: false,
+			code: "missing-scroll",
+			message: "a viewport clip needs the current scroll offset: CDP clip coordinates are document-relative, so cropping without it silently captures the wrong region"
+		};
+		if (!Number.isFinite(scroll.x) || !Number.isFinite(scroll.y)) return {
+			ok: false,
+			code: "missing-scroll",
+			message: "scroll.x / scroll.y must be finite numbers"
+		};
+		return {
+			ok: true,
+			clip: {
+				x: x + scroll.x,
+				y: y + scroll.y,
+				width,
+				height,
+				...scale === void 0 ? {} : { scale }
+			},
+			captureBeyondViewport: beyond
+		};
+	}
+	return {
+		ok: true,
+		clip: {
+			x,
+			y,
+			width,
+			height,
+			...scale === void 0 ? {} : { scale }
+		},
+		captureBeyondViewport: beyond
+	};
+}
+async function captureScreenshot(call, sessionId, options = {}) {
+	const resolved = resolveClip(options);
+	if (!resolved.ok) return resolved;
+	const params = {
+		format: options.format ?? "png",
+		captureBeyondViewport: resolved.captureBeyondViewport
+	};
+	if (params.format === "jpeg" && options.quality !== void 0) params.quality = options.quality;
+	if (resolved.clip !== null) params.clip = resolved.clip;
+	try {
+		const result = await call("Page.captureScreenshot", params, {
+			...sessionId === void 0 ? {} : { sessionId },
+			...options.timeoutMs === void 0 ? {} : { timeoutMs: options.timeoutMs }
+		});
+		const data = typeof result?.data === "string" ? result.data : "";
+		if (data === "") return {
+			ok: false,
+			code: "empty-screenshot",
+			message: "Page.captureScreenshot returned no data"
+		};
+		return {
+			ok: true,
+			data,
+			bytes: Buffer.byteLength(data, "base64"),
+			clip: resolved.clip,
+			captureBeyondViewport: resolved.captureBeyondViewport
+		};
+	} catch (error) {
+		return {
+			ok: false,
+			code: "screenshot-failed",
+			message: error instanceof Error ? error.message : String(error)
+		};
+	}
+}
 /** Current scroll offset, in CSS pixels. Needed to anchor a viewport clip. */
 async function readScrollOffset(call, sessionId, timeoutMs) {
 	try {
@@ -5628,6 +5727,128 @@ var PickChannel = class {
 		this.#affinity.clear();
 	}
 };
+
+//#endregion
+//#region src/cdp/marks.ts
+/** Roles that make an AX node a click/fill target worth numbering. */
+const INTERACTIVE_ROLES = [
+	"button",
+	"link",
+	"textbox",
+	"searchbox",
+	"combobox",
+	"checkbox",
+	"radio",
+	"menuitem",
+	"menuitemcheckbox",
+	"menuitemradio",
+	"tab",
+	"option",
+	"switch",
+	"slider"
+];
+function isInteractiveRole(role) {
+	return INTERACTIVE_ROLES.includes(role);
+}
+/**
+* Number the interactive candidates of an AX tree.
+*
+* Document order is preserved (the tree arrives in order), duplicates are
+* dropped by node id, ignored nodes are skipped, and `limit` caps the set so a
+* huge page cannot flood the caller — the cap is the caller's budget, applied
+* BEFORE any per-node round trip.
+*/
+function interactiveCandidates(nodes, limit = 20) {
+	const seen = /* @__PURE__ */ new Set();
+	const out = [];
+	for (const node of nodes) {
+		if (out.length >= limit) break;
+		if (node.ignored || !isInteractiveRole(node.role)) continue;
+		if (seen.has(node.backendNodeId)) continue;
+		seen.add(node.backendNodeId);
+		out.push({
+			n: out.length + 1,
+			backendNodeId: node.backendNodeId,
+			role: node.role,
+			name: node.name,
+			keyboardFocusable: node.keyboardFocusable,
+			rect: null,
+			documentRect: null
+		});
+	}
+	return out;
+}
+async function captureMarked(call, sessionId, options = {}) {
+	const limit = options.limit ?? 20;
+	const measureRects = options.measureRects ?? true;
+	const tree = await accessibilityTree(call, sessionId, options.timeoutMs);
+	if (!tree.ok) return tree;
+	const marks = interactiveCandidates(tree.nodes, limit);
+	if (measureRects) {
+		const scroll = await readScrollOffset(call, sessionId, options.timeoutMs);
+		const scrollOffset = scroll.ok ? {
+			x: scroll.x,
+			y: scroll.y
+		} : {
+			x: 0,
+			y: 0
+		};
+		for (const mark of marks) {
+			const box = await boxModel(call, sessionId, { backendNodeId: mark.backendNodeId }, {
+				scroll: scrollOffset,
+				timeoutMs: options.timeoutMs
+			});
+			if (box.ok) {
+				mark.rect = box.rect;
+				mark.documentRect = box.documentRect;
+			}
+		}
+	}
+	let highlighted = null;
+	let highlightError = null;
+	if (options.highlightIndex !== void 0) {
+		const wanted = marks.find((mark) => mark.n === options.highlightIndex);
+		if (wanted === void 0) highlightError = {
+			code: "highlight-index-out-of-range",
+			message: `no mark #${options.highlightIndex} (only ${marks.length} candidates)`
+		};
+		else try {
+			await call("Overlay.highlightNode", {
+				backendNodeId: wanted.backendNodeId,
+				highlightConfig: NEUTRAL_HIGHLIGHT_CONFIG
+			}, {
+				...sessionId === void 0 ? {} : { sessionId },
+				...options.timeoutMs === void 0 ? {} : { timeoutMs: options.timeoutMs }
+			});
+			highlighted = wanted.n;
+		} catch (error) {
+			highlightError = {
+				code: "highlight-failed",
+				message: error instanceof Error ? error.message : String(error)
+			};
+		}
+	}
+	const shot = await captureScreenshot(call, sessionId, {
+		format: options.format,
+		quality: options.quality,
+		timeoutMs: options.timeoutMs
+	});
+	try {
+		await call("Overlay.hideHighlight", {}, {
+			...sessionId === void 0 ? {} : { sessionId },
+			...options.timeoutMs === void 0 ? {} : { timeoutMs: options.timeoutMs }
+		});
+	} catch {}
+	if (!shot.ok) return shot;
+	return {
+		ok: true,
+		data: shot.data,
+		bytes: shot.bytes,
+		marks,
+		highlighted,
+		highlightError
+	};
+}
 
 //#endregion
 //#region src/worker/ego-cast-worker.ts
@@ -6186,6 +6407,42 @@ async function main() {
 					ok: true,
 					state: channel.state()
 				});
+			}
+			if (req.method === "POST" && url.pathname === "/api/marks") {
+				const body = await readJson(req);
+				if (!active) return sendJson(res, 409, {
+					ok: false,
+					code: "browser-disconnected",
+					error: "no live browser"
+				});
+				const targetId = typeof body.targetId === "string" ? body.targetId : "";
+				if (!targetId) return sendJson(res, 400, {
+					ok: false,
+					code: "target-required",
+					error: "targetId required"
+				});
+				if (!(await listTargets()).some((target) => target.targetId === targetId)) return sendJson(res, 409, {
+					ok: false,
+					code: "capture-target-stale",
+					error: "target is no longer available"
+				});
+				try {
+					const result = await captureMarked((method, params, options) => active.sessions.call(targetId, method, params, options?.timeoutMs ?? 15e3), void 0, {
+						limit: typeof body.limit === "number" ? body.limit : 20,
+						highlightIndex: typeof body.highlightIndex === "number" ? body.highlightIndex : void 0,
+						measureRects: body.measureRects !== false,
+						format: body.format === "jpeg" ? "jpeg" : "png",
+						quality: typeof body.quality === "number" ? body.quality : void 0,
+						timeoutMs: 15e3
+					});
+					return sendJson(res, result.ok ? 200 : 502, result);
+				} catch (error) {
+					return sendJson(res, 503, {
+						ok: false,
+						code: "marks-failed",
+						error: error.message || String(error)
+					});
+				}
 			}
 			if (req.method === "POST" && url.pathname === "/api/close") {
 				const { targetId } = await readJson(req);

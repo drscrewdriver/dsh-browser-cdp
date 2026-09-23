@@ -179,6 +179,7 @@ export function buildRound(input: BuildRoundInput): PipeRound {
     )
   }
 
+  const excluded = new Set(input.excluded ?? [])
   const state = buildIntentState({
     intent: input.intent,
     frame: input.frame,
@@ -188,10 +189,24 @@ export function buildRound(input: BuildRoundInput): PipeRound {
     historyLimit: config.historyLimit,
   })
 
+  // A candidate that was already ruled out must not be OFFERED again.
+  //
+  // The `excluded` line in HISTORY says "do not propose these", but a judge
+  // given the option anyway will sometimes take it — and then the loop spends a
+  // judge call to be told something it already knew. Removing them from the
+  // table is what makes the exclusion structural rather than advisory.
+  //
+  // The frame numbers are NOT renumbered (21..26 stay 21..26), so a number still
+  // means one element for both sides of the seam.
+  const offered =
+    input.round === 'control'
+      ? []
+      : (chunk?.nodes ?? input.frame.dom.nodes).filter((node) => !excluded.has(node.n))
+
   const questions =
     input.round === 'control'
       ? controlQuestions(canScroll(input.frame))
-      : pickQuestions(chunk?.nodes ?? input.frame.dom.nodes)
+      : pickQuestions(offered)
 
   const issues = validateQuestions(questions)
   const body = buildSystemOneRequest(state, questions, config.model)
@@ -222,7 +237,10 @@ export function buildRound(input: BuildRoundInput): PipeRound {
                 quality: input.frame.image.quality,
                 overBudget: input.frame.image.overBudget,
               },
-        nodes: chunk?.nodes ?? input.frame.dom.nodes,
+        // What the judge was actually shown, so an archived bundle and a live
+        // prompt can never disagree about it. For a pick round this is the
+        // OFFERED set (exclusions removed), not the raw chunk.
+        nodes: input.round === 'control' ? (chunk?.nodes ?? input.frame.dom.nodes) : offered,
         truncated: input.frame.dom.truncated,
         total: input.frame.dom.total,
       },
@@ -232,7 +250,10 @@ export function buildRound(input: BuildRoundInput): PipeRound {
           : {
               index: chunk.chunkIndex,
               total: chunk.chunkTotal,
-              itemCount: chunk.itemCount,
+              // `itemCount` is the number of OPTIONS, not the size of the slice:
+              // a chunk of 20 with 3 ruled out offers 17, and a caller reading
+              // the bundle needs the number it can actually choose from.
+              itemCount: offered.length === 0 ? chunk.itemCount : offered.length,
               containerHint: chunk.containerHint,
             },
       questions,

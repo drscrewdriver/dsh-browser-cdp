@@ -50,6 +50,13 @@ const ALLOWED_KEYS = new Set<string>([
   // older cached panel cannot be locked out of saving the sequence.
   'links', 'cdpTargets', 'activeTargetId', 'cdpMode', 'cdpProbeTimeoutMs', 'remoteEnabled',
   'cursorHud', 'cursorName', 'allowLocalFallback', 'localHeadless', 'localUserDataDir',
+  // ── 阶段 10: JEV/Laya judge ─────────────────────────────────────────────
+  // The two key fields are writable here for the same reason `links` is: the
+  // panel is where a user configures them, and a key that cannot be saved is a
+  // hop that can never be enabled.
+  'jevUrl', 'jevKey', 'jevModel', 'layaUrl', 'layaKey', 'layaModel',
+  'judgePrefer', 'jevChunkSize', 'jevMaxImageBytes', 'jevHistoryLimit',
+  'jevArchiveImage', 'jevStepBudget', 'jevWallMs',
 ])
 
 interface EnvelopeOk<T> { ok: true; value: T }

@@ -115,6 +115,22 @@ declare function require(id: string): any
 			remoteEnabledHint: 'Master switch without deleting the target sequence. Off: the sequence is preserved but nothing probes or connects remotely.',
 			remoteEnabledOn: 'Enabled (sequence active)',
 			remoteEnabledOff: 'Disabled (sequence preserved, inert)',
+			// 阶段 10 — judge chain
+			judgeTitle: 'JEV / Laya judgement',
+			judgeHint: 'Judgement chain for bcdp_jev_*. Hops run in the order below; an unavailable hop is SKIPPED (never called), and every skip is reported.',
+			jevUrl: 'JEV base URL', jevUrlHint: 'No path. Empty disables the jev hop entirely.',
+			jevKey: 'JEV key', jevKeyHint: 'Bearer key. Empty skips the jev hop instead of sending a request that would be rejected.',
+			jevModel: 'JEV model',
+			layaUrl: 'Laya base URL', layaUrlHint: 'The Laya sidecar serves port 8000. Port 7789 is a different tool and will not answer.',
+			layaKey: 'Laya key', layaKeyHint: 'REQUIRED — laya-api has no anonymous access, so a keyless call is a guaranteed 401. Empty skips the hop.',
+			layaModel: 'Laya model',
+			judgePrefer: 'Hop order', judgePreferHint: 'Comma separated, e.g. jev,laya,rule. Unknown names are dropped; the terminal refusal hop always remains.',
+			jevChunkSize: 'Candidates per round', jevChunkSizeHint: 'Also selects the probability threshold bucket, so raising it tightens the gate.',
+			jevMaxImageBytes: 'Frame byte budget', jevMaxImageBytesHint: '0 = unbounded (recommended: a full-page JPEG measured ~137 KiB).',
+			jevHistoryLimit: 'History depth',
+			jevArchiveImage: 'Embed image in archive', jevArchiveImageOn: 'Embedded (larger bundles)', jevArchiveImageOff: 'Metadata only',
+			jevStepBudget: 'Loop step budget',
+			jevWallMs: 'Loop wall clock (ms)',
 			cdpNoTargets: 'No targets yet. Add one to connect to a running browser.',
 			cdpAdd: 'Add CDP endpoint',
 			cdpAddCli: 'Add local ego CLI',
@@ -194,6 +210,22 @@ declare function require(id: string): any
 			remoteEnabledHint: '总开关：关闭后目标序列原样保留但暂停一切远端探测与连接，随时可重新打开。不影响 cdpMode=local。',
 			remoteEnabledOn: '开启（序列生效）',
 			remoteEnabledOff: '关闭（序列保留，暂停使用）',
+			// 阶段 10 — 判定链
+			judgeTitle: 'JEV / Laya 判定',
+			judgeHint: 'bcdp_jev_* 的判定链。按下面的顺序逐跳尝试；不可用的跳**跳过不调用**，且每一次跳过都会被报告。',
+			jevUrl: 'JEV 地址', jevUrlHint: '不要带路径。留空即彻底关闭 jev 这一跳。',
+			jevKey: 'JEV 密钥', jevKeyHint: 'Bearer 密钥。留空时**跳过** jev，而不是发一个注定被拒的请求。',
+			jevModel: 'JEV 模型',
+			layaUrl: 'Laya 地址', layaUrlHint: 'laya sidecar 服务在 8000 端口；7789 是别的工具，连不上。',
+			layaKey: 'Laya 密钥', layaKeyHint: '**必填** —— laya-api 无匿名分支，缺 key 必然 401。留空则跳过该跳。',
+			layaModel: 'Laya 模型',
+			judgePrefer: '跳序', judgePreferHint: '逗号分隔，如 jev,laya,rule。无法识别的名字会被丢弃；终点的拒绝跳永远保留。',
+			jevChunkSize: '每轮候选上限', jevChunkSizeHint: '同时决定概率阈值分桶，调大也会同步收紧闸门。',
+			jevMaxImageBytes: '帧字节预算', jevMaxImageBytesHint: '0 = 不限（推荐：实测整页 JPEG 约 137 KiB）。',
+			jevHistoryLimit: '历史深度',
+			jevArchiveImage: '归档内嵌图片', jevArchiveImageOn: '内嵌（归档包更大）', jevArchiveImageOff: '仅元数据',
+			jevStepBudget: '循环步数预算',
+			jevWallMs: '循环时长上限（毫秒）',
 			cdpNoTargets: '还没有目标。添加一个以连接到运行中的浏览器。',
 			cdpAdd: '添加 CDP 端点',
 			cdpAddCli: '添加本机 ego CLI',
@@ -350,7 +382,7 @@ declare function require(id: string): any
 				status: 'idle',        // 'idle' | 'loading' | 'ready'
 				available: false,      // true after a successful /bcdp/api/get
 				writable: false,       // false when settings service is absent
-				draft: { isolateSpaces: false, idleTimeoutMin: '0', chromePath: '', captureBackend: 'auto', streamProfile: 'balanced', cdpFps: '20', cdpQuality: '55', cdpMaxWidth: '960', cdpBackstopIntervalMs: '3000', ffmpegFps: '20', ffmpegMaxWidth: '1280', ffmpegBitrateKbps: '4000', ffmpegEncoder: 'auto', ffmpegPath: '', githubMirror: '', runtimeArgs: '', chromeArgs: '', links: [], activeTargetId: '', cdpMode: 'auto', remoteEnabled: true },
+				draft: { isolateSpaces: false, idleTimeoutMin: '0', chromePath: '', captureBackend: 'auto', streamProfile: 'balanced', cdpFps: '20', cdpQuality: '55', cdpMaxWidth: '960', cdpBackstopIntervalMs: '3000', ffmpegFps: '20', ffmpegMaxWidth: '1280', ffmpegBitrateKbps: '4000', ffmpegEncoder: 'auto', ffmpegPath: '', githubMirror: '', runtimeArgs: '', chromeArgs: '', links: [], activeTargetId: '', cdpMode: 'auto', remoteEnabled: true, jevUrl: '', jevKey: '', jevModel: 'jev', layaUrl: 'http://127.0.0.1:8000', layaKey: '', layaModel: 'laya', judgePrefer: 'jev,laya,rule', jevChunkSize: '20', jevMaxImageBytes: '0', jevHistoryLimit: '5', jevArchiveImage: false, jevStepBudget: '20', jevWallMs: '120000' },
 				ffmpegStatus: { state: 'checking', canDownload: false, canSelectFfmpeg: false },
 				dirty: false,
 				applyState: { kind: 'idle' }, // 'idle' | 'saving' | 'saved' | 'error'
@@ -411,6 +443,15 @@ declare function require(id: string): any
 				activeTargetId: typeof config.activeTargetId === 'string' ? config.activeTargetId : '',
 				cdpMode: config.cdpMode === 'local' || config.cdpMode === 'remote' ? config.cdpMode : 'auto',
 				remoteEnabled: config.remoteEnabled !== false,
+				// 阶段 10: judge settings. MUST be present here AND in the
+				// save-success rebuild below — a field in one but not the other
+				// silently reverts to its default in the UI after every save.
+				jevUrl: config.jevUrl || '', jevKey: config.jevKey || '', jevModel: config.jevModel || 'jev',
+				layaUrl: config.layaUrl || 'http://127.0.0.1:8000', layaKey: config.layaKey || '', layaModel: config.layaModel || 'laya',
+				judgePrefer: config.judgePrefer || 'jev,laya,rule',
+				jevChunkSize: String(config.jevChunkSize ?? 20), jevMaxImageBytes: String(config.jevMaxImageBytes ?? 0), jevHistoryLimit: String(config.jevHistoryLimit ?? 5),
+				jevArchiveImage: config.jevArchiveImage === true,
+				jevStepBudget: String(config.jevStepBudget ?? 20), jevWallMs: String(config.jevWallMs ?? 120000),
 			}
 				s.ffmpegStatus = ffmpegStatus
 				s.dirty = false
@@ -609,6 +650,10 @@ declare function require(id: string): any
 			var NUMERIC_FIELDS = {
 				idleTimeoutMin: { min: 0, max: 1440, def: 0 },
 				cdpFps: { min: 5, max: 30, def: 20 }, cdpQuality: { min: 1, max: 100, def: 55 }, cdpMaxWidth: { min: 320, max: 1920, def: 960 }, cdpBackstopIntervalMs: { min: 1000, max: 10000, def: 3000 }, ffmpegFps: { min: 5, max: 30, def: 20 }, ffmpegMaxWidth: { min: 320, max: 1920, def: 1280 }, ffmpegBitrateKbps: { min: 500, max: 20000, def: 4000 },
+				// 阶段 10: judge budgets. Clamped here as well as in resolveConfig,
+				// because a panel is where a number is typed and the schema is the
+				// last line of defence rather than the first.
+				jevChunkSize: { min: 1, max: 255, def: 20 }, jevMaxImageBytes: { min: 0, max: 536870912, def: 0 }, jevHistoryLimit: { min: 0, max: 20, def: 5 }, jevStepBudget: { min: 1, max: 200, def: 20 }, jevWallMs: { min: 1000, max: 3600000, def: 120000 },
 			}
 			this.staged.forEach(function (v, k) {
 				var spec = NUMERIC_FIELDS[k]
@@ -672,6 +717,13 @@ declare function require(id: string): any
 			activeTargetId: typeof config.activeTargetId === 'string' ? config.activeTargetId : '',
 			cdpMode: config.cdpMode === 'local' || config.cdpMode === 'remote' ? config.cdpMode : 'auto',
 				remoteEnabled: config.remoteEnabled !== false,
+				// 阶段 10: judge settings — the SAME field set as the load path above.
+				jevUrl: config.jevUrl || '', jevKey: config.jevKey || '', jevModel: config.jevModel || 'jev',
+				layaUrl: config.layaUrl || 'http://127.0.0.1:8000', layaKey: config.layaKey || '', layaModel: config.layaModel || 'laya',
+				judgePrefer: config.judgePrefer || 'jev,laya,rule',
+				jevChunkSize: String(config.jevChunkSize ?? 20), jevMaxImageBytes: String(config.jevMaxImageBytes ?? 0), jevHistoryLimit: String(config.jevHistoryLimit ?? 5),
+				jevArchiveImage: config.jevArchiveImage === true,
+				jevStepBudget: String(config.jevStepBudget ?? 20), jevWallMs: String(config.jevWallMs ?? 120000),
 			}
 				if (ffmpegStatus) s.ffmpegStatus = ffmpegStatus
 				s.dirty = false
@@ -1085,6 +1137,23 @@ declare function require(id: string): any
 						h(SettingsField, { id: 'plugin-config-dsh-browser-cdp-ghmirror', label: t('githubMirror'), value: state.draft.githubMirror, hint: t('githubMirrorHint'), placeholder: 'https://gh-proxy.com/github.com', disabled: busy, onEdit: function (v) { controller.edit('githubMirror', v) } }),
 						h(SettingsField, { id: 'plugin-config-dsh-browser-cdp-ego-cli-args', label: t('runtimeArgs'), value: state.draft.runtimeArgs, hint: t('runtimeArgsHint'), placeholder: '--sdk-path /path/to/harness.js', disabled: busy, onEdit: function (v) { controller.edit('runtimeArgs', v) } }),
 						h(SettingsField, { id: 'plugin-config-dsh-browser-cdp-remote-enabled', label: t('remoteEnabled'), hint: t('remoteEnabledHint'), value: state.draft.remoteEnabled ? 'true' : 'false', options: [{ value: 'true', label: t('remoteEnabledOn') }, { value: 'false', label: t('remoteEnabledOff') }], disabled: busy, onEdit: function (v) { controller.edit('remoteEnabled', v === 'true') } }),
+						h('div', { class: 'plugin-config-section' },
+							h('div', { class: 'plugin-config-section-title' }, t('judgeTitle')),
+							h('div', { class: 'plugin-config-section-hint' }, t('judgeHint')),
+							h(SettingsField, { id: 'plugin-config-dsh-browser-cdp-jev-url', label: t('jevUrl'), hint: t('jevUrlHint'), value: state.draft.jevUrl, placeholder: 'https://jev.example', disabled: busy, onEdit: function (v) { controller.edit('jevUrl', v) } }),
+							h(SettingsField, { id: 'plugin-config-dsh-browser-cdp-jev-key', label: t('jevKey'), hint: t('jevKeyHint'), value: state.draft.jevKey, disabled: busy, onEdit: function (v) { controller.edit('jevKey', v) } }),
+							h(SettingsField, { id: 'plugin-config-dsh-browser-cdp-jev-model', label: t('jevModel'), value: state.draft.jevModel, disabled: busy, onEdit: function (v) { controller.edit('jevModel', v) } }),
+							h(SettingsField, { id: 'plugin-config-dsh-browser-cdp-laya-url', label: t('layaUrl'), hint: t('layaUrlHint'), value: state.draft.layaUrl, placeholder: 'http://127.0.0.1:8000', disabled: busy, onEdit: function (v) { controller.edit('layaUrl', v) } }),
+							h(SettingsField, { id: 'plugin-config-dsh-browser-cdp-laya-key', label: t('layaKey'), hint: t('layaKeyHint'), value: state.draft.layaKey, disabled: busy, onEdit: function (v) { controller.edit('layaKey', v) } }),
+							h(SettingsField, { id: 'plugin-config-dsh-browser-cdp-laya-model', label: t('layaModel'), value: state.draft.layaModel, disabled: busy, onEdit: function (v) { controller.edit('layaModel', v) } }),
+							h(SettingsField, { id: 'plugin-config-dsh-browser-cdp-judge-prefer', label: t('judgePrefer'), hint: t('judgePreferHint'), value: state.draft.judgePrefer, placeholder: 'jev,laya,rule', disabled: busy, onEdit: function (v) { controller.edit('judgePrefer', v) } }),
+							h(SettingsField, { id: 'plugin-config-dsh-browser-cdp-jev-chunk', label: t('jevChunkSize'), hint: t('jevChunkSizeHint'), value: state.draft.jevChunkSize, numeric: true, narrow: true, min: 1, max: 255, step: 1, disabled: busy, onEdit: function (v) { controller.edit('jevChunkSize', v) } }),
+							h(SettingsField, { id: 'plugin-config-dsh-browser-cdp-jev-image-bytes', label: t('jevMaxImageBytes'), hint: t('jevMaxImageBytesHint'), value: state.draft.jevMaxImageBytes, numeric: true, narrow: true, min: 0, step: 1024, disabled: busy, onEdit: function (v) { controller.edit('jevMaxImageBytes', v) } }),
+							h(SettingsField, { id: 'plugin-config-dsh-browser-cdp-jev-history', label: t('jevHistoryLimit'), value: state.draft.jevHistoryLimit, numeric: true, narrow: true, min: 0, max: 20, step: 1, disabled: busy, onEdit: function (v) { controller.edit('jevHistoryLimit', v) } }),
+							h(SettingsField, { id: 'plugin-config-dsh-browser-cdp-jev-archive-image', label: t('jevArchiveImage'), value: state.draft.jevArchiveImage ? 'true' : 'false', options: [{ value: 'true', label: t('jevArchiveImageOn') }, { value: 'false', label: t('jevArchiveImageOff') }], disabled: busy, onEdit: function (v) { controller.edit('jevArchiveImage', v === 'true') } }),
+							h(SettingsField, { id: 'plugin-config-dsh-browser-cdp-jev-step-budget', label: t('jevStepBudget'), value: state.draft.jevStepBudget, numeric: true, narrow: true, min: 1, max: 200, step: 1, disabled: busy, onEdit: function (v) { controller.edit('jevStepBudget', v) } }),
+							h(SettingsField, { id: 'plugin-config-dsh-browser-cdp-jev-wall-ms', label: t('jevWallMs'), value: state.draft.jevWallMs, numeric: true, narrow: true, unit: t('msUnit'), min: 1000, max: 3600000, step: 1000, disabled: busy, onEdit: function (v) { controller.edit('jevWallMs', v) } }),
+						),
 						h(SettingsField, { id: 'plugin-config-dsh-browser-cdp-chrome-args', label: t('chromeArgs'), value: state.draft.chromeArgs, hint: t('chromeArgsHint'), placeholder: '--disable-features=Translate --window-size=1024,768', disabled: busy, onEdit: function (v) { controller.edit('chromeArgs', v) } }),
 						h(LoginImportBlock, { t: t }),
 						h(BrowserLinksBlock, { t: t, controller: controller, links: state.draft.links, activeTargetId: state.draft.activeTargetId, cdpMode: state.draft.cdpMode, busy: busy }),

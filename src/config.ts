@@ -1,5 +1,5 @@
 import z from 'schemastery'
-import type { LinkBase, RawConfig, ResolvedConfig } from './types.ts'
+import type { JudgeSettings, LinkBase, RawConfig, ResolvedConfig } from './types.ts'
 import { sanitizeLinks } from './cdp-targets.ts'
 
 const backend = z.union(['auto', 'cdp', 'ffmpeg'])
@@ -88,6 +88,25 @@ export const Config = z.object({
   screencastQuality: z.number().min(1).max(100).step(1),
   screencastMaxWidth: z.number().min(320).max(1920).step(40),
   backstopIntervalMs: z.number().min(200).max(10000).step(100),
+  // ── 阶段 10: JEV/Laya judge (design-jev-pipeline.md) ────────────────────
+  //
+  // Split into two independent services rather than one `judgeUrl`: a user may
+  // have jev, laya, both, or neither, and the chain must be able to skip a hop
+  // it cannot use. The key fields are separate for the same reason — laya-api
+  // rejects an absent key outright, so "no key" is a SKIP, not a degraded call.
+  jevUrl: z.string().description('JEV judge base URL, no path (e.g. https://jev.example/v1). Empty = the jev hop is skipped entirely.'),
+  jevKey: z.string().description('Bearer key for the JEV judge. Empty = the jev hop is skipped (never sent, so no 401 round trip).'),
+  jevModel: z.string().description('Model name sent in the request body.'),
+  layaUrl: z.string().description('Laya judge base URL. The sidecar serves 8000; 7789 is a different tool and will not answer.'),
+  layaKey: z.string().description('Bearer key for the Laya judge. REQUIRED: laya-api has no anonymous branch, so a keyless call is a guaranteed 401.'),
+  layaModel: z.string().description('Model name sent to the Laya judge.'),
+  judgePrefer: z.string().description('Judgement hop order, comma separated (e.g. "jev,laya,rule"). Unknown names are dropped; the terminal refusal hop cannot be removed.'),
+  jevChunkSize: z.number().min(1).max(255).step(1).description('Candidate ceiling per judgement round. Bound to the probability threshold bucket, so raising it also tightens the gate.'),
+  jevMaxImageBytes: z.number().min(0).step(1024).description('Frame byte budget. 0 = unbounded, which is the measured default: a full-page JPEG was 137 KiB, so chunking for bytes alone slices static pages for nothing.'),
+  jevHistoryLimit: z.number().min(0).max(20).step(1).description('How many recent steps the judge is shown. Recency beats completeness in a loop.'),
+  jevArchiveImage: z.boolean().description('Embed the base64 screenshot in the archived Laya bundle. Off by default: a bundle that always carries hundreds of KiB is a bundle nobody keeps.'),
+  jevStepBudget: z.number().min(1).max(200).step(1).description('Judgement rounds allowed in one bcdp_jev_run before it stops as exhausted.'),
+  jevWallMs: z.number().min(1000).max(3600000).step(1000).description('Wall-clock ceiling for one bcdp_jev_run, in ms.'),
 })
 
 // ── user-defined extra CLI args ─────────────────────────────────────────────
@@ -213,11 +232,46 @@ export function filterArgs(raw: string, blocked: Set<string>): string[] {
   return kept
 }
 
-const finiteIn = (value: unknown, min: number, max: number): value is number =>
-  typeof value === 'number' && Number.isFinite(value) && value >= min && value <= max
+const finiteIn = (value: unknown, min: number, max: number): value is number =>  typeof value === 'number' && Number.isFinite(value) && value >= min && value <= max
 
 function oneOf<T extends string>(value: unknown, values: readonly T[], fallback: T): T {
   return typeof value === 'string' && (values as readonly string[]).includes(value) ? (value as T) : fallback
+}
+
+/**
+ * A non-string (undefined, null, a number from a hand-edited row) becomes ''.
+ *
+ * Trimmed as well, because these values come from a settings panel that a user
+ * pastes URLs into, and `" http://…"` is a URL that fails to parse while looking
+ * perfectly fine in the field.
+ */
+const trimmed = (value: unknown): string => (typeof value === 'string' ? value.trim() : '')
+
+/**
+ * Pick out the judge-facing settings.
+ *
+ * `prefer` is passed through UNFILTERED on purpose, matching how `runtimeArgs`
+ * is handled: a saved preference is stored raw and filtered at the call site, so
+ * a later change to the legal hop list cannot retroactively mangle what the user
+ * typed. The filtering (and the rule that the terminal refusal hop cannot be
+ * removed) lives in `src/jev/client.ts`, where it is unit-tested.
+ */
+export function judgeSettingsOf(config: ResolvedConfig): JudgeSettings {
+  return {
+    jevUrl: config.jevUrl,
+    jevKey: config.jevKey,
+    jevModel: config.jevModel,
+    layaUrl: config.layaUrl,
+    layaKey: config.layaKey,
+    layaModel: config.layaModel,
+    prefer: config.judgePrefer,
+    chunkSize: config.jevChunkSize,
+    maxImageBytes: config.jevMaxImageBytes,
+    historyLimit: config.jevHistoryLimit,
+    archiveImage: config.jevArchiveImage,
+    stepBudget: config.jevStepBudget,
+    wallMs: config.jevWallMs,
+  }
 }
 
 export function resolveConfig(config: RawConfig = {}): ResolvedConfig {
@@ -275,6 +329,26 @@ export function resolveConfig(config: RawConfig = {}): ResolvedConfig {
     localHeadless: config.localHeadless === undefined ? false : Boolean(config.localHeadless),
     localUserDataDir: typeof config.localUserDataDir === 'string' ? config.localUserDataDir : '',
     remoteEnabled: config.remoteEnabled === undefined ? true : Boolean(config.remoteEnabled),
+    // ── 阶段 10: JEV/Laya judge ───────────────────────────────────────────
+    // `layaUrl` defaults to the sidecar's real port. JevLoop ships 7789 here,
+    // which is a DIFFERENT tool's port — copying that default produces a
+    // connection error that reads like "laya is down".
+    jevUrl: trimmed(config.jevUrl),
+    jevKey: trimmed(config.jevKey),
+    jevModel: trimmed(config.jevModel) === '' ? 'jev' : trimmed(config.jevModel),
+    layaUrl: trimmed(config.layaUrl) === '' ? 'http://127.0.0.1:8000' : trimmed(config.layaUrl),
+    layaKey: trimmed(config.layaKey),
+    layaModel: trimmed(config.layaModel) === '' ? 'laya' : trimmed(config.layaModel),
+    judgePrefer: trimmed(config.judgePrefer) === '' ? 'jev,laya,rule' : trimmed(config.judgePrefer),
+    jevChunkSize: finiteIn(config.jevChunkSize, 1, 255) ? config.jevChunkSize : 20,
+    // 0 = unbounded is the DEFAULT, not a fallback: A.9 measured 136.9 KiB for a
+    // real full page against any sane budget, so a byte budget that nobody asked
+    // for would slice static pages for nothing.
+    jevMaxImageBytes: finiteIn(config.jevMaxImageBytes, 0, 512 * 1024 * 1024) ? config.jevMaxImageBytes : 0,
+    jevHistoryLimit: finiteIn(config.jevHistoryLimit, 0, 20) ? config.jevHistoryLimit : 5,
+    jevArchiveImage: config.jevArchiveImage === undefined ? false : Boolean(config.jevArchiveImage),
+    jevStepBudget: finiteIn(config.jevStepBudget, 1, 200) ? config.jevStepBudget : 20,
+    jevWallMs: finiteIn(config.jevWallMs, 1000, 3600000) ? config.jevWallMs : 120_000,
   }
 }
 

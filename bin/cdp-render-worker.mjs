@@ -45,6 +45,7 @@ let state = {
   connectedAt: 0,
   sessionId: '',
   targetId: '',
+  targetUrl: '',
 }
 
 function log(message) {
@@ -103,6 +104,7 @@ async function attachPage(params) {
   if (sessionId === '') throw new Error('Target.attachToTarget returned no sessionId')
   state.sessionId = sessionId
   state.targetId = chosen.targetId
+  state.targetUrl = String(chosen.url || '')
 
   // Enable order is the M0.3 contract (src/cdp/events.ts): DOM before Overlay,
   // Accessibility before the AX-tree read. An enable failure is reported here
@@ -147,6 +149,7 @@ async function connect(wsUrl, timeoutMs) {
     state.ws = null
     state.sessionId = ''
     state.targetId = ''
+    state.targetUrl = ''
   })
   state.ws = ws
   state.wsUrl = wsUrl
@@ -184,18 +187,6 @@ async function gatherInteractive(limit) {
     })
   }
   return out
-}
-
-/** Physical (device) pixels per CSS pixel, so a budget can be honoured in bytes. */
-async function pixelRatio() {
-  try {
-    const metrics = await call('Page.getLayoutMetrics', {})
-    const visual = metrics?.cssVisualViewport || metrics?.visualViewport
-    const css = Number(visual?.clientWidth) || 0
-    const physical = Number(metrics?.contentSize?.width) || 0
-    if (css > 0 && physical > 0) return Math.max(1, Math.round((physical / css) * 100) / 100)
-  } catch { /* a missing metric must not fail a capture */ }
-  return 1
 }
 
 /**
@@ -248,6 +239,179 @@ async function captureWithinBudget({ format, quality, maxBytes, scale, marks, li
   return { ...last, overBudget: true, attempts: attempts.length }
 }
 
+/**
+ * Act on a numbered candidate, re-measuring first.
+ *
+ * This mirrors `src/jev/act.ts` deliberately. That module declares the
+ * DISCIPLINE and is unit-tested plugin-side against a scripted fake; the actual
+ * CDP calls have to live here, because the plugin's Node process has no CDP
+ * channel (every `src/cdp/*` module runs inside a worker like this one).
+ *
+ * The discipline, unchanged: a rect from the frame is NEVER the click target.
+ *     backendNodeId → DOM.getBoxModel (fresh) → DOM.getNodeForLocation (pre-check)
+ *                   → click → DOM.getNodeForLocation (post-check)
+ * The pre-check is what catches an overlay WITHOUT dispatching a stray click.
+ */
+async function actOnCandidate(params) {
+  const backendNodeId = Number(params.backendNodeId)
+  const action = String(params.action || 'click')
+  if (!Number.isFinite(backendNodeId) || backendNodeId <= 0) {
+    return { ok: false, code: 'no-candidate', message: 'act needs a positive backendNodeId' }
+  }
+  if (state.sessionId === '') await attachPage(params)
+
+  if (action === 'scroll') {
+    const deltaY = Number(params.deltaY)
+    if (!Number.isFinite(deltaY) || deltaY === 0) {
+      return { ok: false, code: 'bad-delta', message: 'scroll needs a non-zero deltaY' }
+    }
+    // A wheel event needs a point; the viewport centre is neutral and needs no
+    // measurement. Zero-x keeps it a pure vertical scroll.
+    const centre = await viewportCentre()
+    await call('Input.dispatchMouseEvent', {
+      type: 'mouseWheel', x: centre.x, y: centre.y, deltaX: 0, deltaY, button: 'none', buttons: 0, clickCount: 0,
+    })
+    return { ok: true, code: 'ok', action: 'scroll', backendNodeId: 0, point: centre, measured: null, drift: 0 }
+  }
+
+  if (action === 'fill') {
+    const text = String(params.text ?? '')
+    if (text === '') return { ok: false, code: 'empty-text', message: 'fill needs non-empty text' }
+    const measured = await measure(backendNodeId)
+    if (!measured.ok) return measured
+    // Focus then insert. NEVER assign `.value`: a controlled input re-renders
+    // from its own state and would wipe it, and no input/change event fires, so
+    // the page believes the field is empty while a screenshot shows text.
+    await call('DOM.focus', { backendNodeId })
+    await call('Input.insertText', { text })
+    return { ok: true, code: 'ok', action: 'fill', backendNodeId, point: measured.centre, measured: measured.rect, drift: measured.drift }
+  }
+
+  const measured = await measure(backendNodeId)
+  if (!measured.ok) return measured
+
+  // PRE-check: is this node still the topmost thing at the measured point? Run
+  // before dispatching, so an overlay costs nothing instead of costing a click.
+  const hit = await call('DOM.getNodeForLocation', {
+    x: Math.round(measured.centre.x), y: Math.round(measured.centre.y), includeUserAgentShadowDOM: false,
+  })
+  if (Number(hit?.backendNodeId) !== backendNodeId) {
+    return {
+      ok: false,
+      code: 'click-missed',
+      message: `candidate measured to ${Math.round(measured.centre.x)},${Math.round(measured.centre.y)} but that point resolves to backendNodeId ${hit?.backendNodeId} — something is on top of it or the page moved`,
+    }
+  }
+
+  for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased']) {
+    await call('Input.dispatchMouseEvent', {
+      type,
+      x: Math.round(measured.centre.x),
+      y: Math.round(measured.centre.y),
+      button: 'left',
+      buttons: type === 'mousePressed' ? 1 : 0,
+      clickCount: type === 'mouseMoved' ? 0 : 1,
+    })
+  }
+
+  // POST-check: a mid-flight re-layout is reported, not hidden.
+  const after = await call('DOM.getNodeForLocation', {
+    x: Math.round(measured.centre.x), y: Math.round(measured.centre.y), includeUserAgentShadowDOM: false,
+  })
+  if (Number(after?.backendNodeId) !== backendNodeId) {
+    return { ok: false, code: 'click-missed', message: 'the click dispatched but the point now resolves to a different node' }
+  }
+  return { ok: true, code: 'ok', action: 'click', backendNodeId, point: measured.centre, measured: measured.rect, drift: measured.drift }
+}
+
+/** A current box model plus the frame-independent drift, for one node. */
+async function measure(backendNodeId) {
+  let model
+  try {
+    model = await call('DOM.getBoxModel', { backendNodeId })
+  } catch (error) {
+    return { ok: false, code: 'no-box-model', message: error instanceof Error ? error.message : String(error) }
+  }
+  const rect = quadToRect(model?.model?.content)
+  if (rect === null) return { ok: false, code: 'no-box-model', message: 'DOM.getBoxModel returned no usable content quad' }
+  // CDP boxes are DOCUMENT space; input coordinates are VIEWPORT space. Adding
+  // the scroll offset back is what keeps a click on the right element after the
+  // page has scrolled — the bug that only shows up on scrolled pages, i.e.
+  // never during a smoke test.
+  const scroll = await readScroll()
+  const viewportRect = { ...rect, x: rect.x - scroll.x, y: rect.y - scroll.y }
+  return {
+    ok: true,
+    rect: viewportRect,
+    centre: { x: viewportRect.x + viewportRect.width / 2, y: viewportRect.y + viewportRect.height / 2 },
+    drift: 0,
+  }
+}
+
+async function readScroll() {
+  try {
+    const result = await call('Runtime.evaluate', { expression: '[window.scrollX, window.scrollY]', returnByValue: true })
+    const value = result?.result?.value
+    if (Array.isArray(value) && value.length >= 2) return { x: Number(value[0]) || 0, y: Number(value[1]) || 0 }
+  } catch { /* a missing scroll offset must not fail the action */ }
+  return { x: 0, y: 0 }
+}
+
+async function viewportCentre() {
+  try {
+    const metrics = await call('Page.getLayoutMetrics', {})
+    const visual = metrics?.cssVisualViewport || metrics?.visualViewport
+    const w = Number(visual?.clientWidth) || 0
+    const h = Number(visual?.clientHeight) || 0
+    if (w > 0 && h > 0) return { x: Math.round(w / 2), y: Math.round(h / 2) }
+  } catch { /* fall through */ }
+  return { x: 0, y: 0 }
+}
+
+/** A CDP quad is 8 numbers: x1,y1 .. x4,y4. */
+function quadToRect(quad) {
+  if (!Array.isArray(quad) || quad.length < 8) return null
+  const xs = [Number(quad[0]), Number(quad[2]), Number(quad[4]), Number(quad[6])]
+  const ys = [Number(quad[1]), Number(quad[3]), Number(quad[5]), Number(quad[7])]
+  if ([...xs, ...ys].some((value) => !Number.isFinite(value))) return null
+  const x = Math.min(...xs)
+  const y = Math.min(...ys)
+  return { x, y, width: Math.max(...xs) - x, height: Math.max(...ys) - y }
+}
+
+/**
+ * The viewport facts a FRAME needs: size, scroll offset, device pixel ratio.
+ *
+ * One `Page.getLayoutMetrics` serves all four. They are reported together
+ * because a frame that knows its size but not its scroll offset cannot say which
+ * part of the document it showed — and `resolveClip`'s whole lesson (a viewport
+ * clip is meaningless without `scroll`) is the same lesson at this layer.
+ */
+async function viewportInfo() {
+  const fallback = { width: 0, height: 0, scrollX: 0, scrollY: 0, devicePixelRatio: 1 }
+  try {
+    const metrics = await call('Page.getLayoutMetrics', {})
+    const visual = metrics?.cssVisualViewport || metrics?.visualViewport
+    const css = Number(visual?.clientWidth) || 0
+    const physical = Number(metrics?.contentSize?.width) || 0
+    const devicePixelRatio = css > 0 && physical > 0 ? Math.max(1, Math.round((physical / css) * 100) / 100) : 1
+    const pageX = Number(visual?.pageX) || 0
+    const pageY = Number(visual?.pageY) || 0
+    return {
+      width: css || 0,
+      height: Number(visual?.clientHeight) || 0,
+      // `pageX/pageY` is what CDP calls the scroll offset; `scrollX` is not a
+      // field on this reply, and inventing a runtime evaluate round trip for it
+      // would make a capture cost one more command for no new information.
+      scrollX: pageX,
+      scrollY: pageY,
+      devicePixelRatio,
+    }
+  } catch {
+    return fallback
+  }
+}
+
 async function handle(method, params) {
   switch (method) {
     case 'hello':
@@ -274,8 +438,19 @@ async function handle(method, params) {
       // caller receives must describe the page the image shows, and a gather
       // that runs first can drift on a page that renders asynchronously.
       const candidates = params.marks === false ? [] : await gatherInteractive(Number(params.limit) || 20)
-      return { ...shot, marks: candidates, pixelRatio: await pixelRatio(), targetId: state.targetId, sessionId: state.sessionId }
+      const viewport = await viewportInfo()
+      return {
+        ...shot,
+        marks: candidates,
+        viewport,
+        pixelRatio: viewport.devicePixelRatio,
+        targetId: state.targetId,
+        targetUrl: state.targetUrl,
+        sessionId: state.sessionId,
+      }
     }
+    case 'act':
+      return actOnCandidate(params)
     case 'ping':
       return { pong: true, connected: state.ws !== null, uptimeMs: state.connectedAt ? Date.now() - state.connectedAt : 0 }
     default:

@@ -42,7 +42,7 @@ import { importLoginCookies } from './login-import.ts'
 import { initCastServer, markEgoToolCall, getLastEgoActivity, setAttachEndpoint, recycleWorker } from './cast-server.ts'
 import { EGO_HELP_INDEX } from './help.ts'
 import { HUMAN_CHECK_PROBE } from './captcha.ts'
-import { Config as ConfigSchema, resolveConfig, EGO_CLI_BLOCKED, CHROME_BLOCKED, filterArgs } from './config.ts'
+import { Config as ConfigSchema, resolveConfig, judgeSettingsOf, EGO_CLI_BLOCKED, CHROME_BLOCKED, filterArgs } from './config.ts'
 import { installEgoBrowserSettings } from './settings.ts'
 import { registerEgoBrowserGateway } from './gateway.ts'
 import { getSharedFfmpegInstallationManager } from './ffmpeg-installation.ts'
@@ -57,7 +57,13 @@ import {
   EGO_CLI_KIND,
 } from './cdp-targets.ts'
 import { createSubprocessCliIo, resolveCliBinary, spawnArgvFor, type SpawnShape } from './cdp/cli-link.ts'
-import type { EgoContext, RawConfig, ResolvedConfig, SubprocessService, ToolExec, WebServerLike, BrowserLink, CdpMode } from './types.ts'
+import { assembleSystemOneBody, buildJudgeRuntime, describeJudge, sendJudge } from './jev/client.ts'
+import { makeJudgeEffects } from './jev/effects.ts'
+import { DEFAULT_BUDGETS, runLoop } from './jev/loop.ts'
+import { buildRound, serializeLaya } from './jev/pipe.ts'
+import type { IntentSpec } from './jev/prompt.ts'
+import type { Frame } from './jev/frame.ts'
+import type { EgoContext, JudgeSettings, RawConfig, ResolvedConfig, SubprocessService, ToolExec, WebServerLike, BrowserLink, CdpMode } from './types.ts'
 
 export const name = 'dsh-browser-cdp'
 // Platform-aware host services: the web shell exposes `webServer`, other Web
@@ -185,6 +191,8 @@ function withEgoLock<T>(fn: () => Promise<T> | T): Promise<T> {
  *  - An opt-out switch EGO_BROWSER_AUTO_ADAPT (set to "0"/"false"/"no") restores
  *    the original "inherit host env verbatim" behavior.
  */
+/** 阶段 10 — the render worker: the ONLY thing that can see a page. */
+const RENDER_WORKER_BIN = fileURLToPath(new URL('../bin/cdp-render-worker.mjs', import.meta.url))
 const BUNDLED_WRAPPER = fileURLToPath(
   new URL('../bin/cdp-chrome-wrapper.sh', import.meta.url),
 )
@@ -638,6 +646,27 @@ interface EgoRuntimeConfig {
   readonly localHeadless: boolean
   readonly remoteEnabled: boolean
   readonly localUserDataDir: string
+  // ── 阶段 10: JEV/Laya judge (design-jev-pipeline.md) ────────────────────
+  //
+  // Listed field-by-field rather than as one `JudgeSettings` object, for a
+  // STRUCTURAL reason and not a stylistic one: `EgoRuntimeConfig` hand-mirrors
+  // `ResolvedConfig`, and several consumers (`initCastServer`) still take a
+  // `ResolvedConfig`. Adding fields here in any other shape makes this type stop
+  // satisfying that one. The duplication is the pre-existing design; this stage
+  // follows it rather than quietly changing the contract under another module.
+  readonly jevUrl: string
+  readonly jevKey: string
+  readonly jevModel: string
+  readonly layaUrl: string
+  readonly layaKey: string
+  readonly layaModel: string
+  readonly judgePrefer: string
+  readonly jevChunkSize: number
+  readonly jevMaxImageBytes: number
+  readonly jevHistoryLimit: number
+  readonly jevArchiveImage: boolean
+  readonly jevStepBudget: number
+  readonly jevWallMs: number
 }
 
 interface ExecLike {
@@ -903,6 +932,23 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
     get localHeadless() { return resolveConfig(bridge.source() as RawConfig).localHeadless },
     get remoteEnabled() { return resolveConfig(bridge.source() as RawConfig).remoteEnabled },
     get localUserDataDir() { return resolveConfig(bridge.source() as RawConfig).localUserDataDir },
+    // ── 阶段 10: JEV/Laya judge ─────────────────────────────────────────
+    // `judgeSettingsOf` is resolved once per read and deconstructed, so the
+    // "which keys does the judge need" decision lives in ONE place (config.ts)
+    // while the type stays structural-compatible with ResolvedConfig.
+    get jevUrl() { return judgeSettingsOf(resolveConfig(bridge.source() as RawConfig)).jevUrl },
+    get jevKey() { return judgeSettingsOf(resolveConfig(bridge.source() as RawConfig)).jevKey },
+    get jevModel() { return judgeSettingsOf(resolveConfig(bridge.source() as RawConfig)).jevModel },
+    get layaUrl() { return judgeSettingsOf(resolveConfig(bridge.source() as RawConfig)).layaUrl },
+    get layaKey() { return judgeSettingsOf(resolveConfig(bridge.source() as RawConfig)).layaKey },
+    get layaModel() { return judgeSettingsOf(resolveConfig(bridge.source() as RawConfig)).layaModel },
+    get judgePrefer() { return judgeSettingsOf(resolveConfig(bridge.source() as RawConfig)).prefer },
+    get jevChunkSize() { return judgeSettingsOf(resolveConfig(bridge.source() as RawConfig)).chunkSize },
+    get jevMaxImageBytes() { return judgeSettingsOf(resolveConfig(bridge.source() as RawConfig)).maxImageBytes },
+    get jevHistoryLimit() { return judgeSettingsOf(resolveConfig(bridge.source() as RawConfig)).historyLimit },
+    get jevArchiveImage() { return judgeSettingsOf(resolveConfig(bridge.source() as RawConfig)).archiveImage },
+    get jevStepBudget() { return judgeSettingsOf(resolveConfig(bridge.source() as RawConfig)).stepBudget },
+    get jevWallMs() { return judgeSettingsOf(resolveConfig(bridge.source() as RawConfig)).wallMs },
   }
   const reg = (tool: ToolHandle): void => {
     const dispose = ctx.tools.register(tool) as unknown as () => void
@@ -2478,6 +2524,20 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
         }
         lines.push('headless override: ' + (e.EGO_LINUX_HEADLESS ? 'yes (' + e.EGO_LINUX_HEADLESS + ')' : 'no'))
         lines.push('npm/node: ' + process.version)
+        // ── 阶段 10: the judgement chain, in the doctor because a judge that
+        // silently skips every hop is the single hardest failure to diagnose
+        // from a tool's output alone. Reporting the chain here means one command
+        // separates "the page had no candidates" from "nothing could answer".
+        {
+          const judge = judgeCfg()
+          const runtime = buildJudgeRuntime(judge, { now: () => Date.now() })
+          const ready = describeJudge(runtime).filter((line) => line.includes('ready')).length
+          lines.push(`judge: ${runtime.order.join(' -> ')} (${ready} http hop(s) ready)`)
+          lines.push(`judge jev: ${judge.jevUrl === '' ? 'not configured' : `${judge.jevUrl} key=${judge.jevKey === '' ? 'MISSING' : 'set'}`}`)
+          lines.push(`judge laya: ${judge.layaUrl} key=${judge.layaKey === '' ? 'MISSING (hop will be SKIPPED)' : 'set'}`)
+          lines.push(`judge budgets: chunk=${judge.chunkSize} steps=${judge.stepBudget} wall=${judge.wallMs}ms imageBytes=${judge.maxImageBytes === 0 ? 'unbounded' : judge.maxImageBytes}`)
+          lines.push(`judge worker: ${existsSync(RENDER_WORKER_BIN) ? RENDER_WORKER_BIN : `MISSING at ${RENDER_WORKER_BIN}`}`)
+        }
         return { ok: true, report: lines.join('\n') }
       },
       presentCall: () => ({ card: 'generic', title: 'bcdp_doctor', kind: 'other', rawInput: null }),
@@ -2543,4 +2603,398 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
       return def
     })(),
   )
+
+  // ── 阶段 10: JEV/Laya judge tools ────────────────────────────────────────
+  //
+  // Four HOST-SIDE tools (defineTool, not t()): the judge call is an HTTP
+  // request from this Node process, not a script inside the ego runtime. The
+  // browser-facing half still goes through the render worker, which is the only
+  // holder of a CDP channel.
+
+  /**
+   * The judge settings, read live off the runtime config.
+   *
+   * Assembled field-by-field here rather than carried as one object on `cfg`,
+   * because `EgoRuntimeConfig` must stay structurally assignable to
+   * `ResolvedConfig` (see the interface note) and a nested object would break
+   * that. Each field is a live getter, so a settings edit lands on the next call.
+   */
+  const judgeCfg = (): JudgeSettings => ({
+    jevUrl: cfg.jevUrl,
+    jevKey: cfg.jevKey,
+    jevModel: cfg.jevModel,
+    layaUrl: cfg.layaUrl,
+    layaKey: cfg.layaKey,
+    layaModel: cfg.layaModel,
+    prefer: cfg.judgePrefer,
+    chunkSize: cfg.jevChunkSize,
+    maxImageBytes: cfg.jevMaxImageBytes,
+    historyLimit: cfg.jevHistoryLimit,
+    archiveImage: cfg.jevArchiveImage,
+    stepBudget: cfg.jevStepBudget,
+    wallMs: cfg.jevWallMs,
+  })
+
+  /** Build the intent from tool args. Hints stay hints — never selectors. */
+  const intentFrom = (args: Record<string, unknown>): IntentSpec => {
+    const hints = str(args.hints, '')
+    const criteria = str(args.successCriteria, '')
+    const stops = str(args.stopConditions, '')
+    return {
+      goal: str(args.goal, ''),
+      kind: (str(args.kind, 'other') || 'other') as IntentSpec['kind'],
+      targetHints: hints === '' ? [] : hints.split('\n').map((line) => line.trim()).filter((line) => line !== ''),
+      successCriteria: criteria === '' ? [] : criteria.split('\n').map((line) => line.trim()).filter((line) => line !== ''),
+      stopConditions: stops === '' ? [] : stops.split('\n').map((line) => line.trim()).filter((line) => line !== ''),
+      // Recorded so a misjudgement can be attributed later: an intent a USER
+      // typed and one a rule inferred are not equally trustworthy.
+      source: 'user',
+    }
+  }
+
+  /** The judge runtime, rebuilt per call so a settings edit takes effect now. */
+  const judgeRuntimeOf = () =>
+    buildJudgeRuntime(judgeCfg(), {
+      // The injected clock is the real one here; only tests inject otherwise.
+      now: () => Date.now(),
+    })
+
+  /**
+   * The effects, bound to this plugin's worker + the live attach cache.
+   *
+   * `wsUrl` comes from the attach cache, which is the same source the panel's
+   * badge reads. When it is empty there is no live browser and EVERY jev tool
+   * must say so rather than failing later with a confusing worker error.
+   */
+  const effectsOf = (judge: ReturnType<typeof judgeRuntimeOf>, onFrame?: (frame: Frame) => void) => {
+    const attach = defaultAttachCache.get()
+    return makeJudgeEffects({
+      subprocess: ctx.subprocess,
+      workerPath: RENDER_WORKER_BIN,
+      wsUrl: attach.wsUrl,
+      targetId: attach.targetId,
+      judge,
+      maxImageBytes: cfg.jevMaxImageBytes,
+      candidateLimit: cfg.jevChunkSize,
+      now: () => Date.now(),
+      sleep: (ms: number) => new Promise<void>((resolve) => { setTimeout(resolve, ms) }),
+      ...(onFrame === undefined ? {} : { onFrame }),
+    })
+  }
+
+  /** The browser must be attached before any frame exists. Shared by 3 tools. */
+  const attachGate = (): string => {
+    const attach = defaultAttachCache.get()
+    if (attach.wsUrl === '') {
+      return (
+        'no live browser: the activated link has no CDP endpoint yet. ' +
+        'Run bcdp_status (or bcdp_doctor) to attach, then retry. ' +
+        `(attach status=${attach.status}${attach.code === '' ? '' : `, code=${attach.code}`})`
+      )
+    }
+    return ''
+  }
+
+  reg(
+    defineTool({
+      name: 'bcdp_jev_status',
+      description:
+        'Report the JEV/Laya judgement chain WITHOUT calling anything: which hops are configured, which will be skipped and why, thresholds, budgets, and the browser attach state. Run this first when judging fails.',
+      parameters: {},
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: { ok: { type: 'boolean', required: true }, text: { type: 'string', required: true } },
+        },
+        render: renderText,
+      },
+      timeoutMs: 10_000,
+      execute: async (_args: Record<string, unknown>, exec: ToolExec) => {
+        markEgoToolCall(callingSessionId(exec))
+        const judge = judgeCfg()
+        const runtime = judgeRuntimeOf()
+        const attach = defaultAttachCache.get()
+        const lines: string[] = [
+          'judgement chain (priority order):',
+          ...describeJudge(runtime),
+          '',
+          `prefer (raw)      : ${judge.prefer}`,
+          `prefer (parsed)   : ${runtime.order.join(' -> ')}`,
+          `jev               : ${judge.jevUrl === '' ? '(not configured)' : judge.jevUrl} model=${judge.jevModel} key=${judge.jevKey === '' ? 'MISSING' : 'set'}`,
+          `laya              : ${judge.layaUrl} model=${judge.layaModel} key=${judge.layaKey === '' ? 'MISSING' : 'set'}`,
+          '',
+          `chunk ceiling     : ${judge.chunkSize} candidates`,
+          `image budget      : ${judge.maxImageBytes === 0 ? 'unbounded (measured default)' : `${judge.maxImageBytes} B`}`,
+          `history depth     : ${judge.historyLimit}`,
+          `archive image     : ${judge.archiveImage ? 'embedded' : 'metadata only'}`,
+          `loop budgets      : steps=${judge.stepBudget} wall=${judge.wallMs}ms captures=${DEFAULT_BUDGETS.captures}`,
+          '',
+          `browser attach    : ${attach.wsUrl === '' ? `NOT ATTACHED (status=${attach.status}${attach.code === '' ? '' : `, code=${attach.code}`})` : `${attach.endpoint} (${attach.endpointSource ?? 'unknown'})`}`,
+        ]
+        if (judge.layaKey === '') {
+          // Called out explicitly because it is the single most common reason
+          // judging returns nothing: an absent key is a GUARANTEED 401, so the
+          // hop is skipped instead of tried, and silence looks like a dead server.
+          lines.push('', 'note: laya had no key, so that hop is SKIPPED (laya-api has no anonymous branch — a keyless call is a 401).')
+        }
+        return { ok: true, text: lines.join('\n') }
+      },
+      presentCall: () => ({ card: 'generic', title: 'bcdp_jev_status', kind: 'other', rawInput: null }),
+    } as unknown as DefineToolOpts),
+  )
+
+  reg(
+    defineTool({
+      name: 'bcdp_jev_ask',
+      description:
+        'Assemble the JEV/Laya judgement request for the CURRENT page plus an intent, and either return the assembled request body (dryRun, default) or send it and return the answer. Use dryRun to inspect exactly what would be sent.',
+      parameters: {
+        goal: { type: 'string', required: true, description: 'What we are trying to accomplish, in your own words.' },
+        kind: {
+          type: 'string',
+          description: "Intent kind: navigate | extract | fill | click | verify | other (default other).",
+        },
+        hints: { type: 'string', description: 'One target hint per line. Hints only — never a CSS selector.' },
+        successCriteria: { type: 'string', description: 'One observable success condition per line.' },
+        stopConditions: { type: 'string', description: 'One stop condition per line, e.g. "a captcha appears".' },
+        dryRun: { type: 'boolean', description: 'Assemble only, do not send (default true).' },
+        includeImage: { type: 'boolean', description: 'Also return the base64 frame image (default false).' },
+        maxCandidates: { type: 'integer', description: 'Override the candidate ceiling for this call.' },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: { ok: { type: 'boolean', required: true }, text: { type: 'string', required: true } },
+        },
+        render: renderText,
+      },
+      timeoutMs: 60_000,
+      execute: async (args: Record<string, unknown>, exec: ToolExec) => {
+        markEgoToolCall(callingSessionId(exec))
+        const blocked = attachGate()
+        if (blocked !== '') return { ok: false, text: blocked }
+        const goal = str(args.goal, '')
+        if (goal === '') return { ok: false, text: 'bcdp_jev_ask: goal is required' }
+
+        const judge = judgeCfg()
+        const runtime = judgeRuntimeOf()
+        const effects = effectsOf(runtime)
+        let frame: Frame
+        try {
+          frame = (await effects.capture()).frame
+        } catch (error) {
+          return { ok: false, text: `capture failed: ${error instanceof Error ? error.message : String(error)}` }
+        }
+
+        const maxCandidates = num(args.maxCandidates, judge.chunkSize)
+        const round = buildRound({
+          frame,
+          intent: intentFrom(args),
+          round: 'control',
+          config: { chunkSize: maxCandidates, maxImageBytes: judge.maxImageBytes, historyLimit: judge.historyLimit, archiveImageBudget: judge.archiveImage ? 1 : 0, model: judge.jevModel },
+        })
+
+        // Show the body for the hop that would actually take it, so a preview
+        // cannot disagree with the request.
+        const firstHttp = runtime.order.find((name) => name === 'jev' || name === 'laya')
+        const assembland = firstHttp === undefined
+          ? null
+          : assembleSystemOneBody(
+              { state: round.state, questions: round.questions, model: firstHttp === 'jev' ? judge.jevModel : judge.layaModel },
+              { name: firstHttp, baseUrl: firstHttp === 'jev' ? judge.jevUrl : judge.layaUrl },
+            )
+
+        const lines: string[] = [
+          `frame      : ${frame.frameId}  ${frame.viewport.width}x${frame.viewport.height} @${frame.viewport.devicePixelRatio}x`,
+          `page       : ${frame.target.url}`,
+          `candidates : ${frame.dom.nodes.length}${frame.dom.truncated ? ' (TRUNCATED)' : ''}`,
+          `image      : ${frame.image === null ? 'none' : `${frame.image.format} ${frame.image.bytes} B q=${frame.image.quality ?? '-'}${frame.image.overBudget ? ' OVER BUDGET' : ''}`}`,
+          `chunk plan : total=${round.plan.chunkTotal} size=${round.plan.chunkSize} reason=${round.plan.reason}`,
+          `questions  : ${Object.keys(round.questions).join(', ')}`,
+        ]
+        if (round.issues.length > 0) {
+          lines.push(`ISSUES     : ${round.issues.map((issue) => `${issue.code}(${issue.questionId})`).join(', ')}  <- must be fixed before sending`)
+        }
+        if (assembland !== null) {
+          lines.push(`POST       : ${assembland.url}`)
+          lines.push('', '── assembled request body (exactly the three allowed keys) ──', JSON.stringify(assembland.body, null, 2))
+        } else {
+          lines.push('', '(no HTTP hop configured — only the rule hop is available)')
+        }
+
+        if (bool(args.dryRun, true)) {
+          lines.push('', 'dryRun: nothing was sent.')
+          return { ok: true, text: lines.join('\n') }
+        }
+
+        const answer = await sendJudge(runtime, { questions: round.questions, state: round.state })
+        lines.push(
+          '',
+          '── answer ──',
+          `provider   : ${answer.provider}${answer.degraded ? ' (DEGRADED)' : ''} model=${answer.model} ${answer.latencyMs}ms`,
+          `chain      : ${answer.chain.join(' -> ') || '(none)'}`,
+          `trace      : ${answer.trace.join(' | ') || '(none)'}`,
+          `answers    : ${JSON.stringify(answer.answers)}`,
+        )
+        if (answer.missing.length > 0) lines.push(`MISSING    : ${answer.missing.join(', ')}`)
+        if (answer.dropped.length > 0) lines.push(`DROPPED    : ${answer.dropped.join(', ')}`)
+        if (judge.archiveImage) lines.push('', `(archive image omitted from this report: ${frame.image?.dataBase64.length ?? 0} base64 chars)`)
+        if (bool(args.includeImage, false) && frame.image !== null) {
+          lines.push('', '── frame image (base64) ──', frame.image.dataBase64)
+        }
+        lines.push('', `── Laya archive bundle (${serializeLaya(round).length} chars) ──`, 'write it with bcdp_script if you need it on disk')
+        return { ok: true, text: lines.join('\n') }
+      },
+      presentCall: () => ({ card: 'generic', title: 'bcdp_jev_ask', kind: 'other', rawInput: null }),
+    } as unknown as DefineToolOpts),
+  )
+
+  reg(
+    defineTool({
+      name: 'bcdp_jev_frame',
+      description:
+        'Capture one judgement FRAME from the current page: numbered interactive candidates plus a budgeted screenshot. Inspect this to see exactly what a judge would be shown.',
+      parameters: {
+        limit: { type: 'integer', description: 'Candidate ceiling (default: the configured chunk size).' },
+        maxBytes: { type: 'integer', description: 'Screenshot byte budget; 0 = unbounded (default).' },
+        showCandidates: { type: 'boolean', description: 'List every numbered candidate (default true).' },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: { ok: { type: 'boolean', required: true }, text: { type: 'string', required: true } },
+        },
+        render: renderText,
+      },
+      timeoutMs: 60_000,
+      execute: async (args: Record<string, unknown>, exec: ToolExec) => {
+        markEgoToolCall(callingSessionId(exec))
+        const blocked = attachGate()
+        if (blocked !== '') return { ok: false, text: blocked }
+        const judge = judgeCfg()
+        const effects = makeJudgeEffects({
+          subprocess: ctx.subprocess,
+          workerPath: RENDER_WORKER_BIN,
+          wsUrl: defaultAttachCache.get().wsUrl,
+          targetId: defaultAttachCache.get().targetId,
+          judge: judgeRuntimeOf(),
+          maxImageBytes: num(args.maxBytes, judge.maxImageBytes),
+          candidateLimit: num(args.limit, judge.chunkSize),
+          now: () => Date.now(),
+          sleep: async () => {},
+        })
+        let frame: Frame
+        try {
+          frame = (await effects.capture()).frame
+        } catch (error) {
+          return { ok: false, text: `capture failed: ${error instanceof Error ? error.message : String(error)}` }
+        }
+        const lines: string[] = [
+          `frameId    : ${frame.frameId}`,
+          `page       : ${frame.target.url}`,
+          `target     : ${frame.target.targetId}`,
+          `viewport   : ${frame.viewport.width}x${frame.viewport.height} @${frame.viewport.devicePixelRatio}x scroll(${frame.viewport.scrollX},${frame.viewport.scrollY})`,
+          `image      : ${frame.image === null ? 'none' : `${frame.image.format} ${frame.image.bytes} B (${(frame.image.bytes / 1024).toFixed(1)} KiB) q=${frame.image.quality ?? '-'}`}`,
+          `budget     : ${frame.image === null || frame.image.maxBytes === 0 ? 'unbounded' : frame.image.maxBytes + ' B'}${frame.image?.overBudget === true ? '  *** OVER BUDGET ***' : ''}`,
+          `candidates : ${frame.dom.nodes.length} of ${frame.dom.total}${frame.dom.truncated ? ' (TRUNCATED)' : ''}`,
+        ]
+        if (frame.image?.overBudget === true) {
+          // Reported rather than hidden: a caller that set a budget must be able
+          // to tell "I got what I asked for" from "I got the closest thing".
+          lines.push('', 'The image exceeded the byte budget even at floor quality. Raise jevMaxImageBytes, or accept it and let the count drive chunking.')
+        }
+        if (bool(args.showCandidates, true)) {
+          lines.push('', '── candidates (the judge answers with these numbers) ──')
+          for (const node of frame.dom.nodes) {
+            lines.push(`${node.n}. ${node.role} "${node.name}" [${node.container}]`)
+          }
+        }
+        lines.push('', 'note: rects are NOT carried on this path (the AX tree has none) — the executor re-measures before any action.')
+        return { ok: true, text: lines.join('\n') }
+      },
+      presentCall: () => ({ card: 'generic', title: 'bcdp_jev_frame', kind: 'other', rawInput: null }),
+    } as unknown as DefineToolOpts),
+  )
+
+  reg(
+    defineTool({
+      name: 'bcdp_jev_run',
+      description:
+        'Run the JEV judgement loop against the current page for one goal: capture a frame, ask the judge, act, verify. Stops on done (VERIFIED against successCriteria), blocked, exhausted, stuck, unavailable or error. Returns a per-step trace.',
+      parameters: {
+        goal: { type: 'string', required: true, description: 'The goal, in your own words.' },
+        kind: { type: 'string', description: 'navigate | extract | fill | click | verify | other.' },
+        hints: { type: 'string', description: 'One target hint per line (never a selector).' },
+        successCriteria: { type: 'string', description: 'One observable success condition per line. REQUIRED for a trustworthy `done`.' },
+        stopConditions: { type: 'string', description: 'One stop condition per line.' },
+        stepBudget: { type: 'integer', description: 'Judgement rounds allowed (default from settings).' },
+        wallMs: { type: 'integer', description: 'Wall-clock ceiling in ms (default from settings).' },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: { ok: { type: 'boolean', required: true }, text: { type: 'string', required: true } },
+        },
+        render: renderText,
+      },
+      timeoutMs: TOOL_TIMEOUT_MS,
+      execute: async (args: Record<string, unknown>, exec: ToolExec) => {
+        markEgoToolCall(callingSessionId(exec))
+        const blocked = attachGate()
+        if (blocked !== '') return { ok: false, text: blocked }
+        const goal = str(args.goal, '')
+        if (goal === '') return { ok: false, text: 'bcdp_jev_run: goal is required' }
+
+        const judge = judgeCfg()
+        const runtime = judgeRuntimeOf()
+        const intent = intentFrom(args)
+        const effects = effectsOf(runtime)
+        const started = Date.now()
+        const result = await runLoop({
+          intent,
+          effects,
+          budgets: {
+            ...DEFAULT_BUDGETS,
+            steps: num(args.stepBudget, judge.stepBudget),
+            wallMs: num(args.wallMs, judge.wallMs),
+          },
+          pipe: {
+            chunkSize: judge.chunkSize,
+            maxImageBytes: judge.maxImageBytes,
+            historyLimit: judge.historyLimit,
+            archiveImageBudget: judge.archiveImage ? 1 : 0,
+            model: judge.jevModel,
+          },
+        })
+
+        const lines: string[] = [
+          `status     : ${result.status.toUpperCase()}${result.exhaustedKind === undefined ? '' : ` (${result.exhaustedKind})`}`,
+          `reason     : ${result.reason}`,
+          `steps      : ${result.steps.length}  elapsed=${Date.now() - started}ms  degraded=${result.degraded}`,
+          `remaining  : steps=${result.remaining.steps} judge=${result.remaining.judge} captures=${result.remaining.captures} wall=${result.remaining.wallMs}ms`,
+        ]
+        if (effects.lastError() !== '') lines.push(`lastError  : ${effects.lastError()}`)
+        if (intent.successCriteria.length === 0 && result.status === 'done') {
+          lines.push('', 'WARNING: this run reported `done` with NO successCriteria, so the claim could only be checked against the goal text. Add criteria for a trustworthy verdict.')
+        }
+        lines.push('', '── steps ──')
+        if (result.steps.length === 0) lines.push('(none)')
+        for (const step of result.steps) {
+          lines.push(
+            `${String(step.index).padStart(3)}. ${step.control.padEnd(20)} n=${String(step.n).padStart(3)} ${step.action.padEnd(7)} ${step.ok ? 'ok  ' : 'FAIL'} ${step.provider}${step.degraded ? '*' : ' '} ${step.note}`,
+          )
+        }
+        if (result.excluded.length > 0) {
+          lines.push('', `ruled out: ${result.excluded.join(', ')}  (these are no longer OFFERED to the judge)`)
+        }
+        return { ok: true, text: lines.join('\n') }
+      },
+      presentCall: () => ({ card: 'generic', title: 'bcdp_jev_run', kind: 'other', rawInput: null }),
+    } as unknown as DefineToolOpts),
+  )
 }
+

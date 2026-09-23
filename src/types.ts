@@ -181,6 +181,33 @@ export type CdpTarget = CdpLink
 /** How the plugin decides which browser the bcdp_* tools drive. */
 export type CdpMode = 'auto' | 'local' | 'remote'
 
+/**
+ * The judge-facing subset of the resolved config (阶段 10).
+ *
+ * Extracted as its own type rather than passed as the whole `ResolvedConfig`
+ * for two reasons: the judge layer then cannot accidentally depend on, say,
+ * `ffmpegEncoder`; and `judgeSettingsOf` becomes the single place that answers
+ * "what does the judge need", so a new knob is added in one file instead of
+ * three (schema → resolved → runtime getter).
+ */
+export interface JudgeSettings {
+  /** JEV base URL. Empty = the hop does not exist. */
+  jevUrl: string
+  jevKey: string
+  jevModel: string
+  layaUrl: string
+  layaKey: string
+  layaModel: string
+  /** Raw comma-separated hop order; filtered at the call site, not here. */
+  prefer: string
+  chunkSize: number
+  maxImageBytes: number
+  historyLimit: number
+  archiveImage: boolean
+  stepBudget: number
+  wallMs: number
+}
+
 /** Resolved (post-defaults) runtime config — the canonical key set. */
 export interface ResolvedConfig {
   isolateSpaces: boolean
@@ -221,6 +248,43 @@ export interface ResolvedConfig {
   allowLocalFallback: boolean
   localHeadless: boolean
   localUserDataDir: string
+  // ── 阶段 10: JEV/Laya judge (see design-jev-pipeline.md) ────────────────
+  //
+  // These are first-class config, not "integration prerequisites in a footnote".
+  // The reason is concrete: laya-api's `/v1/systemone` has NO anonymous branch
+  // (v1.py:172 → v1.py:27), so a missing key is not a degraded mode — it is a
+  // guaranteed 401. Making the key explicit is what lets the chain SKIP that
+  // hop instead of spending a round trip to learn nothing.
+  //
+  // `jev*` and `laya*` are deliberately separate rather than one `judgeUrl`:
+  // they are two independently-reachable services and a user may have either,
+  // both, or neither.
+  /** JEV judge base URL, no path. Empty = the jev hop does not exist. */
+  jevUrl: string
+  jevKey: string
+  jevModel: string
+  /** Laya judge base URL. Defaults to the sidecar's own port, NOT JevLoop's 7789. */
+  layaUrl: string
+  layaKey: string
+  layaModel: string
+  /**
+   * Comma-separated hop order, e.g. `jev,laya,rule`. Unknown names are dropped
+   * and `refuse` is always last, so a hand-typed value cannot remove the
+   * terminal hop.
+   */
+  judgePrefer: string
+  /** Candidate ceiling per judgement round. Bound to the threshold bucket. */
+  jevChunkSize: number
+  /** Frame byte budget. 0 = unbounded (the measured default; see A.9). */
+  jevMaxImageBytes: number
+  /** History steps delivered to the judge. */
+  jevHistoryLimit: number
+  /** Embed the base64 image in the archived Laya bundle. Off: bundles stay small. */
+  jevArchiveImage: boolean
+  /** Judgement rounds allowed in one loop run before `exhausted`. */
+  jevStepBudget: number
+  /** Wall-clock ceiling for one loop run, in ms. */
+  jevWallMs: number
 }
 
 /** Raw composition-layer config (may contain legacy / extra keys). */

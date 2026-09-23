@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { resolveConfig, tokenizeArgs, filterArgs, EGO_CLI_BLOCKED, CHROME_BLOCKED } from "../src/config.ts";
+import { resolveConfig, judgeSettingsOf, tokenizeArgs, filterArgs, EGO_CLI_BLOCKED, CHROME_BLOCKED } from "../src/config.ts";
 
 describe("dual capture config", () => {
   it("returns canonical defaults", () => {
@@ -10,6 +10,12 @@ describe("dual capture config", () => {
       runtimeArgs: "", chromeArgs: "", isolateSpaces: false, idleTimeoutMin: 0,
       links: [], activeTargetId: "", cdpMode: "auto", cdpProbeTimeoutMs: 3000,
       cursorHud: true, cursorName: "DeepSeek", allowLocalFallback: false, localHeadless: false, localUserDataDir: "", legacyEgoToolNames: false, remoteEnabled: true,
+      // 阶段 10 judge defaults. layaUrl defaults to the REAL sidecar port:/n      // 7789 (JevLoop’s value) is a different tool and yields a confusing
+      // connection error that reads like "laya is down".
+      jevUrl: "", jevKey: "", jevModel: "jev",
+      layaUrl: "http://127.0.0.1:8000", layaKey: "", layaModel: "laya",
+      judgePrefer: "jev,laya,rule", jevChunkSize: 20, jevMaxImageBytes: 0,
+      jevHistoryLimit: 5, jevArchiveImage: false, jevStepBudget: 20, jevWallMs: 120000,
     });
   });
 
@@ -21,6 +27,12 @@ describe("dual capture config", () => {
       runtimeArgs: "", chromeArgs: "", isolateSpaces: false, idleTimeoutMin: 0,
       links: [], activeTargetId: "", cdpMode: "auto", cdpProbeTimeoutMs: 3000,
       cursorHud: true, cursorName: "DeepSeek", allowLocalFallback: false, localHeadless: false, localUserDataDir: "", legacyEgoToolNames: false, remoteEnabled: true,
+      // 阶段 10 judge defaults. layaUrl defaults to the REAL sidecar port:/n      // 7789 (JevLoop’s value) is a different tool and yields a confusing
+      // connection error that reads like "laya is down".
+      jevUrl: "", jevKey: "", jevModel: "jev",
+      layaUrl: "http://127.0.0.1:8000", layaKey: "", layaModel: "laya",
+      judgePrefer: "jev,laya,rule", jevChunkSize: 20, jevMaxImageBytes: 0,
+      jevHistoryLimit: 5, jevArchiveImage: false, jevStepBudget: 20, jevWallMs: 120000,
     });
     expect(resolveConfig({ cdpFps: 15, castFpsCap: 30 }).cdpFps).toBe(15);
   });
@@ -181,5 +193,64 @@ describe("R7 connection sequence", () => {
       links: [{ kind: "ego-cli", id: "c", label: "", cliPath: "" }],
     } as never);
     expect(config.links[0]).toMatchObject({ probeStatus: "unknown", probeLatencyMs: 0, probeError: "", probeCode: "", probeAt: 0 });
+  });
+});
+
+describe("阶段 10 judge config", () => {
+  it("defaults the laya URL to port 8000, never JevLoop's 7789", () => {
+    expect(resolveConfig({}).layaUrl).toBe("http://127.0.0.1:8000");
+  });
+
+  it("leaves the jev hop absent by default so nothing calls it", () => {
+    const config = resolveConfig({});
+    expect(config.jevUrl).toBe("");
+    expect(config.jevKey).toBe("");
+  });
+
+  it("defaults the image budget to UNBOUNDED, not to a round number", () => {
+    // Measured: a full-page JPEG was 136.9 KiB. A byte budget nobody asked for
+    // would slice static pages for nothing, so 0 (unbounded) is the default and
+    // the CANDIDATE count is what drives chunking.
+    expect(resolveConfig({}).jevMaxImageBytes).toBe(0);
+  });
+
+  it("keeps an unusable legacy value from hiding a default", () => {
+    const config = resolveConfig({ jevChunkSize: "twenty" as never, jevStepBudget: -3 as never, jevWallMs: 0 as never });
+    expect(config.jevChunkSize).toBe(20);
+    expect(config.jevStepBudget).toBe(20);
+    expect(config.jevWallMs).toBe(120000);
+  });
+
+  it("trims a pasted URL, because a leading space is a URL that fails to parse", () => {
+    expect(resolveConfig({ layaUrl: "  http://127.0.0.1:8000  " } as never).layaUrl).toBe("http://127.0.0.1:8000");
+  });
+
+  it("substitutes a model name when the value is blank", () => {
+    expect(resolveConfig({ jevModel: "   " } as never).jevModel).toBe("jev");
+    expect(resolveConfig({ layaModel: "" } as never).layaModel).toBe("laya");
+  });
+
+  it("stores the preference string RAW, filtering at the call site", () => {
+    // Same convention as runtimeArgs: a later change to the legal hop list must
+    // not retroactively mangle what the user typed.
+    expect(resolveConfig({ judgePrefer: "laya, bogus, jev" } as never).judgePrefer).toBe("laya, bogus, jev");
+  });
+
+  it("coerces jevArchiveImage to a real boolean", () => {
+    expect(resolveConfig({}).jevArchiveImage).toBe(false);
+    expect(resolveConfig({ jevArchiveImage: true } as never).jevArchiveImage).toBe(true);
+  });
+
+  it("projects the judge subset through judgeSettingsOf", () => {
+    const settings = judgeSettingsOf(resolveConfig({ jevUrl: "https://j", layaKey: "k" } as never));
+    expect(settings.jevUrl).toBe("https://j");
+    expect(settings.layaKey).toBe("k");
+    // `prefer` is renamed on the way out, and that mapping is exactly the kind
+    // of thing that silently breaks when duplicated in three layers.
+    expect(settings.prefer).toBe("jev,laya,rule");
+    expect(Object.keys(settings).sort()).toEqual([
+      "archiveImage", "chunkSize", "historyLimit", "jevKey", "jevModel", "jevUrl",
+      "layaKey", "layaModel", "layaUrl", "maxImageBytes", "prefer", "stepBudget", "wallMs",
+    ]);
   });
 });

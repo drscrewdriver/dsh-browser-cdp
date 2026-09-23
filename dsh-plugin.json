@@ -138,7 +138,7 @@
   "subscriptions": [],
   "license": "MIT",
   "source": {
-    "repository": "https://github.com/Fisfzy/dsh-ego-browser"
+    "repository": "https://github.com/drscrewdriver/dsh-browser-cdp"
   },
   "compat": {
     "hosts": [

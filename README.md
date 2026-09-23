@@ -1,17 +1,12 @@
 # dsh-browser-cdp — 看得见的 Agent 浏览器（CDP 接入）
 
 <p align="center">
-  <a href="https://dshfind.com/zh/plugins/Fisfzy/ego-browser?ref=badge"><img src="https://dshfind.com/api/badge/Fisfzy/ego-browser?lang=zh" alt="dshfind - ego-browser"></a>
-  <a href="https://dshfind.com/zh/plugins/Fisfzy/ego-browser"><img src="https://dshfind.com/api/card/Fisfzy/ego-browser?lang=zh" alt="ego-browser card"></a>
-</p>
-
-<p align="center">
   <img src="https://img.shields.io/badge/DSH-%3E%3D0.1.2--rc.1-blue" alt="DSH >= 0.1.2-rc.1">
   <img src="https://img.shields.io/badge/DSH--better--sidebar-%3E%3D0.12.2(optional)-red" alt="dsh-better-sidebar >= 0.12.2 (optional)">
   <img src="https://img.shields.io/badge/Node-%3E%3D22-brightgreen?logo=node.js&logoColor=white" alt="Node >= 22">
 </p>
 
-> **仓库**：`github.com/Fisfzy/ego-browser`｜版本历史见 [CHANGELOG.md](CHANGELOG.md)｜详情页：[dshfind](https://dshfind.com/zh/plugins/Fisfzy/ego-browser)
+> **仓库**：`github.com/drscrewdriver/dsh-browser-cdp`（原名 `dsh-ego-browser`，源自上游 [Fisfzy/dsh-ego-browser](https://github.com/Fisfzy/dsh-ego-browser)）｜版本历史见 [CHANGELOG.md](CHANGELOG.md)
 
 ### 版本兼容矩阵
 
@@ -121,22 +116,34 @@
 
 ## 安装
 
-> **包名迁移（DSH Desktop 2.0.5+）**：本插件包名是 **`dsh-browser-cdp`**（曾用名 `dsh-ego-browser`、别名 `@dsh-external/ego-browser`）。DSH Desktop 2.0.5 起增加了「profile 依赖名 == 包实际 name」的一致性校验，若 profile 仍用旧名引用，启动会挂进恢复模式。升级后请把 profile 的 `package.json` 依赖键 **和** `dsh.profile.bundles` 条目**两处**都改为 `dsh-browser-cdp`：
-
-   ```diff
-   - "@dsh-external/ego-browser": "git+https://github.com/Fisfzy/ego-browser.git",
-   + "dsh-browser-cdp": "git+https://github.com/Fisfzy/ego-browser.git",
-   ```
-
-   ```diff
-   - "@dsh-external/ego-browser",
-   + "dsh-browser-cdp",
-   ```
+**方式一：GitHub 直装（推荐）**
 
 ```sh
-dshx install dsh-browser-cdp <dsh-browser-cdp.tgz>                    # tarball 或 git URL 均可
+dsh plugin --profile web add github:drscrewdriver/dsh-browser-cdp
+# 也可锁定到某个 commit / tag：
+dsh plugin --profile web add github:drscrewdriver/dsh-browser-cdp#v0.9.0
+```
+
+> `github:` 安装由 pnpm 经 `codeload.github.com` 拉取仓库 tarball，**无需向 npm registry 发包**；直接使用仓库中**预构建入库的 `lib/`**（`files` 仅含 `lib/`、`bin/`、`runtime/`、`cordis.patch.yml`、`dsh-plugin.json`），因此**不触发任何构建脚本**，也不需要 devDependencies。host 入口 `lib/index.js`、客户端 `lib/client.js`、worker `bin/ego-cast-worker.mjs` 均随仓库分发。
+
+**方式二：本地 tarball / git URL**
+
+```sh
+dshx install dsh-browser-cdp <dsh-browser-cdp.tgz>      # tarball 或 git URL 均可
 dshx list                                                # 应显示：[on] dsh-browser-cdp
 ```
+
+> **包名迁移说明**：本插件包名是 **`dsh-browser-cdp`**（曾用名 `dsh-ego-browser`、别名 `@dsh-external/ego-browser`）。DSH Desktop 2.0.5 起增加了「profile 依赖名 == 包实际 name」的一致性校验，若 profile 仍用旧名引用，启动会挂进恢复模式。升级后请把 profile 的 `package.json` 依赖键 **和** `dsh.profile.bundles` 条目**两处**都改为 `dsh-browser-cdp`：
+
+   ```diff
+   - "dsh-ego-browser": "github:Fisfzy/ego-browser",
+   + "dsh-browser-cdp": "github:drscrewdriver/dsh-browser-cdp",
+   ```
+
+   ```diff
+   - "dsh-ego-browser",
+   + "dsh-browser-cdp",
+   ```
 
 观察窗设置中可选 `captureBackend=auto|cdp|ffmpeg`（默认 `auto`，当前解析为 CDP）、画质档位、CDP FPS/JPEG 质量/最大宽度，以及 FFmpeg FPS/最大宽度/码率/编码器/自定义路径。插件先检测自定义路径、系统 PATH 和托管缓存；检测到兼容 FFmpeg 前，设置页禁止选择 FFmpeg，并提供固定版本的一键下载。GitHub 下载可用 `githubMirror` 替换 `https://github.com`，例如 `https://gh-proxy.com/github.com`。FFmpeg 码率范围为 500-20000 kbps，低/平衡/高档默认 2000/4000/8000 kbps。
 

@@ -94,6 +94,6 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Fisfzy/dsh-ego-browser.git"
+    "url": "git+https://github.com/drscrewdriver/dsh-browser-cdp.git"
   }
 }

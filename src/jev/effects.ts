@@ -88,6 +88,12 @@ export interface JudgeEffects extends LoopEffects {
   frames(): Frame[]
   /** Set when the worker could not be reached at all; every effect then fails. */
   lastError(): string
+  /**
+   * Navigate the target to `url` and wait for load. Same worker/session
+   * plumbing as capture, so the next capture sees the NEW document (the worker
+   * re-reads `location.href` after load and keeps it for later frames).
+   */
+  navigate(url: string, timeoutMs?: number): Promise<{ ok: boolean; url: string; loaded: boolean; error?: string }>
 }
 
 /**
@@ -190,6 +196,23 @@ export function makeJudgeEffects(deps: EffectsDeps): JudgeEffects {
   return {
     frames: () => frames,
     lastError: () => error,
+
+    async navigate(url: string, timeoutMs = 25_000) {
+      const call = await runRenderCall(deps.subprocess, {
+        workerPath: deps.workerPath,
+        wsUrl: deps.wsUrl,
+        ...(deps.targetId === undefined || deps.targetId === '' ? {} : { targetId: deps.targetId }),
+        steps: [{ method: 'navigate', params: { url, timeoutMs } }],
+      })
+      const step = call.steps[0]
+      if (call.connected === null || step === undefined || !step.ok) {
+        const why = step?.error ?? 'the render worker could not attach to the page'
+        error = why
+        return { ok: false, url: '', loaded: false, error: why }
+      }
+      const reply = step.result as { url: string; loaded: boolean }
+      return { ok: true, url: reply.url, loaded: reply.loaded }
+    },
 
     async capture(): Promise<CaptureResult> {
       return captureWithWorker()

@@ -556,6 +556,28 @@ async function handle(method, params) {
     }
     case 'act':
       return actOnCandidate(params)
+    case 'navigate': {
+      if (state.sessionId === '') await attachPage(params)
+      const url = String(params.url || '')
+      if (!/^https?:\/\//i.test(url)) {
+        throw new Error(`navigate needs an absolute http(s) URL, got "${url}"`)
+      }
+      await call('Page.navigate', { url }, undefined, 25000)
+      const loaded = await waitForLoad(Number(params.timeoutMs) || 25000)
+      // `state.targetUrl` is written once at attach and nothing else updates
+      // it, so a post-navigation capture would label the frame with the OLD
+      // address. Read the page's own location — the FINAL url after redirects,
+      // not the requested one — and keep it for later captures.
+      let finalUrl = url
+      try {
+        const loc = await call('Runtime.evaluate', { expression: 'location.href', returnByValue: true }, undefined, 5000)
+        if (typeof loc?.result?.value === 'string' && loc.result.value !== '') {
+          finalUrl = loc.result.value
+          state.targetUrl = finalUrl
+        }
+      } catch { /* keep the requested URL as the label */ }
+      return { ok: true, url: finalUrl, loaded }
+    }
     case 'ping':
       return { pong: true, connected: state.ws !== null, uptimeMs: state.connectedAt ? Date.now() - state.connectedAt : 0 }
     default:

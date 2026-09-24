@@ -59,6 +59,7 @@ import {
 import { createSubprocessCliIo, resolveCliBinary, spawnArgvFor, type SpawnShape } from './cdp/cli-link.ts'
 import { assembleSystemOneBody, buildJudgeRuntime, describeJudge, sendJudge } from './jev/client.ts'
 import { makeJudgeEffects } from './jev/effects.ts'
+import { runAttempt } from './jev/attempt.ts'
 import { DEFAULT_BUDGETS, runLoop } from './jev/loop.ts'
 import { buildRound, serializeLaya } from './jev/pipe.ts'
 import { chaptersOf } from './jev/frame.ts'
@@ -3041,6 +3042,81 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
         return { ok: true, text: lines.join('\n') }
       },
       presentCall: () => ({ card: 'generic', title: 'bcdp_jev_run', kind: 'other', rawInput: null }),
+    } as unknown as DefineToolOpts),
+  )
+
+  reg(
+    defineTool({
+      name: 'bcdp_jev_attempt',
+      description:
+        'Open a URL and let the decision model (laya/jev) ATTEMPT one goal on it: every round the option table is the page\'s DOM candidates plus an `end` option; the model spends up to N actions (default 5) or picks `end` by itself, then a receipt comes back. The judge context is the DOM tree only (the model cannot read the screenshot). Verify the result yourself afterwards via bcdp_cdp / bcdp_screenshot using the returned targetId — the receipt is a report, not a proof.',
+      parameters: {
+        url: { type: 'string', required: true, description: 'Absolute URL to open, e.g. https://example.com/path.' },
+        goal: { type: 'string', required: true, description: 'The goal, in your own words.' },
+        successCriteria: { type: 'string', description: 'One observable success condition per line. Helps the model decide when to pick `end`.' },
+        maxActions: { type: 'integer', description: 'Action budget for the decision model (default 5, capped at 20).' },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: { ok: { type: 'boolean', required: true }, text: { type: 'string', required: true } },
+        },
+        render: renderText,
+      },
+      timeoutMs: TOOL_TIMEOUT_MS,
+      execute: async (args: Record<string, unknown>, exec: ToolExec) => {
+        markEgoToolCall(callingSessionId(exec))
+        const blocked = attachGate()
+        if (blocked !== '') return { ok: false, text: blocked }
+        const url = str(args.url, '')
+        const goal = str(args.goal, '')
+        if (url === '') return { ok: false, text: 'bcdp_jev_attempt: url is required' }
+        if (goal === '') return { ok: false, text: 'bcdp_jev_attempt: goal is required' }
+        const maxActions = Math.min(20, Math.max(1, num(args.maxActions, 5)))
+
+        const judge = judgeCfg()
+        const runtime = judgeRuntimeOf()
+        const effects = effectsOf(runtime)
+        const criteria = str(args.successCriteria, '')
+        const intent: IntentSpec = {
+          goal,
+          kind: 'click',
+          targetHints: [],
+          successCriteria: criteria === '' ? [] : criteria.split('\n').map((line) => line.trim()).filter((line) => line !== ''),
+          stopConditions: [],
+          source: 'user',
+        }
+
+        const started = Date.now()
+        const nav = await effects.navigate(url)
+        if (!nav.ok) return { ok: false, text: `bcdp_jev_attempt: navigation failed — ${nav.error ?? 'unknown error'}` }
+
+        const result = await runAttempt({ intent, effects, maxActions })
+
+        const lines: string[] = [
+          `status     : ${result.status.toUpperCase()}  actions=${result.actions.length}/${maxActions}`,
+          `reason     : ${result.reason}`,
+          `page       : ${result.lastUrl || nav.url}`,
+          `elapsed    : ${Date.now() - started}ms  candidates(last round)=${result.candidates}`,
+          `verify via : bcdp_cdp / bcdp_screenshot on targetId=${effects.frames().at(-1)?.target.targetId ?? 'unknown'} — the receipt is a report, not a proof`,
+        ]
+        if (effects.lastError() !== '') lines.push(`lastError  : ${effects.lastError()}`)
+        lines.push('', result.actions.length === 0 ? '── actions ──  (none)' : '── actions ──')
+        for (const step of result.actions) {
+          lines.push(
+            `${String(step.index).padStart(3)}. n=${String(step.n).padStart(3)} ${step.ok ? 'ok  ' : 'FAIL'} top=${step.top.toFixed(2)} ${step.provider}${step.degraded ? '*' : ' '} ${step.label}${step.anchor === undefined ? '' : `  [${step.anchor}]`}`,
+          )
+        }
+        if (result.status === 'ended') {
+          lines.push('', 'The model ENDED BY ITSELF. Check the page state through CDP before treating the goal as achieved.')
+        }
+        if (result.status === 'exhausted') {
+          lines.push('', 'The action budget ran out WITHOUT the model ending. Raise maxActions, or take over via CDP tools.')
+        }
+        return { ok: true, text: lines.join('\n') }
+      },
+      presentCall: () => ({ card: 'generic', title: 'bcdp_jev_attempt', kind: 'other', rawInput: null }),
     } as unknown as DefineToolOpts),
   )
 }

@@ -35,6 +35,7 @@ export const EGO_HELP_INDEX: Record<string, string> = {
     '判定器只能回传编号，绝不给选择器（幻觉选择器在结构上不可能）。' +
     '四件套：bcdp_jev_status（先跑这个：判定链可用性 + 配置体检，不发任何请求）/ bcdp_jev_frame（采一帧，看判定器会看到什么）/' +
     'bcdp_jev_ask（组装请求体；dryRun 默认 true，可指定 round=control|chapter|pick|evaluate 逐级看）/ bcdp_jev_run（跑循环，返回逐步 trace）。' +
+    'bcdp_jev_attempt（平的尝试循环）：给 url + goal，开页后每轮选项 = DOM 候选 + end 项，判定模型在 maxActions（默认 5）预算内行动或自选 end 结束，回执含每步 anchor；判定上下文只走 DOM 树文本（模型不读截图），完成后你用 bcdp_cdp/bcdp_screenshot 按 targetId 自行核验——回执是报告不是证明。' +
     '**三级缩小**：control（要不要动手，固定 5 项）→ chapter（哪个章节，按 AX 容器聚簇）→ pick（章节内哪个编号 + 风险度）。' +
     '分章节不是装饰：阈值按候选数分桶，把 20 选 1 拆成「几选 1 × 几选 1」会让两轮都落在更严的桶里。单章节时不问章节轮。' +
     '**判定上下文是隔离的**：只允许 INTENT / PROGRESS / FRAME / HISTORY 四段，**绝不带 agent 会话 session 前缀**；' +

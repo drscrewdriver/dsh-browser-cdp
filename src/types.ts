@@ -2,7 +2,7 @@
  * ego-browser — shared host-side types.
  *
  * Self-contained structural types for the DSH host services the plugin uses
- * (tools / subprocess / settings / webServer). We deliberately do NOT import
+ * (tools / subprocess / webServer). We deliberately do NOT import
  * from `@deepseek-ai/cordis` here: the ctx shape is matched structurally so
  * the package typechecks without a cordis install, mirroring the original
  * hand-written `lib/index.d.ts`.
@@ -93,16 +93,6 @@ export interface HttpServerLike {
   register?(opts: RegisterRouteOptions): () => void
 }
 
-export interface SettingsScope {
-  get(): Record<string, unknown>
-  watch(cb: () => void): () => void
-}
-
-export interface SettingsService {
-  register(namespace: string, schema: unknown, opts?: { base?: Record<string, unknown> }): SettingsScope
-  update?(namespace: string, patch: Record<string, unknown>): Promise<void>
-}
-
 /** Host context shape the plugin consumes (structural; not imported from cordis). */
 export interface EgoContext {
   tools: ToolRegistrar
@@ -114,7 +104,6 @@ export interface EgoContext {
   effect?(fn: () => unknown, label?: string): unknown
   inject?(services: readonly string[], fn: (sctx: EgoContext) => void): void
   on?(event: string, fn: (...args: unknown[]) => unknown): () => void
-  settings?: SettingsService
   fiber?: { state?: number }
 }
 

@@ -1,6 +1,22 @@
-import z from 'schemastery'
+import z from '@deepseek-ai/schemastery'
+import type { Volatile } from '@deepseek-ai/cosmokit'
 import type { JudgeSettings, LinkBase, RawConfig, ResolvedConfig } from './types.ts'
 import { sanitizeLinks } from './cdp-targets.ts'
+
+// ── 0.1.7 declarative settings ──────────────────────────────────────────────
+// DSH 0.1.7 removed the imperative settings registration (`ctx.settings`
+// section APIs). The Config schema itself IS the settings form now: only the
+// fields marked `.volatile()` are projected into the auto-generated settings
+// page (composition-only fields stay editable via the profile patch), and a
+// volatile-only change is delivered to the running plugin as a live ref
+// update plus one `loader/volatile-update` event instead of a remount.
+//
+// Volatile set below == exactly the fields the former client settings card
+// exposed for editing. Hard red lines (schemastery 3.18.4+): `.volatile()`
+// only on a fixed object path — never inside a union/lazy/transform branch or
+// an enclosing volatile value; the whole `links` array is wrapped, not its
+// rows. `.volatile()` does not exist before 3.18.4, so this build targets
+// DSH 0.1.7-rc.1+ only.
 
 const backend = z.union(['auto', 'cdp', 'ffmpeg'])
 const profile = z.union(['low', 'balanced', 'high'])
@@ -13,25 +29,25 @@ const encoder = z.union([
 // Defaults live in resolveConfig so a persisted legacy value is not hidden by
 // a schema default before the one-release migration runs.
 export const Config = z.object({
-  isolateSpaces: z.boolean().description('Space isolation: false = persistent profile (keep logins across restarts); true = isolated sandbox.'),
-  idleTimeoutMin: z.number().min(0).max(1440).step(1).description('Auto-stop the backing browser after N minutes without an bcdp_* call (0 = off). Relaunches on demand at the next call.'),
-  chromePath: z.string().description('Path to Chrome/Chromium. Empty = auto-detect.'),
-  captureBackend: backend.description('Capture backend: auto, cdp, or ffmpeg.'),
-  streamProfile: profile.description('Capture quality profile.'),
-  cdpFps: z.number().min(5).max(30).step(1).description('CDP preview FPS.'),
-  cdpQuality: z.number().min(1).max(100).step(1).description('CDP JPEG quality.'),
-  cdpMaxWidth: z.number().min(320).max(1920).step(40).description('CDP frame max width.'),
-  cdpBackstopIntervalMs: z.number().min(1000).max(10000).step(100).description('CDP recovery screenshot interval.'),
-  ffmpegFps: z.number().min(5).max(30).step(1).description('FFmpeg video FPS.'),
-  ffmpegMaxWidth: z.number().min(320).max(1920).step(40).description('FFmpeg video max width.'),
-  ffmpegBitrateKbps: z.number().min(500).max(20000).step(250).description('FFmpeg target video bitrate in kbps.'),
-  ffmpegEncoder: encoder.description('FFmpeg H.264 encoder.'),
-  ffmpegPath: z.string().description('Custom FFmpeg path. Empty = detect PATH or managed install.'),
-  githubMirror: z.string().description('HTTPS base replacing https://github.com for managed downloads.'),
+  isolateSpaces: z.boolean().description('Space isolation: false = persistent profile (keep logins across restarts); true = isolated sandbox.').volatile(),
+  idleTimeoutMin: z.number().min(0).max(1440).step(1).description('Auto-stop the backing browser after N minutes without an bcdp_* call (0 = off). Relaunches on demand at the next call.').volatile(),
+  chromePath: z.string().description('Path to Chrome/Chromium. Empty = auto-detect.').volatile(),
+  captureBackend: backend.description('Capture backend: auto, cdp, or ffmpeg.').volatile(),
+  streamProfile: profile.description('Capture quality profile.').volatile(),
+  cdpFps: z.number().min(5).max(30).step(1).description('CDP preview FPS.').volatile(),
+  cdpQuality: z.number().min(1).max(100).step(1).description('CDP JPEG quality.').volatile(),
+  cdpMaxWidth: z.number().min(320).max(1920).step(40).description('CDP frame max width.').volatile(),
+  cdpBackstopIntervalMs: z.number().min(1000).max(10000).step(100).description('CDP recovery screenshot interval.').volatile(),
+  ffmpegFps: z.number().min(5).max(30).step(1).description('FFmpeg video FPS.').volatile(),
+  ffmpegMaxWidth: z.number().min(320).max(1920).step(40).description('FFmpeg video max width.').volatile(),
+  ffmpegBitrateKbps: z.number().min(500).max(20000).step(250).description('FFmpeg target video bitrate in kbps.').volatile(),
+  ffmpegEncoder: encoder.description('FFmpeg H.264 encoder.').volatile(),
+  ffmpegPath: z.string().description('Custom FFmpeg path. Empty = detect PATH or managed install.').volatile(),
+  githubMirror: z.string().description('HTTPS base replacing https://github.com for managed downloads.').volatile(),
   // User-defined extra CLI args. Shell-like tokenize; mutually-exclusive
   // control flags are stripped (see EGO_CLI_BLOCKED / CHROME_BLOCKED below).
-  runtimeArgs: z.string().description('Extra args appended to the vendored runtime argv. Takes effect on the next bcdp_* call.'),
-  chromeArgs: z.string().description('Extra args appended to the Chrome launch argv. Takes effect on the next browser cold start (the browser is a singleton).'),
+  runtimeArgs: z.string().description('Extra args appended to the vendored runtime argv. Takes effect on the next bcdp_* call.').volatile(),
+  chromeArgs: z.string().description('Extra args appended to the Chrome launch argv. Takes effect on the next browser cold start (the browser is a singleton).').volatile(),
   // ── R1/R7: connection sequence + activation ─────────────────────────────
   // `links` is the ordered sequence (priority order); `activeTargetId` singles
   // out one of them. Probe fields ride along so the panel can paint a
@@ -42,6 +58,8 @@ export const Config = z.object({
   // stays PERMISSIVE on purpose — a pre-R7 row has no `kind` at all and must
   // still validate, because `coerceLink()` is the real gate (it defaults a
   // missing kind to `cdp` and drops anything unusable).
+  // The WHOLE array is marked volatile (the only supported array form — row
+  // level refs are rejected by schemastery).
   links: z.array(z.union([
     z.object({
       kind: z.string(),
@@ -70,9 +88,9 @@ export const Config = z.object({
       probeCode: z.string(),
       probeAt: z.number(),
     }),
-  ])).description('Ordered connection sequence: CDP endpoints and (at most one) local ego CLI link. Only the ACTIVATED and enabled entry receives every bcdp_* call. Order IS the priority order.'),
-  activeTargetId: z.string().description('Id of the activated entry in links. Empty = nothing activated.'),
-  cdpMode: cdpMode.description('auto = use the activated target and never start a local browser silently; remote = only ever connect to the activated target; local = always use local browser control.'),
+  ])).description('Ordered connection sequence: CDP endpoints and (at most one) local ego CLI link. Only the ACTIVATED and enabled entry receives every bcdp_* call. Order IS the priority order.').volatile(),
+  activeTargetId: z.string().description('Id of the activated entry in links. Empty = nothing activated.').volatile(),
+  cdpMode: cdpMode.description('auto = use the activated target and never start a local browser silently; remote = only ever connect to the activated target; local = always use local browser control.').volatile(),
   cdpProbeTimeoutMs: z.number().min(200).max(30000).step(100).description('Timeout for one CDP endpoint probe (http endpoints answer /json/version).'),
   // ── R4: screenshot material ─────────────────────────────────────────────
   cursorHud: z.boolean().description('Draw the agent cursor HUD into screenshots.'),
@@ -81,7 +99,7 @@ export const Config = z.object({
   allowLocalFallback: z.boolean().description('auto mode may fall back to launching a local browser when the activated target is unreachable. Off by default: the fallback must be explicit.'),
   legacyEgoToolNames: z.boolean().description('ALSO register the tools under their old ego_* names for scripts written before the bcdp_* rename. Off by default; mutually exclusive with installing the upstream ego-browser plugin (same tool names).'),
   localHeadless: z.boolean().description('Run the locally launched browser headless.'),
-  remoteEnabled: z.boolean().description('Master switch for REMOTE attach. Off = the configured target sequence is preserved but inert (nothing probes or connects remotely); flip back on any time. Does not affect cdpMode=local.'),
+  remoteEnabled: z.boolean().description('Master switch for REMOTE attach. Off = the configured target sequence is preserved but inert (nothing probes or connects remotely); flip back on any time. Does not affect cdpMode=local.').volatile(),
   localUserDataDir: z.string().description('Profile dir for the locally launched browser. Empty = managed dir; never point at your daily Chrome profile.'),
   // Deprecated read-compatible keys. The settings UI only writes canonical keys.
   castFpsCap: z.number().min(0).max(60).step(1),
@@ -94,21 +112,50 @@ export const Config = z.object({
   // have jev, laya, both, or neither, and the chain must be able to skip a hop
   // it cannot use. The key fields are separate for the same reason — laya-api
   // rejects an absent key outright, so "no key" is a SKIP, not a degraded call.
-  jevUrl: z.string().description('JEV judge base URL, no path. Leave EMPTY: JEV cannot currently be registered, so the hop would only ever be skipped. Add it (and jev to the hop order) when registration opens.'),
-  jevKey: z.string().description('Bearer key for the JEV judge. Empty = the jev hop is skipped (never sent, so no 401 round trip).'),
-  jevModel: z.string().description('Model name sent in the request body.'),
-  layaUrl: z.string().description('Laya judge base URL. The sidecar serves 8000; 7789 is a different tool and will not answer.'),
-  layaKey: z.string().description('Bearer key for the Laya judge. REQUIRED: laya-api has no anonymous branch, so a keyless call is a guaranteed 401.'),
-  layaModel: z.string().description('Model name sent to the Laya judge.'),
-  judgePrefer: z.string().description('Judgement hop order, comma separated. Defaults to "laya,rule" because JEV cannot currently be registered. Unknown names are dropped; the terminal refusal hop cannot be removed.'),
-  jevChunkSize: z.number().min(1).max(255).step(1).description('Candidate ceiling per judgement round. Bound to the probability threshold bucket, so raising it also tightens the gate.'),
-  jevMaxImageBytes: z.number().min(0).step(1024).description('Frame byte budget. 0 = unbounded, which is the measured default: a full-page JPEG was 137 KiB, so chunking for bytes alone slices static pages for nothing.'),
-  jevHistoryLimit: z.number().min(0).max(20).step(1).description('How many recent steps the judge is shown. Recency beats completeness in a loop.'),
-  jevArchiveImage: z.boolean().description('Embed the base64 screenshot in the archived Laya bundle. Off by default: a bundle that always carries hundreds of KiB is a bundle nobody keeps.'),
-  jevEvaluate: z.boolean().description('After every action, ask the judge whether the step actually advanced: inprogress / done / fail. inprogress continues silently; done is checked against successCriteria; fail hands back to the model for recovery (reload, re-capture, ...). Costs one judgement call per action.'),
-  jevStepBudget: z.number().min(1).max(200).step(1).description('Judgement rounds allowed in one bcdp_jev_run before it stops as exhausted.'),
-  jevWallMs: z.number().min(1000).max(3600000).step(1000).description('Wall-clock ceiling for one bcdp_jev_run, in ms.'),
+  jevUrl: z.string().description('JEV judge base URL, no path. Leave EMPTY: JEV cannot currently be registered, so the hop would only ever be skipped. Add it (and jev to the hop order) when registration opens.').volatile(),
+  jevKey: z.string().description('Bearer key for the JEV judge. Empty = the jev hop is skipped (never sent, so no 401 round trip).').volatile(),
+  jevModel: z.string().description('Model name sent in the request body.').volatile(),
+  layaUrl: z.string().description('Laya judge base URL. The sidecar serves 8000; 7789 is a different tool and will not answer.').volatile(),
+  layaKey: z.string().description('Bearer key for the Laya judge. REQUIRED: laya-api has no anonymous branch, so a keyless call is a guaranteed 401.').volatile(),
+  layaModel: z.string().description('Model name sent to the Laya judge.').volatile(),
+  judgePrefer: z.string().description('Judgement hop order, comma separated. Defaults to "laya,rule" because JEV cannot currently be registered. Unknown names are dropped; the terminal refusal hop cannot be removed.').volatile(),
+  jevChunkSize: z.number().min(1).max(255).step(1).description('Candidate ceiling per judgement round. Bound to the probability threshold bucket, so raising it also tightens the gate.').volatile(),
+  jevMaxImageBytes: z.number().min(0).step(1024).description('Frame byte budget. 0 = unbounded, which is the measured default: a full-page JPEG was 137 KiB, so chunking for bytes alone slices static pages for nothing.').volatile(),
+  jevHistoryLimit: z.number().min(0).max(20).step(1).description('How many recent steps the judge is shown. Recency beats completeness in a loop.').volatile(),
+  jevArchiveImage: z.boolean().description('Embed the base64 screenshot in the archived Laya bundle. Off by default: a bundle that always carries hundreds of KiB is a bundle nobody keeps.').volatile(),
+  jevEvaluate: z.boolean().description('After every action, ask the judge whether the step actually advanced: inprogress / done / fail. inprogress continues silently; done is checked against successCriteria; fail hands back to the model for recovery (reload, re-capture, ...). Costs one judgement call per action.').volatile(),
+  jevStepBudget: z.number().min(1).max(200).step(1).description('Judgement rounds allowed in one bcdp_jev_run before it stops as exhausted.').volatile(),
+  jevWallMs: z.number().min(1000).max(3600000).step(1000).description('Wall-clock ceiling for one bcdp_jev_run, in ms.').volatile(),
 })
+
+// ── 0.1.7 volatile live refs ────────────────────────────────────────────────
+/**
+ * Structural shape of a live volatile config reference (cosmokit
+ * `createVolatile`): the loader hands `apply()` one of these for every
+ * `.volatile()` Config field, and `.get()` returns the current immutable
+ * snapshot. Never cache the ref's value across operations — keep the ref and
+ * re-read, or capture a fresh snapshot per operation.
+ */
+export type VolatileRef<T = unknown> = Volatile<T>
+
+/** True when the value is a live volatile reference rather than plain data. */
+export function isVolatileRef(value: unknown): value is VolatileRef {
+  return typeof value === 'object' && value !== null && typeof (value as VolatileRef).get === 'function'
+}
+
+/**
+ * Shallow-copy a raw config entry, replacing every live volatile reference
+ * with its current snapshot. 0.1.7 delivers volatile-only changes as ref
+ * updates (no plugin remount), so every read path must deref before the
+ * plain-value `typeof` gates in `resolveConfig` can see real data.
+ */
+export function derefVolatileConfig(config: RawConfig): RawConfig {
+  const out: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(config)) {
+    out[key] = isVolatileRef(value) ? value.get() : value
+  }
+  return out as RawConfig
+}
 
 // ── user-defined extra CLI args ─────────────────────────────────────────────
 /**
@@ -277,6 +324,9 @@ export function judgeSettingsOf(config: ResolvedConfig): JudgeSettings {
 }
 
 export function resolveConfig(config: RawConfig = {}): ResolvedConfig {
+  // 0.1.7: volatile fields arrive as live refs in the composition entry —
+  // deref them once here so the whole resolution below sees plain data.
+  config = derefVolatileConfig(config)
   const legacyFps = finiteIn(config.castFpsCap, 0, 60)
     ? (config.castFpsCap === 0 ? 20 : Math.max(5, Math.min(30, config.castFpsCap)))
     : 20

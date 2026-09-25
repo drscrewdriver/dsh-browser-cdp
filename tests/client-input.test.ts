@@ -16,9 +16,13 @@ describe("watch panel input and capture status", () => {
     expect(source).not.toMatch(/targetValid[^\n]+streamState !== 'streaming'/);
   });
 
-  it("keeps the FFmpeg option disabled until installation is ready", () => {
-    expect(source).toMatch(/disabled: !ffmpegStatus\.canSelectFfmpeg/);
-    expect(source).toMatch(/ffmpeg-install/);
-    expect(source).toMatch(/githubMirror/);
+  it("0.1.7: settings gateway is gone; the panel reads live capture status instead", () => {
+    // The old settings card's ffmpeg install UI rode the /bcdp/api gateway,
+    // which 0.1.7's declarative settings replaced with the auto-generated form.
+    // The watch panel must keep reading its capture status from the watch route
+    // and must NOT reference the retired settings gateway.
+    expect(source).not.toMatch(/\/bcdp\/api\//);
+    expect(source).toMatch(/WATCH_STATUS_ROUTE/);
+    expect(source).toMatch(/applyCaptureStatus/);
   });
 });

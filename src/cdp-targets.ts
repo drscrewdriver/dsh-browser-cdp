@@ -110,11 +110,12 @@ export interface SanitizeLinksResult {
 }
 
 /**
- * Sanitize the persisted sequence. Dirty data is expected here (hand-edited
- * `settings.yaml`, older schema, unknown keys) so the rule is DROP, never
- * throw: every surviving entry is usable, duplicate ids get fresh ones so
- * ordering/activation stay unambiguous, and the `ego-cli` singleton keeps the
- * FIRST entry (dropping the rest and counting them for the doctor).
+ * Sanitize the persisted sequence. Dirty data is expected here (a hand-edited
+ * profile config on the settings page, older schema, unknown keys) so the rule
+ * is DROP, never throw: every surviving entry is usable, duplicate ids get
+ * fresh ones so ordering/activation stay unambiguous, and the `ego-cli`
+ * singleton keeps the FIRST entry (dropping the rest and counting them for the
+ * doctor).
  */
 export function sanitizeLinks(raw: unknown, max: number = MAX_TARGETS): SanitizeLinksResult {
   if (!Array.isArray(raw)) return { links: [], droppedEgoCli: 0, droppedInvalid: 0 }
@@ -265,7 +266,7 @@ export interface ProbeOptions {
  *
  * Thin adapter over M0.1's `discoverWebSocketUrl`: the resolution logic lives
  * in `src/cdp/endpoint.ts`, while `ProbeOutcome` stays the shape the settings
- * panel and the gateway already speak — its codes are contract, so they are
+ * page's per-target probe already speaks — its codes are contract, so they are
  * mapped one-to-one rather than re-derived here.
  */
 export async function probeEndpoint(endpoint: string, options: ProbeOptions = {}): Promise<ProbeOutcome> {

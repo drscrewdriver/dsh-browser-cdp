@@ -44,7 +44,6 @@ import { EGO_HELP_INDEX } from './help.ts'
 import { HUMAN_CHECK_PROBE } from './captcha.ts'
 import { Config as ConfigSchema, resolveConfig, judgeSettingsOf, EGO_CLI_BLOCKED, CHROME_BLOCKED, filterArgs } from './config.ts'
 import { installEgoBrowserSettings } from './settings.ts'
-import { registerEgoBrowserGateway } from './gateway.ts'
 import { getSharedFfmpegInstallationManager } from './ffmpeg-installation.ts'
 import { SENTINEL, j, str, num, bool, readAll, SAFE_FN } from './util.ts'
 import {
@@ -75,9 +74,10 @@ export const name = 'dsh-browser-cdp'
 // guarded, so a GUI-less host is a safe no-op. The bcdp_* tools depend only on
 // tools + subprocess, present in every host.
 export const inject = ['tools', 'subprocess']
-// Schemastery schema for the composition entry and the `dsh-browser-cdp` settings
-// namespace. Re-exported from config.ts so cordis's loader validates the
-// composition layer and ctx.settings.register() validates the user layer.
+// Schemastery schema for the composition entry and the declarative settings
+// page. Re-exported from config.ts so the cordis loader validates the
+// composition layer and (0.1.7) projects the `.volatile()` fields into the
+// auto-generated settings form — no registration call involved.
 export const Config = ConfigSchema
 
 /**
@@ -855,18 +855,13 @@ function defineEgoTool(ctx: EgoContext, cfg: EgoRuntimeConfig, opts: EgoToolOpti
 
 // ── plugin entry ────────────────────────────────────────────────────────────
 export function apply(ctx: EgoContext, config: RawConfig = {}): void {
-  // Install the settings bridge first: the live config source (composition
-  // entry + user-layer overrides) feeds `chromePath` + cast settings into cfg
-  // via getters so every spawn reads the latest value without re-registration.
-  const settingKeys = [
-    'chromePath', 'captureBackend', 'streamProfile', 'cdpFps', 'cdpQuality',
-    'cdpMaxWidth', 'cdpBackstopIntervalMs', 'ffmpegFps', 'ffmpegMaxWidth', 'ffmpegBitrateKbps',
-    'ffmpegEncoder', 'ffmpegPath', 'githubMirror', 'runtimeArgs', 'chromeArgs',
-    'castFpsCap', 'screencastQuality', 'screencastMaxWidth', 'backstopIntervalMs',
-    'idleTimeoutMin',
-  ]
-  const entry = Object.fromEntries(settingKeys.filter((key) => config[key] !== undefined).map((key) => [key, config[key]]))
-  const bridge = installEgoBrowserSettings(ctx, entry)
+  // Install the config bridge first: the composition entry handed to apply()
+  // feeds every field into cfg via getters (volatile fields arrive as live
+  // refs and are dereferenced per read), so each spawn sees the latest value
+  // without re-registration. A plain-field change remounts the plugin and
+  // rebuilds this bridge from a fresh apply(); a volatile-only change is
+  // delivered through the bridge's onChange (loader/volatile-update).
+  const bridge = installEgoBrowserSettings(ctx, config)
   const ffmpegManager = getSharedFfmpegInstallationManager()
   const initialFfmpegConfig = resolveConfig(bridge.source() as RawConfig)
   void ffmpegManager.check({ configuredPath: initialFfmpegConfig.ffmpegPath, requestedEncoder: initialFfmpegConfig.ffmpegEncoder }).catch(() => {
@@ -1073,17 +1068,6 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
     } catch (err) {
       ctx.logger?.warn?.(
         `dsh-browser-cdp: cast server init failed: ${(err as Error)?.message ?? err}`,
-      )
-    }
-    // Settings HTTP gateway (/bcdp/api/get + /bcdp/api/set) — lets the browser
-    // read/write the `chromePath` config through a self-hosted HTTP route,
-    // bypassing the host's settings-RPC allowlist. Same webServer the cast
-    // server uses; guarded so a headless host without webServer is a no-op.
-    try {
-      registerEgoBrowserGateway(wctx as EgoContext, bridge, ffmpegManager)
-    } catch (err) {
-      ctx.logger?.warn?.(
-        `dsh-browser-cdp: settings gateway init failed: ${(err as Error)?.message ?? err}`,
       )
     }
   })

@@ -40,6 +40,7 @@ import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { importLoginCookies } from './login-import.ts'
 import { initCastServer, markEgoToolCall, getLastEgoActivity, setAttachEndpoint, recycleWorker } from './cast-server.ts'
+import { registerEgoBrowserGateway } from './gateway.ts'
 import { EGO_HELP_INDEX } from './help.ts'
 import { HUMAN_CHECK_PROBE } from './captcha.ts'
 import { Config as ConfigSchema, resolveConfig, judgeSettingsOf, EGO_CLI_BLOCKED, CHROME_BLOCKED, filterArgs } from './config.ts'
@@ -1068,6 +1069,19 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
     } catch (err) {
       ctx.logger?.warn?.(
         `dsh-browser-cdp: cast server init failed: ${(err as Error)?.message ?? err}`,
+      )
+    }
+    // Runtime capability gateway (/bcdp/api/cdp-status | cdp-probe |
+    // ffmpeg-status | ffmpeg-check | ffmpeg-install) — serves the browser
+    // half's capability polling. 0.1.7: the config get/set pair is retired —
+    // config writes go through the declarative settings form (configForms).
+    // Same webServer the cast server uses; guarded so a headless host without
+    // webServer is a no-op.
+    try {
+      registerEgoBrowserGateway(wctx as EgoContext, bridge, ffmpegManager)
+    } catch (err) {
+      ctx.logger?.warn?.(
+        `dsh-browser-cdp: capability gateway init failed: ${(err as Error)?.message ?? err}`,
       )
     }
   })

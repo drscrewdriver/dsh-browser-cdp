@@ -123,6 +123,11 @@ declare function require(id: string): any
 			fabTitle: 'Agent Browser live view',
 			settingsTitle: 'Show settings',
 			settingsHide: 'Hide settings',
+			famTitle: 'CDP Browser',
+			famIsolate: 'Space isolation',
+			famIsolateDesc: 'Off = persistent profile (logins survive restarts); on = isolated sandbox',
+			famIdle: 'Auto-stop idle browser (minutes, 0 = off)',
+			famIdleDesc: 'Stops the backing browser after N minutes without a bcdp_* call; relaunches on demand',
 		}
 		var watchZh = {
 			title: 'CDP 浏览器',
@@ -174,6 +179,11 @@ declare function require(id: string): any
 			fabTitle: 'CDP 浏览器实时视图',
 			settingsTitle: '展开设置',
 			settingsHide: '收起设置',
+			famTitle: 'CDP 浏览器',
+			famIsolate: '空间隔离',
+			famIsolateDesc: '关 = 持久化配置（重启保留登录态）；开 = 每次隔离沙箱',
+			famIdle: '空闲自动停止（分钟，0 = 不停）',
+			famIdleDesc: '超过 N 分钟没有 bcdp_* 调用即停止后台浏览器，下次调用按需重启',
 		}
 		var watchDict = { en: watchEn, zh: watchZh }
 		function wt(key, params = undefined) {
@@ -593,6 +603,75 @@ declare function require(id: string): any
 		// 6-dot drag grip for the panel's title bar.
 		const ICON_GRIP = `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="8" cy="6" r="1.8"/><circle cx="16" cy="6" r="1.8"/><circle cx="8" cy="12" r="1.8"/><circle cx="16" cy="12" r="1.8"/><circle cx="8" cy="18" r="1.8"/><circle cx="16" cy="18" r="1.8"/></svg>`;
 
+		// ── 插件族共用设置 tab（「起子插件设置」）──────────────────────────
+		// dsh-thinking-levels 的顶级 settings.section 声明 `dsh-family.tab` 子席位；
+		// 本卡贡献 isolateSpaces / idleTimeoutMin 两个 volatile 字段的编辑入口
+		// （configForms 直用原生句柄，快照身份稳定）。thinking-levels 缺席时
+		// inject 静默等待，不阻塞客户端半。
+		function mountFamilySettingsCard(ctx) {
+			var forms = typeof ctx.get === 'function' ? ctx.get('configForms') : undefined
+			if (!forms || typeof forms.get !== 'function') return
+			var scope = forms.get('dsh-browser-cdp')
+			ctx.slots.inject('dsh-family.tab', function () {
+				return ctx.slots.register({
+					name: 'dsh-family.tab',
+					id: 'dsh-browser-cdp',
+					order: 35,
+					label: function () { return wt('famTitle') },
+					inject: function () { return { scope: scope } },
+				}, FamilySettingsCard)
+			}, 'dsh-browser-cdp: family settings tab')
+		}
+
+		function FamilySettingsCard(props) {
+			var scope = props.scope
+			var snapshot = React.useSyncExternalStore(
+				function (listener) { return scope.subscribe(listener) },
+				function () { return scope.getSnapshot() }
+			)
+			var value = snapshot.value || {}
+			var writable = snapshot.writable === true
+			var h = React.createElement
+			var rowStyle = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', padding: '8px 0' }
+			var textCol = { display: 'flex', flexDirection: 'column', gap: '2px' }
+			var titleStyle = { fontSize: '13px', color: 'var(--dsw-alias-label-primary, inherit)' }
+			var descStyle = { fontSize: '12px', color: 'var(--dsw-alias-label-tertiary, rgba(127,127,127,.8))', lineHeight: 1.5 }
+
+			var idleDraft = React.useState(typeof value.idleTimeoutMin === 'number' ? value.idleTimeoutMin : 0)
+			var idle = idleDraft[0], setIdle = idleDraft[1]
+			React.useEffect(function () {
+				setIdle(typeof value.idleTimeoutMin === 'number' ? value.idleTimeoutMin : 0)
+			}, [value.idleTimeoutMin])
+
+			return h('div', { style: { display: 'grid', gap: '4px' } },
+				h('div', { style: rowStyle },
+					h('div', { style: textCol },
+						h('span', { style: titleStyle }, wt('famIsolate')),
+						h('span', { style: descStyle }, wt('famIsolateDesc'))
+					),
+					h('input', {
+						type: 'checkbox', checked: value.isolateSpaces === true, disabled: !writable,
+						onChange: function (e) { void scope.set('isolateSpaces', e.target.checked) },
+					})
+				),
+				h('div', { style: rowStyle },
+					h('div', { style: textCol },
+						h('span', { style: titleStyle }, wt('famIdle')),
+						h('span', { style: descStyle }, wt('famIdleDesc'))
+					),
+					h('input', {
+						type: 'number', min: 0, max: 1440, value: idle, disabled: !writable,
+						style: { width: '72px' },
+						onChange: function (e) { setIdle(e.target.value === '' ? 0 : Number(e.target.value)) },
+						onBlur: function (e) {
+							var n = Math.max(0, Math.min(1440, Math.round(Number(e.target.value) || 0)))
+							void scope.set('idleTimeoutMin', n)
+						},
+					})
+				)
+			)
+		}
+
 		function apply(ctx) {
 		// ── Watch panel: sidebar tab & floating watch ─────────────────────
 		// betterSidebar is an OPTIONAL service and is intentionally absent from
@@ -602,6 +681,7 @@ declare function require(id: string): any
 		// on DSH 0.1.2-rc.1). Probe with ctx.get; when absent, mount the
 		// floating watch panel immediately and upgrade to the sidebar tab if
 		// the service appears later (dynamic ctx.inject, same pattern as PR #45).
+		mountFamilySettingsCard(ctx)
 		var betterSidebarService
 		try { betterSidebarService = typeof ctx.get === 'function' ? ctx.get('betterSidebar') : undefined } catch (e) { betterSidebarService = undefined }
 		if (betterSidebarService !== undefined) {

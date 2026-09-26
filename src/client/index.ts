@@ -605,8 +605,8 @@ declare function require(id: string): any
 
 		// ── 插件族共用设置 tab（「起子插件设置」）──────────────────────────
 		// dsh-thinking-levels 的顶级 settings.section 声明 `dsh-family.tab` 子席位；
-		// 本卡贡献 isolateSpaces / idleTimeoutMin 两个 volatile 字段的编辑入口
-		// （configForms 直用原生句柄，快照身份稳定）。thinking-levels 缺席时
+		// 本卡全量渲染 Config 的用户可调 volatile 字段（分组 + links 连接目标），
+		// configForms 直用原生句柄（快照身份稳定）。thinking-levels 缺席时
 		// inject 静默等待，不阻塞客户端半。
 		function mountFamilySettingsCard(ctx) {
 			var forms = typeof ctx.get === 'function' ? ctx.get('configForms') : undefined
@@ -623,6 +623,64 @@ declare function require(id: string): any
 			}, 'dsh-browser-cdp: family settings tab')
 		}
 
+		// 全量设置面：Config 里所有用户可调 volatile 字段按组分块渲染。
+		// kind: bool=checkbox / num=数字 / str=文本 / secret=密码 / sel=下拉。
+		// 文案直接内联 en/zh（跟随 wt 的 _egoLocale），不再膨胀字典键。
+		var FAM_FIELD_GROUPS = [
+			{ gk: 'gBasic', en: 'Basics', zh: '基础', fields: [
+				{ k: 'isolateSpaces', kind: 'bool', en: ['Space isolation', 'Off = persistent profile (logins survive restarts); on = isolated sandbox'], zh: ['空间隔离', '关 = 持久化配置（重启保留登录态）；开 = 每次隔离沙箱'] },
+				{ k: 'idleTimeoutMin', kind: 'num', min: 0, max: 1440, step: 1, en: ['Auto-stop idle browser (minutes, 0 = off)', 'Stops the backing browser after N minutes without a bcdp_* call; relaunches on demand'], zh: ['空闲自动停止（分钟，0 = 不停）', '超过 N 分钟没有 bcdp_* 调用即停止后台浏览器，下次调用按需重启'] },
+				{ k: 'cdpMode', kind: 'sel', options: ['auto', 'local', 'remote'], en: ['Connection mode', 'auto = activated target only; remote = never start a local browser; local = always local control'], zh: ['连接模式', 'auto = 只用已激活目标；remote = 绝不静默启动本地浏览器；local = 始终本地控制'] },
+				{ k: 'remoteEnabled', kind: 'bool', en: ['Remote attach master switch', 'Off = the target sequence is preserved but inert; does not affect local mode'], zh: ['远程接管总开关', '关 = 目标序列保留但不生效；不影响 local 模式'] },
+				{ k: 'allowLocalFallback', kind: 'bool', en: ['Allow local fallback in auto mode', 'auto may launch a local browser when the activated target is unreachable'], zh: ['auto 模式允许本地回退', '已激活目标不可达时允许自动拉起本地浏览器'] },
+				{ k: 'chromePath', kind: 'str', en: ['Chrome/Chromium path', 'Empty = auto-detect'], zh: ['Chrome/Chromium 路径', '留空 = 自动探测'] },
+				{ k: 'localHeadless', kind: 'bool', en: ['Launch local browser headless', 'Applies to the locally launched browser'], zh: ['本地浏览器无头启动', '仅作用于本地拉起的浏览器'] },
+				{ k: 'localUserDataDir', kind: 'str', en: ['Local profile dir', 'Empty = managed dir; never point at your daily Chrome profile'], zh: ['本地浏览器 Profile 目录', '留空 = 托管目录；不要指向日常使用的 Chrome 配置'] },
+				{ k: 'legacyEgoToolNames', kind: 'bool', en: ['Also register legacy ego_* tool names', 'For scripts written before the bcdp_* rename; conflicts with the upstream ego-browser plugin'], zh: ['同时注册旧版 ego_* 工具名', '给 bcdp_* 更名前的脚本用；与上游 ego-browser 插件互斥'] },
+			] },
+			{ gk: 'gCapture', en: 'Capture & streaming', zh: '截图与推流', fields: [
+				{ k: 'captureBackend', kind: 'sel', options: ['auto', 'cdp', 'ffmpeg'], en: ['Capture backend', 'auto, cdp, or ffmpeg'], zh: ['截取后端', 'auto / cdp / ffmpeg'] },
+				{ k: 'streamProfile', kind: 'sel', options: ['low', 'balanced', 'high'], en: ['Capture quality profile', 'Overall quality preset'], zh: ['画质档位', '整体画质预设'] },
+				{ k: 'cdpFps', kind: 'num', min: 5, max: 30, step: 1, en: ['CDP preview FPS', ''], zh: ['CDP 预览帧率', ''] },
+				{ k: 'cdpQuality', kind: 'num', min: 1, max: 100, step: 1, en: ['CDP JPEG quality', ''], zh: ['CDP JPEG 质量', ''] },
+				{ k: 'cdpMaxWidth', kind: 'num', min: 320, max: 1920, step: 40, en: ['CDP frame max width', ''], zh: ['CDP 帧最大宽度', ''] },
+				{ k: 'cdpBackstopIntervalMs', kind: 'num', min: 1000, max: 10000, step: 100, en: ['CDP recovery interval (ms)', ''], zh: ['CDP 恢复截图间隔（ms）', ''] },
+				{ k: 'ffmpegFps', kind: 'num', min: 5, max: 30, step: 1, en: ['FFmpeg video FPS', ''], zh: ['FFmpeg 视频帧率', ''] },
+				{ k: 'ffmpegMaxWidth', kind: 'num', min: 320, max: 1920, step: 40, en: ['FFmpeg max width', ''], zh: ['FFmpeg 最大宽度', ''] },
+				{ k: 'ffmpegBitrateKbps', kind: 'num', min: 500, max: 20000, step: 250, en: ['FFmpeg bitrate (kbps)', ''], zh: ['FFmpeg 码率（kbps）', ''] },
+				{ k: 'ffmpegEncoder', kind: 'sel', options: ['auto', 'software', 'h264_mf', 'h264_nvenc', 'h264_qsv', 'h264_amf', 'h264_videotoolbox', 'h264_vaapi'], en: ['FFmpeg H.264 encoder', ''], zh: ['FFmpeg H.264 编码器', ''] },
+				{ k: 'ffmpegPath', kind: 'str', en: ['FFmpeg path', 'Empty = detect PATH or managed install'], zh: ['FFmpeg 路径', '留空 = 探测 PATH 或托管安装'] },
+				{ k: 'cursorHud', kind: 'bool', en: ['Draw cursor HUD into screenshots', ''], zh: ['截图绘制光标 HUD', ''] },
+				{ k: 'cursorName', kind: 'str', en: ['Cursor HUD label', ''], zh: ['光标 HUD 名称', ''] },
+				{ k: 'githubMirror', kind: 'str', en: ['GitHub download mirror', 'HTTPS base replacing https://github.com for managed downloads'], zh: ['GitHub 下载镜像', '托管下载时替换 https://github.com 的 HTTPS 前缀'] },
+				{ k: 'runtimeArgs', kind: 'str', en: ['Extra runtime args', 'Appended to the vendored runtime argv; next bcdp_* call'], zh: ['运行时附加参数', '追加到托管运行时 argv；下次 bcdp_* 调用生效'] },
+				{ k: 'chromeArgs', kind: 'str', en: ['Extra Chrome args', 'Appended to the Chrome launch argv; next cold start'], zh: ['Chrome 附加启动参数', '追加到 Chrome 启动 argv；下次冷启动生效'] },
+			] },
+			{ gk: 'gJudge', en: 'Judgement (JEV / Laya)', zh: '评审（JEV / Laya）', fields: [
+				{ k: 'judgePrefer', kind: 'str', en: ['Judge hop order', 'Comma separated; defaults to "laya,rule"'], zh: ['评审跳序', '逗号分隔；默认 "laya,rule"'] },
+				{ k: 'jevUrl', kind: 'str', en: ['JEV base URL', 'Leave empty to skip the jev hop'], zh: ['JEV 基础 URL', '留空 = 跳过 jev 跳'] },
+				{ k: 'jevKey', kind: 'secret', en: ['JEV bearer key', 'Empty = the jev hop is skipped'], zh: ['JEV Bearer Key', '留空 = 跳过 jev 跳'] },
+				{ k: 'jevModel', kind: 'str', en: ['JEV model', ''], zh: ['JEV 模型名', ''] },
+				{ k: 'jevChunkSize', kind: 'num', min: 1, max: 255, step: 1, en: ['JEV candidates per round', ''], zh: ['JEV 每轮候选上限', ''] },
+				{ k: 'jevMaxImageBytes', kind: 'num', min: 0, step: 1024, en: ['JEV frame byte budget (0 = unbounded)', ''], zh: ['JEV 单帧字节预算（0 = 不限）', ''] },
+				{ k: 'jevHistoryLimit', kind: 'num', min: 0, max: 20, step: 1, en: ['JEV recent-step window', ''], zh: ['JEV 近期步数窗口', ''] },
+				{ k: 'jevArchiveImage', kind: 'bool', en: ['Embed screenshot in archived bundle', ''], zh: ['归档包内嵌截图', ''] },
+				{ k: 'jevEvaluate', kind: 'bool', en: ['Evaluate every action with the judge', 'Costs one judgement call per action'], zh: ['每步动作都过评审', '每步多花一次评审调用'] },
+				{ k: 'jevStepBudget', kind: 'num', min: 1, max: 200, step: 1, en: ['Rounds per bcdp_jev_run', ''], zh: ['单次 bcdp_jev_run 轮数上限', ''] },
+				{ k: 'jevWallMs', kind: 'num', min: 1000, max: 3600000, step: 1000, en: ['Wall-clock ceiling per run (ms)', ''], zh: ['单次运行墙钟上限（ms）', ''] },
+				{ k: 'layaUrl', kind: 'str', en: ['Laya base URL', 'The sidecar serves 8000'], zh: ['Laya 基础 URL', 'sidecar 服务 8000 端口'] },
+				{ k: 'layaKey', kind: 'secret', en: ['Laya key (required)', 'Keyless calls are a guaranteed 401'], zh: ['Laya Key（必填）', '无 Key 必然 401'] },
+				{ k: 'layaModel', kind: 'str', en: ['Laya model', ''], zh: ['Laya 模型名', ''] },
+			] },
+		]
+
+		// 文案助手：组标题/字段标题与描述（en 兜底，与 wt 同一 locale 源）。
+		function famText(item, kind) {
+			var pair = _egoLocale === 'zh' ? item.zh : item.en
+			if (kind === 'title') return pair[0]
+			return pair[1] || ''
+		}
+
 		function FamilySettingsCard(props) {
 			var scope = props.scope
 			var snapshot = React.useSyncExternalStore(
@@ -632,44 +690,126 @@ declare function require(id: string): any
 			var value = snapshot.value || {}
 			var writable = snapshot.writable === true
 			var h = React.createElement
-			var rowStyle = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', padding: '8px 0' }
-			var textCol = { display: 'flex', flexDirection: 'column', gap: '2px' }
+			return h('div', { style: { display: 'grid', gap: '8px' } },
+				FAM_FIELD_GROUPS.map(function (group) {
+					return h(FamGroup, { key: group.gk, group: group, value: value, writable: writable, scope: scope })
+				}),
+				h(FamLinks, { key: 'links', value: value, writable: writable, scope: scope }),
+			)
+		}
+
+		function FamGroup(props) {
+			var group = props.group
+			var h = React.createElement
+			return h('div', { style: { borderTop: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.25))', paddingTop: '6px' } },
+				h('div', { style: { fontSize: '12px', fontWeight: 600, color: 'var(--dsw-alias-label-secondary, rgba(127,127,127,.9))', padding: '2px 0 4px' } },
+					_egoLocale === 'zh' ? group.zh : group.en),
+				group.fields.map(function (f) { return h(FamField, { key: f.k, f: f, group: group, ...props }) })
+			)
+		}
+
+		function FamField(props) {
+			var f = props.f
+			var value = props.value
+			var writable = props.writable
+			var scope = props.scope
+			var h = React.createElement
+			var rowStyle = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', padding: '6px 0' }
+			var textCol = { display: 'flex', flexDirection: 'column', gap: '2px', minWidth: 0 }
 			var titleStyle = { fontSize: '13px', color: 'var(--dsw-alias-label-primary, inherit)' }
 			var descStyle = { fontSize: '12px', color: 'var(--dsw-alias-label-tertiary, rgba(127,127,127,.8))', lineHeight: 1.5 }
+			var label = h('div', { style: textCol },
+				h('span', { style: titleStyle }, famText(f, 'title')),
+				f.desc === false || !famText(f, 'desc') ? null : h('span', { style: descStyle }, famText(f, 'desc')))
+			if (f.kind === 'bool') {
+				return h('div', { style: rowStyle }, label,
+					h('input', { type: 'checkbox', checked: value[f.k] === true, disabled: !writable,
+						onChange: function (e) { void scope.set(f.k, e.target.checked) } }))
+			}
+			if (f.kind === 'num') {
+				return h('div', { style: rowStyle }, label,
+					h(FamNumInput, { f: f, v: value[f.k], writable: writable, scope: scope }))
+			}
+			if (f.kind === 'sel') {
+				return h('div', { style: rowStyle }, label,
+					h('select', { value: String(value[f.k] ?? f.options[0]), disabled: !writable,
+						style: { font: 'inherit', color: 'inherit', background: 'var(--dsw-alias-bg-module-platform, rgba(127,127,127,.08))', border: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.35))', borderRadius: '8px', padding: '4px 8px' },
+						onChange: function (e) { void scope.set(f.k, e.target.value) } },
+						f.options.map(function (o) { return h('option', { key: o, value: o }, o) })))
+			}
+			// str / secret：文本行（宽度占满，失焦提交）
+			return h('div', { style: { display: 'grid', gap: '2px', padding: '6px 0' } }, label,
+				h(FamStrInput, { f: f, v: value[f.k], writable: writable, scope: scope }))
+		}
 
-			var idleDraft = React.useState(typeof value.idleTimeoutMin === 'number' ? value.idleTimeoutMin : 0)
-			var idle = idleDraft[0], setIdle = idleDraft[1]
-			React.useEffect(function () {
-				setIdle(typeof value.idleTimeoutMin === 'number' ? value.idleTimeoutMin : 0)
-			}, [value.idleTimeoutMin])
+		function FamNumInput(props) {
+			var f = props.f
+			var h = React.createElement
+			var draft = React.useState(props.v === undefined || props.v === null ? '' : String(props.v))
+			var v = draft[0], setV = draft[1]
+			React.useEffect(function () { setV(props.v === undefined || props.v === null ? '' : String(props.v)) }, [props.v])
+			return h('input', { type: 'number', min: f.min, max: f.max, step: f.step, value: v, disabled: !props.writable,
+				style: { width: '96px', font: 'inherit', color: 'inherit', background: 'var(--dsw-alias-bg-module-platform, rgba(127,127,127,.08))', border: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.35))', borderRadius: '8px', padding: '4px 8px' },
+				onChange: function (e) { setV(e.target.value) },
+				onBlur: function () {
+					if (v === '') return
+					var n = Number(v)
+					if (!isFinite(n)) return
+					n = Math.round(n / (f.step || 1)) * (f.step || 1)
+					if (f.min !== undefined) n = Math.max(f.min, n)
+					if (f.max !== undefined) n = Math.min(f.max, n)
+					void props.scope.set(f.k, n)
+				} })
+		}
 
-			return h('div', { style: { display: 'grid', gap: '4px' } },
-				h('div', { style: rowStyle },
-					h('div', { style: textCol },
-						h('span', { style: titleStyle }, wt('famIsolate')),
-						h('span', { style: descStyle }, wt('famIsolateDesc'))
-					),
-					h('input', {
-						type: 'checkbox', checked: value.isolateSpaces === true, disabled: !writable,
-						onChange: function (e) { void scope.set('isolateSpaces', e.target.checked) },
-					})
-				),
-				h('div', { style: rowStyle },
-					h('div', { style: textCol },
-						h('span', { style: titleStyle }, wt('famIdle')),
-						h('span', { style: descStyle }, wt('famIdleDesc'))
-					),
-					h('input', {
-						type: 'number', min: 0, max: 1440, value: idle, disabled: !writable,
-						style: { width: '72px' },
-						onChange: function (e) { setIdle(e.target.value === '' ? 0 : Number(e.target.value)) },
-						onBlur: function (e) {
-							var n = Math.max(0, Math.min(1440, Math.round(Number(e.target.value) || 0)))
-							void scope.set('idleTimeoutMin', n)
-						},
-					})
-				)
-			)
+		function FamStrInput(props) {
+			var f = props.f
+			var h = React.createElement
+			var draft = React.useState(props.v === undefined || props.v === null ? '' : String(props.v))
+			var v = draft[0], setV = draft[1]
+			React.useEffect(function () { setV(props.v === undefined || props.v === null ? '' : String(props.v)) }, [props.v])
+			return h('input', { type: f.kind === 'secret' ? 'password' : 'text', value: v, disabled: !props.writable,
+				style: { width: '100%', font: 'inherit', color: 'inherit', background: 'var(--dsw-alias-bg-module-platform, rgba(127,127,127,.08))', border: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.35))', borderRadius: '8px', padding: '5px 10px', boxSizing: 'border-box' },
+				onChange: function (e) { setV(e.target.value) },
+				onBlur: function () { void props.scope.set(f.k, v) },
+				onKeyDown: function (e) { if (e.key === 'Enter') { void props.scope.set(f.k, v) } } })
+		}
+
+		// 连接目标（links）：按行渲染启用开关 + 激活按钮（写 activeTargetId）。
+		function FamLinks(props) {
+			var value = props.value
+			var writable = props.writable
+			var scope = props.scope
+			var h = React.createElement
+			var links = Array.isArray(value.links) ? value.links : []
+			var activeId = typeof value.activeTargetId === 'string' ? value.activeTargetId : ''
+			function setEnabled(idx, on) {
+				var next = links.map(function (row, i) { return i === idx ? { ...row, enabled: on } : row })
+				void scope.set('links', next)
+			}
+			return h('div', { style: { borderTop: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.25))', paddingTop: '6px' } },
+				h('div', { style: { fontSize: '12px', fontWeight: 600, color: 'var(--dsw-alias-label-secondary, rgba(127,127,127,.9))', padding: '2px 0 4px' } },
+					_egoLocale === 'zh' ? '连接目标（顺序即优先级）' : 'Connection targets (order = priority)'),
+				links.length === 0
+					? h('div', { style: { fontSize: '12px', color: 'var(--dsw-alias-label-tertiary, rgba(127,127,127,.8))', padding: '4px 0' } },
+						_egoLocale === 'zh' ? '暂无目标 —— 连接序列在 profile 的 cordis.patch.yml links 中维护' : 'No targets — maintain the sequence in the profile cordis.patch.yml links')
+					: links.map(function (row, idx) {
+						var label = row.label || row.id || ('#' + idx)
+						var detail = row.kind === 'ego-cli' ? (row.cliPath || '') : (row.endpoint || '')
+						var isActive = row.id !== undefined && row.id === activeId
+						return h('div', { key: row.id || idx, style: { display: 'flex', alignItems: 'center', gap: '8px', padding: '5px 0', flexWrap: 'wrap' } },
+							h('input', { type: 'checkbox', checked: row.enabled === true, disabled: !writable,
+								title: _egoLocale === 'zh' ? '启用' : 'Enabled',
+								onChange: function (e) { setEnabled(idx, e.target.checked) } }),
+							h('span', { style: { fontSize: '13px', color: 'var(--dsw-alias-label-primary, inherit)' } }, label),
+							h('span', { style: { fontSize: '11px', color: 'var(--dsw-alias-label-tertiary, rgba(127,127,127,.7))', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: '1 1 120px' } }, detail),
+							isActive
+								? h('span', { style: { fontSize: '11px', color: '#30d158', flex: '0 0 auto' } }, _egoLocale === 'zh' ? '已激活' : 'active')
+								: h('button', { type: 'button', disabled: !writable,
+									style: { font: 'inherit', fontSize: '12px', cursor: writable ? 'pointer' : 'not-allowed', border: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.35))', background: 'none', color: 'var(--dsw-alias-label-primary, inherit)', borderRadius: '8px', padding: '2px 10px', flex: '0 0 auto' },
+									onClick: function () { void scope.set('activeTargetId', row.id) } },
+									_egoLocale === 'zh' ? '激活' : 'activate'))
+					}))
 		}
 
 		function apply(ctx) {

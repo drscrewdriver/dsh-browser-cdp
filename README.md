@@ -34,7 +34,7 @@
 
 **登录态导入（v0.8.5 新增）**：工具 `bcdp_login_import`，把你日常 Chrome/Edge/Brave 里的登录 cookie **按域名**复制进 agent 浏览器（真实二进制无头启动 + CDP 透传读取，兼容 Chrome 127+ 的 App-Bound Encryption，不做离线解密；源浏览器运行中可选择优雅关闭后导入，窗口下次启动自动恢复）。cookie 值不出现在任何日志与输出中；导入前自动备份源 cookie 库，异常清空自动还原。配合默认的磁盘持久化 Profile，导入的登录态跨重启永久保留。
 
-一款 **CDP 浏览器代理**：把 [CitroLabs/ego-lite](https://github.com/CitroLabs/ego-lite)（给 AI Agent 用的 Chromium）作为内置运行时接入 DeepSeek Harness，以 **33 个结构化 `bcdp_*` 工具**驱动浏览器，并配一套**实时观察前端口**——agent 后台操作网页时，你能像看直播一样看到它正在浏览的每个页面，还能直接操作它。
+一款 **CDP 浏览器代理**：把 [CitroLabs/ego-lite](https://github.com/CitroLabs/ego-lite)（给 AI Agent 用的 Chromium）作为内置运行时接入 DeepSeek Harness，以 **38 个结构化 `bcdp_*` 工具**驱动浏览器，并配一套**实时观察前端口**——agent 后台操作网页时，你能像看直播一样看到它正在浏览的每个页面，还能直接操作它。
 
 **一点私藏的独特之处（self-observation）**：agent 用的就是这一个 Chromium——连它操作 **DSH 自身**（管理会话、任务看板、调设置）时，观察窗也实时显示、你能随时接手。不只是"看得见 agent 在网页上干活"，连 agent 操作 DSH 界面本身都是全程可见、可掌控的。
 
@@ -48,28 +48,30 @@
 
 | 能力 | 本插件（本仓库） | 同类插件（Da1dr1em/dsh-ego-browser） |
 |---|---|---|
-| 结构化工具数 | **32 个**，职责单一、可确定性调用 | **3 个**（`run`/`help`/`status`） |
+| 结构化工具数 | **38 个**，职责单一、可确定性调用 | **3 个**（`run`/`help`/`status`） |
 | 实时观察窗（CDP JPEG / FFmpeg H.264 双后端 + 标签条 + 历史抽屉） | ✅ 有 | ❌ 无 |
 | 监控窗鼠标**直接操作**真实浏览器（点击/拖拽/滚动回传 CDP） | ✅ 有 | ❌ 无 |
+| **观察窗点选元素 → 捕获并引用进对话输入框**（`[CDP-PICKS]` 结构化块，人工指认目标） | ✅ 有 | ❌ 无 |
 | worker 单实例守卫 + 崩溃/重复自愈 | ✅ 有 | ❌ 无 |
-| 下载捕获 `ego_download` / 人机验证检测 `ego_captcha`/`ego_page_info` | ✅ 有 | ❌ 无 |
+| 下载捕获 `bcdp_download` / 人机验证检测 `bcdp_captcha`/`bcdp_page_info` | ✅ 有 | ❌ 无 |
 | 平台自适应（Linux/macOS/Windows 自动探测 + root/无头/`--no-sandbox` 兜底） | ✅ 全平台 | 仅 Windows 预览宿主，需手动配 |
-| 登录态落盘持久化 `ego_auth_flush` | ✅ 有 | ⚠️ 仅文档级说明 |
+| 登录态落盘持久化 `bcdp_auth_flush` | ✅ 有 | ⚠️ 仅文档级说明 |
 
-**关键差异两条：**
+**关键差异三条：**
 - **看得到**：别家是"跑完告诉你结果"的黑盒；我们实时推流，你**看着 agent 操作**，卡在验证码/走岔立刻发现。
 - **控得住**：别家只读；我们监控窗**直接驱动**同一个 agent 浏览器，需要时你亲手接管（缩放/拖拽/点击），不必打断 agent 重来。
+- **指得准**：你在观察窗里**点选**页面元素，插件捕获其 `backendNodeId`/`tag`/`id` 与语义描述，以 `[CDP-PICKS]` 结构化块并入对话输入框草稿（同页多元素自动合并编号）——agent 拿到的是精确目标，不用猜"你说的按钮是哪个"。
 
-> 以上对比基于公开可见的可核实事实：本仓库代码（`bin/cdp-cast-worker.mjs` 实时推流 + CDP 输入回传、`lib/index.js` 32 个注册工具、`lib/cast-server.js` host 桥接）与同类插件的源码/README。此文档不含对任何他人的贬低——我们只陈述自己多实现并验证了哪些能力。
+> 以上对比基于公开可见的可核实事实：本仓库代码（`bin/cdp-cast-worker.mjs` 实时推流 + CDP 输入回传、`lib/index.js` 38 个注册工具、`lib/cast-server.js` host 桥接、`lib/client.js` 的 `deliverPickToConversation` 点选引用）与同类插件的源码/README（其 `src/tools.ts` 仅注册 `ego_browser_run` / `ego_browser_help` / `ego_browser_status`）。此文档不含对任何他人的贬低——我们只陈述自己多实现并验证了哪些能力。
 
 **相对 [ego-lite](https://github.com/CitroLabs/ego-lite) 本体，我们多做了这些（都可对照本仓库代码核实）：**
 
 | 能力 | 说明（对应代码） |
 |---|---|
-| **观察窗前端口** | ego-lite 本体是无头 CLI（只有 heredoc 脚本 + 文本输出）；我们在其上加了 **SSE 实时推流 + 标签条 + 历史抽屉 + 监控窗鼠标直操**（`bin/cdp-cast-worker.mjs`、`lib/cast-server.js`、`lib/client.js`），让"看"和"控"成为一等能力 |
+| **观察窗前端口** | ego-lite 本体是无头 CLI（只有 heredoc 脚本 + 文本输出）；我们在其上加了 **SSE 实时推流 + 标签条 + 历史抽屉 + 监控窗鼠标直操 + 点选元素引用进输入框**（`bin/cdp-cast-worker.mjs`、`lib/cast-server.js`、`lib/client.js` 的 `createPickControl`/`deliverPickToConversation`），让"看"、"控"、"指"成为一等能力 |
 | **开箱即用 + 跨平台自足** | `resolveEgoEnv` 自动探测 Chrome/Edge/Brave，内置 `--no-sandbox` wrapper，root / Docker / 无显示器免配置（`lib/index.js`）；不必像官方那样先装一个 GUI 宿主 |
 | **健壮性层** | 冷启动自动重试（只重试 CDP 瞬态，不吞真错）、worker 单实例守卫 + 崩溃自动重启、插件卸载 fire-and-forget 不阻塞宿主退出、前端帧缓存上限（`withWarmupRetry` / `makeEnsureWorker` / `frameCache`） |
-| **运维型工具** | `ego_doctor`（环境体检）、`ego_captcha`（人机验证探测）、`ego_auth_flush`（登录落盘）、`bcdp_login_import`（系统浏览器登录态导入）、`ego_http`（浏览器上下文请求）等，是原生 CLI helper 没有的一层 |
+| **运维型工具** | `bcdp_doctor`（环境体检）、`bcdp_captcha`（人机验证探测）、`bcdp_auth_flush`（登录落盘）、`bcdp_login_import`（系统浏览器登录态导入）、`bcdp_http`（浏览器上下文请求）等，是原生 CLI helper 没有的一层 |
 | **self-observation** | agent 操作 DSH 自身界面时同样实时可见、可接手 |
 
 > 我们不声称媲美官方 macOS App 的内核级快照或原生多窗口体验；本仓库解决的是"把同一套浏览器能力带进 DSH + Linux/WSL + 看得见"这件事。
@@ -166,24 +168,26 @@ dshx list                                                # 应显示：[on] dsh-
 
 `bcdp_doctor` 会报告当前序列类型计数、CLI 实际解析到的路径与形态，以及（若同机装了上游 `dsh-ego-browser`）一条共存提示。
 
-## 工具清单（33 个，前缀 `bcdp_`，完整索引见 `bcdp_help`）
+## 工具清单（38 个，前缀 `bcdp_`，完整索引见 `bcdp_help`）
 
 | 类别 | 工具 |
 |---|---|
-| 任务空间 | `ego_space_open` `ego_space_close` `ego_status` |
-| 页面读取 | `ego_snapshot`（语义树） `ego_page_info` `ego_read_element` |
-| 导航/等待 | `ego_navigate`（复用 tab） `ego_wait` `ego_wait_for_selector` `ego_wait_for_url` `ego_wait_for_response` |
-| 交互 | `ego_click` `ego_fill` `ego_hover` `ego_drag` `ego_select` `ego_check` `ego_key` `ego_scroll` |
-| 执行/调试 | `ego_js`（页面求值） `ego_cdp`（原始 CDP） `ego_cli`（任意 heredoc） `ego_script`（多步脚本） |
-| 输出 | `ego_screenshot` `ego_download` `ego_upload` |
-| 会话/安全 | `ego_auth_flush`（登录落盘） `ego_captcha` `ego_dialog` |
-| 元工具 | `ego_help` `ego_doctor` `ego_http` |
+| 任务空间 | `bcdp_space_open` `bcdp_space_close` `bcdp_status` |
+| 页面读取 | `bcdp_snapshot`（语义树） `bcdp_page_info` `bcdp_read_element` |
+| 导航/等待 | `bcdp_navigate`（复用 tab） `bcdp_wait` `bcdp_wait_for_selector` `bcdp_wait_for_url` `bcdp_wait_for_response` |
+| 交互 | `bcdp_click` `bcdp_fill` `bcdp_hover` `bcdp_drag` `bcdp_select` `bcdp_check` `bcdp_key` `bcdp_scroll` |
+| 执行/调试 | `bcdp_js`（页面求值） `bcdp_cdp`（原始 CDP） `bcdp_cli`（任意 heredoc） `bcdp_script`（多步脚本） |
+| 输出 | `bcdp_screenshot` `bcdp_download` `bcdp_upload` |
+| 会话/安全 | `bcdp_auth_flush`（登录落盘） `bcdp_login_import`（跨浏览器登录态导入） `bcdp_captcha` `bcdp_dialog` |
+| 元工具 | `bcdp_help` `bcdp_doctor` `bcdp_http` |
+| 评审（JEV/Laya，外接判定服务可选） | `bcdp_jev_status` `bcdp_jev_frame` `bcdp_jev_ask` `bcdp_jev_run` `bcdp_jev_attempt` |
 
 ## 观察窗怎么用
 
 右下角 **🌐 常驻小球** → 点开：
 
 - **主画面**：agent 当前页面实况；点击/拖动/滚轮直接操作页面，Ctrl+滚轮缩放视图、Ctrl+拖动平移，双击复位。点击画面后可直接键盘输入，支持中文 IME、粘贴、Tab/Enter/方向键及 Ctrl/Cmd 快捷键。
+- **选择元素**（点选引用）：点一下工具条进入点选模式，再点实时画面里的任意元素——插件捕获其 `backendNodeId`/`tag`/`id` 与语义描述，以 `[CDP-PICKS]` 结构化块并入对话输入框草稿；同一页面的多次点选自动合并进同一块并依次编号，agent 按编号精确取用。浮动观察球与侧边栏 Tab 均可用。
 - **标签页条**：顶部横排，点选切换，`×` 关闭。
 - **历史抽屉**（🕘）：按时间回看访问轨迹。
 - 操作时下方网址行就地显示提示，2 秒后恢复。
@@ -245,7 +249,7 @@ pnpm test        # vitest 单元测试
 pnpm run build   # tsdown 三 bundle：lib/index.js + lib/client.js + bin/cdp-cast-worker.mjs
 ```
 
-> 直接改 `src/`（`src/index.ts` 工具层、`src/client/index.ts` 前端、`src/worker/cdp-cast-worker.ts` worker）。新工具在 `registerActionTools` 里按 `t({...})` 加，并在 `ego_help` 索引（`src/help.ts`）补一条，跑 `pnpm typecheck && pnpm test && pnpm run build`。`lib/` 与 `bin/cdp-cast-worker.mjs` 是构建产物（预构建入库），不要手改。
+> 直接改 `src/`（`src/index.ts` 工具层、`src/client/index.ts` 前端、`src/worker/cdp-cast-worker.ts` worker）。新工具在 `registerActionTools` 里按 `t({...})` 加，并在 `bcdp_help` 索引（`src/help.ts`）补一条，跑 `pnpm typecheck && pnpm test && pnpm run build`。`lib/` 与 `bin/cdp-cast-worker.mjs` 是构建产物（预构建入库），不要手改。
 
 `node_modules/` 仅含指向 DSH checkout 的符号链接（编译期类型解析）；运行时由 harness 解析 `@deepseek-ai/dsh-tools`。
 

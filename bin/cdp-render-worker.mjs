@@ -517,6 +517,67 @@ async function viewportInfo() {
   }
 }
 
+/** The quality ladder never descends past this; the overrun is reported, not hidden. */
+const JPEG_QUALITY_FLOOR = 24
+/** Ladder step between capture attempts. */
+const JPEG_QUALITY_STEP = 12
+
+/**
+ * One Page.captureScreenshot round trip: full content size (beyond the
+ * viewport), geometrically downscaled when `scale.maxWidth` is narrower than
+ * the page. Returns raw bytes for the budget loop to measure.
+ */
+async function screenshotOnce(format, quality, scale) {
+  const params = { format, captureBeyondViewport: true }
+  if (format === 'jpeg' && quality !== null) params.quality = quality
+  try {
+    const metrics = await call('Page.getLayoutMetrics', {})
+    const content = metrics?.cssContentSize || metrics?.contentSize
+    const width = Number(content?.width) || 0
+    const height = Number(content?.height) || 0
+    if (width > 0 && height > 0) {
+      const maxWidth = Number(scale?.maxWidth) || 0
+      const downscale = maxWidth > 0 && width > maxWidth ? maxWidth / width : 1
+      params.clip = { x: 0, y: 0, width, height, scale: downscale }
+    }
+  } catch { /* no metrics → viewport-only capture; better than failing the shot */ }
+  const shot = await call('Page.captureScreenshot', params, undefined, 30000)
+  return Buffer.from(String(shot?.data || ''), 'base64')
+}
+
+/**
+ * Screenshot under a byte budget (阶段 10 frame contract): a JPEG quality
+ * ladder that steps down from the requested quality until the shot fits or
+ * the floor is reached — `overBudget: true` reports the miss instead of
+ * hiding it. PNG and unbounded JPEG are single-attempt (`quality: null`,
+ * `overBudget: false`) because they have no knob to turn.
+ */
+async function captureWithinBudget(options) {
+  const format = options.format === 'png' ? 'png' : 'jpeg'
+  const maxBytes = Number(options.maxBytes) || 0
+  if (format === 'png' || maxBytes <= 0) {
+    const data = await screenshotOnce(format, null, options.scale)
+    return { data: data.toString('base64'), bytes: data.length, quality: null, overBudget: false, attempts: 1 }
+  }
+  let quality = Number(options.quality) || 72
+  let attempts = 0
+  let best = null
+  for (;;) {
+    attempts++
+    const data = await screenshotOnce(format, quality, options.scale)
+    best = { data: data.toString('base64'), bytes: data.length, quality, attempts }
+    if (data.length <= maxBytes || quality <= JPEG_QUALITY_FLOOR) break
+    quality = Math.max(JPEG_QUALITY_FLOOR, quality - JPEG_QUALITY_STEP)
+  }
+  return {
+    data: best.data,
+    bytes: best.bytes,
+    quality: best.quality,
+    overBudget: best.bytes > maxBytes,
+    attempts: best.attempts,
+  }
+}
+
 async function handle(method, params) {
   switch (method) {
     case 'hello':

@@ -5,7 +5,7 @@ const source = await readFile(new URL("../src/client/index.ts", import.meta.url)
 
 describe("watch panel input and capture status", () => {
   it("provides local keyboard proxies for floating and sidebar views", () => {
-    expect(source).toMatch(/function createKeyboardProxy\(send\)/);
+    expect(source).toMatch(/function createKeyboardProxy\(send: any\)/);
     expect(source).toMatch(/compositionend/);
     expect(source).toMatch(/send\([^,]+, 'insertText'/);
     expect((source.match(/keyboardProxy\.focusAt\(e,/g) || []).length).toBe(2);

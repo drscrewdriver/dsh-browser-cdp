@@ -47,10 +47,10 @@ declare function require(id: string): any
 		// memoization via useRef.
 		var useSyncExternalStore = React.useSyncExternalStore
 		var useRef = React.useRef
-		function bindSnapshotSelector(source) {
-			var subscribe = function (fn) { return source.subscribe(fn) }
+		function bindSnapshotSelector(source: any) {
+			var subscribe = function (fn: any) { return source.subscribe(fn) }
 			var getSnapshot = function () { return source.getSnapshot() }
-			return function useSelector(sel, eq) {
+			return function useSelector(sel: any, eq: any) {
 				var snapshot = useSyncExternalStore(subscribe, getSnapshot)
 				var prevSnapshotRef = useRef()
 				var prevSelectedRef = useRef()
@@ -185,10 +185,10 @@ declare function require(id: string): any
 			famIdle: '空闲自动停止（分钟，0 = 不停）',
 			famIdleDesc: '超过 N 分钟没有 bcdp_* 调用即停止后台浏览器，下次调用按需重启',
 		}
-		var watchDict = { en: watchEn, zh: watchZh }
-		function wt(key, params = undefined) {
-			var dict = watchDict[_egoLocale] || watchEn
-			var text = dict[key] || watchEn[key] || key
+		var watchDict: Record<string, any> = { en: watchEn, zh: watchZh }
+		function wt(key: any, params: any = undefined) {
+			var dict: any = watchDict[_egoLocale] || watchEn
+			var text = dict[key] || (watchEn as any)[key] || key
 			if (params) { for (var k in params) { text = text.replace(new RegExp('{' + k + '}', 'g'), String(params[k])) } }
 			return text
 		}
@@ -201,11 +201,11 @@ declare function require(id: string): any
 		const WATCH_STATUS_ROUTE = '/api/bcdp/watch/status'
 		const VIDEO_ROUTE = '/api/bcdp/video'
 
-		function postJson(path, body) {
+		function postJson(path: any, body: any) {
 			return fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body || {}) }).then(function (res) { return res.json().catch(function () { return {} }) })
 		}
 
-		function createKeyboardProxy(send) {
+		function createKeyboardProxy(send: any) {
 			var input = document.createElement('textarea')
 			input.className = 'dsh-ego-keyboard-proxy'
 			input.tabIndex = -1
@@ -216,14 +216,14 @@ declare function require(id: string): any
 			document.body.appendChild(input)
 			var composing = false
 			var armed = false
-			var activeTargetId = null
+			var activeTargetId: any = null
 			var pressed = new Map()
 			var lastCompositionText = '', lastCompositionAt = 0, lastPasteText = '', lastPasteAt = 0
 			var blurCount = 0, lastBlurAt = 0
-			var modifiers = function (e) { return (e.altKey ? 1 : 0) | (e.ctrlKey ? 2 : 0) | (e.metaKey ? 4 : 0) | (e.shiftKey ? 8 : 0) }
-			var keyId = function (e) { return e.code || e.key }
-			var keyPayload = function (e) { return { key: e.key, code: e.code || '', modifiers: modifiers(e), autoRepeat: !!e.repeat, windowsVirtualKeyCode: Number(e.keyCode || e.which || 0) } }
-			var isDshInput = function (target) {
+			var modifiers = function (e: any) { return (e.altKey ? 1 : 0) | (e.ctrlKey ? 2 : 0) | (e.metaKey ? 4 : 0) | (e.shiftKey ? 8 : 0) }
+			var keyId = function (e: any) { return e.code || e.key }
+			var keyPayload = function (e: any) { return { key: e.key, code: e.code || '', modifiers: modifiers(e), autoRepeat: !!e.repeat, windowsVirtualKeyCode: Number(e.keyCode || e.which || 0) } }
+			var isDshInput = function (target: any) {
 				if (!target || target === input) return false
 				var tag = target.tagName
 				if (tag === 'INPUT' || tag === 'TEXTAREA') return true
@@ -278,7 +278,7 @@ declare function require(id: string): any
 				lastBlurAt = now
 				window.setTimeout(function () { if (armed && activeTargetId) { try { input.focus({ preventScroll: true }) } catch (err) { input.focus() } } }, 0)
 			})
-			var onDocKeyDown = function (e) {
+			var onDocKeyDown = function (e: any) {
 				if (!armed || !activeTargetId) return
 				if (e.target === input) return
 				if (composing || e.key === 'Process' || e.key === 'Dead') return
@@ -295,7 +295,7 @@ declare function require(id: string): any
 				e.preventDefault(); e.stopPropagation()
 				var payload = keyPayload(e); pressed.set(keyId(e), { targetId: activeTargetId, payload: payload }); send(activeTargetId, 'keyDown', payload)
 			}
-			var onDocKeyUp = function (e) {
+			var onDocKeyUp = function (e: any) {
 				if (!armed || !activeTargetId) return
 				if (e.target === input) return
 				var id = keyId(e)
@@ -303,7 +303,7 @@ declare function require(id: string): any
 				if (!record) return
 				e.preventDefault(); e.stopPropagation(); pressed.delete(id); send(record.targetId, 'keyUp', keyPayload(e))
 			}
-			var onDocPointerDown = function (e) {
+			var onDocPointerDown = function (e: any) {
 				if (armed && isDshInput(e.target) && e.target !== input) {
 					armed = false; releaseAllKeys()
 				}
@@ -312,7 +312,7 @@ declare function require(id: string): any
 			document.addEventListener('keyup', onDocKeyUp, true)
 			document.addEventListener('pointerdown', onDocPointerDown, true)
 			return {
-				focusAt: function (e, targetId) {
+				focusAt: function (e: any, targetId: any) {
 					if (activeTargetId && targetId !== activeTargetId) releaseAllKeys()
 					activeTargetId = targetId
 					armed = true
@@ -330,12 +330,12 @@ declare function require(id: string): any
 			}
 		}
 
-		function createMsePlayer(video, generation, mime, onFailure) {
+		function createMsePlayer(video: any, generation: any, mime: any, onFailure: any) {
 			if (!window.MediaSource || !window.MediaSource.isTypeSupported(mime)) { onFailure('当前浏览器不支持此 H.264 流'); return function () {} }
 			var mediaSource = new MediaSource()
 			var objectUrl = URL.createObjectURL(mediaSource)
 			var abort = new AbortController()
-			var sourceBuffer = null, queue = [], queuedBytes = 0, disposed = false, reader = null, reading = false
+			var sourceBuffer: any = null, queue: any[] = [], queuedBytes = 0, disposed = false, reader: any = null, reading = false
 			var MAX_QUEUED_VIDEO_BYTES = 4 * 1024 * 1024
 			video.src = objectUrl; video.muted = true; video.autoplay = true; video.playsInline = true
 			function appendNext() {
@@ -346,12 +346,12 @@ declare function require(id: string): any
 			function pump() {
 				if (disposed || reading || !reader || queuedBytes >= MAX_QUEUED_VIDEO_BYTES) return
 				reading = true
-				reader.read().then(function (part) {
+				reader.read().then(function (part: any) {
 					reading = false
 					if (disposed) return
 					if (part.done) { onFailure('视频流已断开'); return }
 					queue.push(part.value); queuedBytes += part.value.byteLength; appendNext(); pump()
-				}).catch(function (error) { reading = false; if (!disposed && error.name !== 'AbortError') onFailure(error.message) })
+				}).catch(function (error: any) { reading = false; if (!disposed && error.name !== 'AbortError') onFailure(error.message) })
 			}
 			mediaSource.addEventListener('sourceopen', function () {
 				if (disposed) return
@@ -608,7 +608,7 @@ declare function require(id: string): any
 		// 本卡全量渲染 Config 的用户可调 volatile 字段（分组 + links 连接目标），
 		// configForms 直用原生句柄（快照身份稳定）。thinking-levels 缺席时
 		// inject 静默等待，不阻塞客户端半。
-		function mountFamilySettingsCard(ctx) {
+		function mountFamilySettingsCard(ctx: any) {
 			var forms = typeof ctx.get === 'function' ? ctx.get('configForms') : undefined
 			if (!forms || typeof forms.get !== 'function') return
 			var scope = forms.get('dsh-browser-cdp')
@@ -675,16 +675,16 @@ declare function require(id: string): any
 		]
 
 		// 文案助手：组标题/字段标题与描述（en 兜底，与 wt 同一 locale 源）。
-		function famText(item, kind) {
+		function famText(item: any, kind: any) {
 			var pair = _egoLocale === 'zh' ? item.zh : item.en
 			if (kind === 'title') return pair[0]
 			return pair[1] || ''
 		}
 
-		function FamilySettingsCard(props) {
+		function FamilySettingsCard(props: any) {
 			var scope = props.scope
 			var snapshot = React.useSyncExternalStore(
-				function (listener) { return scope.subscribe(listener) },
+				function (listener: any) { return scope.subscribe(listener) },
 				function () { return scope.getSnapshot() }
 			)
 			var value = snapshot.value || {}
@@ -698,17 +698,17 @@ declare function require(id: string): any
 			)
 		}
 
-		function FamGroup(props) {
+		function FamGroup(props: any) {
 			var group = props.group
 			var h = React.createElement
 			return h('div', { style: { borderTop: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.25))', paddingTop: '6px' } },
 				h('div', { style: { fontSize: '12px', fontWeight: 600, color: 'var(--dsw-alias-label-secondary, rgba(127,127,127,.9))', padding: '2px 0 4px' } },
 					_egoLocale === 'zh' ? group.zh : group.en),
-				group.fields.map(function (f) { return h(FamField, { key: f.k, f: f, group: group, ...props }) })
+				group.fields.map(function (f: any) { return h(FamField, { key: f.k, f: f, group: group, ...props }) })
 			)
 		}
 
-		function FamField(props) {
+		function FamField(props: any) {
 			var f = props.f
 			var value = props.value
 			var writable = props.writable
@@ -724,7 +724,7 @@ declare function require(id: string): any
 			if (f.kind === 'bool') {
 				return h('div', { style: rowStyle }, label,
 					h('input', { type: 'checkbox', checked: value[f.k] === true, disabled: !writable,
-						onChange: function (e) { void scope.set(f.k, e.target.checked) } }))
+						onChange: function (e: any) { void scope.set(f.k, e.target.checked) } }))
 			}
 			if (f.kind === 'num') {
 				return h('div', { style: rowStyle }, label,
@@ -734,15 +734,15 @@ declare function require(id: string): any
 				return h('div', { style: rowStyle }, label,
 					h('select', { value: String(value[f.k] ?? f.options[0]), disabled: !writable,
 						style: { font: 'inherit', color: 'inherit', background: 'var(--dsw-alias-bg-module-platform, rgba(127,127,127,.08))', border: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.35))', borderRadius: '8px', padding: '4px 8px' },
-						onChange: function (e) { void scope.set(f.k, e.target.value) } },
-						f.options.map(function (o) { return h('option', { key: o, value: o }, o) })))
+						onChange: function (e: any) { void scope.set(f.k, e.target.value) } },
+						f.options.map(function (o: any) { return h('option', { key: o, value: o }, o) })))
 			}
 			// str / secret：文本行（宽度占满，失焦提交）
 			return h('div', { style: { display: 'grid', gap: '2px', padding: '6px 0' } }, label,
 				h(FamStrInput, { f: f, v: value[f.k], writable: writable, scope: scope }))
 		}
 
-		function FamNumInput(props) {
+		function FamNumInput(props: any) {
 			var f = props.f
 			var h = React.createElement
 			var draft = React.useState(props.v === undefined || props.v === null ? '' : String(props.v))
@@ -750,7 +750,7 @@ declare function require(id: string): any
 			React.useEffect(function () { setV(props.v === undefined || props.v === null ? '' : String(props.v)) }, [props.v])
 			return h('input', { type: 'number', min: f.min, max: f.max, step: f.step, value: v, disabled: !props.writable,
 				style: { width: '96px', font: 'inherit', color: 'inherit', background: 'var(--dsw-alias-bg-module-platform, rgba(127,127,127,.08))', border: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.35))', borderRadius: '8px', padding: '4px 8px' },
-				onChange: function (e) { setV(e.target.value) },
+				onChange: function (e: any) { setV(e.target.value) },
 				onBlur: function () {
 					if (v === '') return
 					var n = Number(v)
@@ -762,7 +762,7 @@ declare function require(id: string): any
 				} })
 		}
 
-		function FamStrInput(props) {
+		function FamStrInput(props: any) {
 			var f = props.f
 			var h = React.createElement
 			var draft = React.useState(props.v === undefined || props.v === null ? '' : String(props.v))
@@ -770,21 +770,21 @@ declare function require(id: string): any
 			React.useEffect(function () { setV(props.v === undefined || props.v === null ? '' : String(props.v)) }, [props.v])
 			return h('input', { type: f.kind === 'secret' ? 'password' : 'text', value: v, disabled: !props.writable,
 				style: { width: '100%', font: 'inherit', color: 'inherit', background: 'var(--dsw-alias-bg-module-platform, rgba(127,127,127,.08))', border: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.35))', borderRadius: '8px', padding: '5px 10px', boxSizing: 'border-box' },
-				onChange: function (e) { setV(e.target.value) },
+				onChange: function (e: any) { setV(e.target.value) },
 				onBlur: function () { void props.scope.set(f.k, v) },
-				onKeyDown: function (e) { if (e.key === 'Enter') { void props.scope.set(f.k, v) } } })
+				onKeyDown: function (e: any) { if (e.key === 'Enter') { void props.scope.set(f.k, v) } } })
 		}
 
 		// 连接目标（links）：按行渲染启用开关 + 激活按钮（写 activeTargetId）。
-		function FamLinks(props) {
+		function FamLinks(props: any) {
 			var value = props.value
 			var writable = props.writable
 			var scope = props.scope
 			var h = React.createElement
 			var links = Array.isArray(value.links) ? value.links : []
 			var activeId = typeof value.activeTargetId === 'string' ? value.activeTargetId : ''
-			function setEnabled(idx, on) {
-				var next = links.map(function (row, i) { return i === idx ? { ...row, enabled: on } : row })
+			function setEnabled(idx: any, on: any) {
+				var next = links.map(function (row: any, i: any) { return i === idx ? { ...row, enabled: on } : row })
 				void scope.set('links', next)
 			}
 			return h('div', { style: { borderTop: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.25))', paddingTop: '6px' } },
@@ -793,14 +793,14 @@ declare function require(id: string): any
 				links.length === 0
 					? h('div', { style: { fontSize: '12px', color: 'var(--dsw-alias-label-tertiary, rgba(127,127,127,.8))', padding: '4px 0' } },
 						_egoLocale === 'zh' ? '暂无目标 —— 连接序列在 profile 的 cordis.patch.yml links 中维护' : 'No targets — maintain the sequence in the profile cordis.patch.yml links')
-					: links.map(function (row, idx) {
+					: links.map(function (row: any, idx: any) {
 						var label = row.label || row.id || ('#' + idx)
 						var detail = row.kind === 'ego-cli' ? (row.cliPath || '') : (row.endpoint || '')
 						var isActive = row.id !== undefined && row.id === activeId
 						return h('div', { key: row.id || idx, style: { display: 'flex', alignItems: 'center', gap: '8px', padding: '5px 0', flexWrap: 'wrap' } },
 							h('input', { type: 'checkbox', checked: row.enabled === true, disabled: !writable,
 								title: _egoLocale === 'zh' ? '启用' : 'Enabled',
-								onChange: function (e) { setEnabled(idx, e.target.checked) } }),
+								onChange: function (e: any) { setEnabled(idx, e.target.checked) } }),
 							h('span', { style: { fontSize: '13px', color: 'var(--dsw-alias-label-primary, inherit)' } }, label),
 							h('span', { style: { fontSize: '11px', color: 'var(--dsw-alias-label-tertiary, rgba(127,127,127,.7))', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: '1 1 120px' } }, detail),
 							isActive
@@ -812,7 +812,7 @@ declare function require(id: string): any
 					}))
 		}
 
-		function apply(ctx) {
+		function apply(ctx: any) {
 		// ── Watch panel: sidebar tab & floating watch ─────────────────────
 		// betterSidebar is an OPTIONAL service and is intentionally absent from
 		// the static inject list (see its declaration above): on hosts without
@@ -822,19 +822,19 @@ declare function require(id: string): any
 		// floating watch panel immediately and upgrade to the sidebar tab if
 		// the service appears later (dynamic ctx.inject, same pattern as PR #45).
 		mountFamilySettingsCard(ctx)
-		var betterSidebarService
+		var betterSidebarService: any
 		try { betterSidebarService = typeof ctx.get === 'function' ? ctx.get('betterSidebar') : undefined } catch (e) { betterSidebarService = undefined }
 		if (betterSidebarService !== undefined) {
 			ctx.effect(() => mountSidebarTab(ctx, betterSidebarService), 'dsh-browser-cdp sidebar tab')
 		} else {
-			var disposeFloating = null
+			var disposeFloating: any = null
 			ctx.effect(() => {
 				disposeFloating = mountFloatingWatch(ctx)
 				return function () { if (disposeFloating) { var d = disposeFloating; disposeFloating = null; d() } }
 			}, 'dsh-browser-cdp watch panel')
 			if (typeof ctx.inject === 'function') {
-				ctx.inject(['betterSidebar'], function (sidebarCtx) {
-					var svc
+				ctx.inject(['betterSidebar'], function (sidebarCtx: any) {
+					var svc: any
 					try { svc = typeof sidebarCtx.get === 'function' ? sidebarCtx.get('betterSidebar') : sidebarCtx.betterSidebar } catch (e) { svc = undefined }
 					if (!svc) return
 					if (disposeFloating) { var d2 = disposeFloating; disposeFloating = null; d2() }
@@ -848,7 +848,7 @@ declare function require(id: string): any
 	// This is the original self-contained overlay: a draggable FAB + pop-out
 	// panel. Kept verbatim for the no-sidebar path; the sidebar Tab path uses
 	// the React EgoBrowserTab component + LivePreviewController instead.
-	function mountFloatingWatch(ctx) {
+	function mountFloatingWatch(ctx: any) {
 		// Guard: skip if already mounted (apply() may fire multiple times).
 		if (document.getElementById('dsh-ego-fab') !== null) return () => {}
 				const style = document.createElement('style')
@@ -915,8 +915,8 @@ declare function require(id: string): any
 				// Guide strips that the user can dismiss (×). Once closed in this
 				// panel lifecycle they stay closed, so they never permanently eat
 				// vertical space above the main view.
-				const dismissedGuides = { login: false, captcha: false }
-				const bindGuideDismiss = (which, el) => {
+				const dismissedGuides: Record<string, boolean> = { login: false, captcha: false }
+				const bindGuideDismiss = (which: any, el: any) => {
 					const btn = el && el.querySelector('[data-dismiss="' + which + '"]')
 					if (!btn) return
 					btn.addEventListener('click', () => {
@@ -929,7 +929,7 @@ declare function require(id: string): any
 
 				// Title keeps a leading globe icon; update only the trailing label
 				// text so the icon is never wiped by a textContent reassignment.
-				const setTitle = (text) => {
+				const setTitle = (text: any) => {
 					const label = titleEl.querySelector('span:last-child')
 					if (label) label.textContent = text
 				}
@@ -941,10 +941,10 @@ declare function require(id: string): any
 				// control can restore the list synchronously and reliably instead
 				// of depending on a fresh network round-trip (which may hang when
 				// the worker/host is transiently unreachable).
-				let lastList = []
+				let lastList: any[] = []
 
 				// Toggle the history drawer (side panel).
-				const setHistory = (open) => {
+				const setHistory = (open: any) => {
 					historyOpen = open
 					historyEl.classList.toggle('open', open)
 					panel.classList.toggle('open-drawer', open)
@@ -954,7 +954,7 @@ declare function require(id: string): any
 				}
 
 				// ---- History drawer: list every page, oldest -> newest ----
-				const renderHistory = (spaces) => {
+				const renderHistory = (spaces: any) => {
 					historyList.innerHTML = ''
 					const list = Array.isArray(spaces) ? [...spaces].sort((a, b) => (a.lastActive ?? 0) - (b.lastActive ?? 0)) : []
 					if (list.length === 0) {
@@ -984,19 +984,19 @@ declare function require(id: string): any
 				// now locked to that page. null = live view (auto-follows the
 				// agent's current active page). Polling must NOT overwrite a
 				// pinned view, or it would snap back to live every poll tick.
-				let pinned = null
+				let pinned: any = null
 				// Which page is "current" (the live one shown in the main view).
-				let currentActiveId = null
+				let currentActiveId: any = null
 				// The page the AGENT is actually on — the browser's MRU-active tab,
 				// reported by the worker as `active: true` in the spaces payload.
 				// Distinct from currentActiveId (what the user is viewing): gating
 				// auto-follow on agentActiveId stops a background repainting tab
 				// (video/animation) from hijacking the view.
-				let agentActiveId = null
+				let agentActiveId: any = null
 				// selectedTabId = the tab the user last clicked on the tab bar. When
 				// set to a live tab, the main view shows that tab (and sticks with
 				// it across polls) instead of auto-following the agent's newest page.
-				let selectedTabId = null
+				let selectedTabId: any = null
 				// Zoom/pan state for the main live image, persisted across renders
 				// so a re-render (poll refresh) keeps the user's zoom & position.
 				let zoomState = { scale: 1, tx: 0, ty: 0 }
@@ -1006,25 +1006,25 @@ declare function require(id: string): any
 				// so a frame event for the shown tab swaps its src in place without
 				// tearing down the zoom/pan state.
 				const frameCache = new Map()
-				let liveImg = null
-				let liveImgTargetId = null
+				let liveImg: any = null
+				let liveImgTargetId: any = null
 				// T5.17 — the floating window's pick control. Lives at closure
 				// scope so it survives renderLiveMain re-renders; its status is
 				// echoed on the URL line, the same surface hints use.
-				var pickCtl = createPickControl(function (pick, message) {
+				var pickCtl = createPickControl(function (pick: any, message: any) {
 					if (pickUrlLine) pickUrlLine.textContent = message || ''
 					if (pickBtnEl) {
 						pickBtnEl.textContent = pick === 'failed' ? wt('pickFailed') : pick === 'on' ? wt('picking') : wt('pickMode')
 						pickBtnEl.classList.toggle('dsh-ego-pick-on', pick === 'on')
 					}
-				}, function (el, a) { return deliverPickToConversation(ctx, el, a) })
-				var pickBtnEl = null
-				var pickUrlLine = null
+				}, function (el: any, a: any) { return deliverPickToConversation(ctx, el, a) })
+				var pickBtnEl: any = null
+				var pickUrlLine: any = null
 				// rAF-coalesced live-frame flush: newest frame is applied at display
 				// cadence instead of decoding every source frame (bounds CPU under
 				// an uncapped screencast).
-				let pendingLiveFrame = null
-				let liveFlushRaf = null
+				let pendingLiveFrame: any = null
+				let liveFlushRaf: any = null
 				// pageMeta: targetId -> { url, title }, kept authoritative for the
 				// auto-follow path. Polled /api/bcdp/spaces data lags the SSE frame
 				// stream, so a brand-new page (frame-first, list-later) would never
@@ -1032,11 +1032,11 @@ declare function require(id: string): any
 				// from both sources here and follow from this map instead.
 				const pageMeta = new Map()
 				const watchClientId = 'floating-' + Math.random().toString(36).slice(2)
-				let watchStarted = false, watchTargetId = null, watchRenewTimer = null, watchStopTimer = null, watchRequest = null
-				let captureBackend = 'cdp', streamGeneration = 0, streamState = 'idle', streamMessage = '', streamMime = 'video/mp4; codecs="avc1.42E01E"', videoCleanup = null
+				let watchStarted = false, watchTargetId: any = null, watchRenewTimer: any = null, watchStopTimer: any = null, watchRequest: any = null
+				let captureBackend = 'cdp', streamGeneration = 0, streamState = 'idle', streamMessage = '', streamMime = 'video/mp4; codecs="avc1.42E01E"', videoCleanup: any = null
 				const effectiveVisible = () => !panel.hidden
 				const stopVideo = () => { if (videoCleanup) try { videoCleanup() } catch {}; videoCleanup = null }
-				const applyCaptureStatus = (status) => {
+				const applyCaptureStatus = (status: any) => {
 					if (!status || typeof status !== 'object') return
 					if (Number.isFinite(status.generation) && status.generation < streamGeneration) return
 					if (status.generation === streamGeneration && streamState === 'streaming' && status.state === 'starting') return
@@ -1048,21 +1048,21 @@ declare function require(id: string): any
 					captureBackend = nextBackend; streamGeneration = nextGeneration; streamState = nextState; streamMessage = status.message || status.code || ''; streamMime = nextMime
 					if (changed) { stopVideo(); const current = lastList.find((s) => s.targetId === (selectedTabId || currentActiveId)); if (current) renderLiveMain(current, selectedTabId !== null) }
 				}
-				const requestWatch = (route, body) => {
+				const requestWatch = (route: any, body: any) => {
 					if (watchRequest) return null
 					watchRequest = postJson(route, body).finally(() => { watchRequest = null })
 					return watchRequest
 				}
-				const syncWatch = (targetId) => {
+				const syncWatch = (targetId: any) => {
 					if (disposed || !effectiveVisible() || !targetId) return
 					if (watchStopTimer) { window.clearTimeout(watchStopTimer); watchStopTimer = null }
 					if (watchStarted && watchTargetId === targetId) return
 					const request = requestWatch(watchStarted ? WATCH_SWITCH_ROUTE : WATCH_START_ROUTE, { clientId: watchClientId, targetId })
 					if (!request) { watchRequest.finally(() => syncWatch(targetId)); return }
-					request.then((status) => { watchStarted = status && status.ok !== false; watchTargetId = status?.targetId || targetId; if (watchTargetId !== targetId) { selectedTabId = null; currentActiveId = watchTargetId }; applyCaptureStatus(status); if (!effectiveVisible()) stopWatch(true) }).catch(() => {})
+					request.then((status: any) => { watchStarted = status && status.ok !== false; watchTargetId = status?.targetId || targetId; if (watchTargetId !== targetId) { selectedTabId = null; currentActiveId = watchTargetId }; applyCaptureStatus(status); if (!effectiveVisible()) stopWatch(true) }).catch(() => {})
 					if (!watchRenewTimer) watchRenewTimer = window.setInterval(() => { if (effectiveVisible() && watchTargetId) { const renewal = requestWatch(WATCH_START_ROUTE, { clientId: watchClientId, targetId: watchTargetId }); if (renewal) renewal.then(applyCaptureStatus).catch(() => {}) } }, 5000)
 				}
-				const stopWatch = (immediate) => {
+				const stopWatch = (immediate: any) => {
 					if (watchRenewTimer) { window.clearInterval(watchRenewTimer); watchRenewTimer = null }
 					const stop = () => { watchStopTimer = null; watchStarted = false; watchTargetId = null; postJson(WATCH_STOP_ROUTE, { clientId: watchClientId }).catch(() => {}) }
 					if (immediate) stop(); else { if (watchStopTimer) window.clearTimeout(watchStopTimer); watchStopTimer = window.setTimeout(stop, 1500) }
@@ -1077,7 +1077,7 @@ declare function require(id: string): any
 				 * Input.dispatchMouseEvent on the page the panel is showing.
 				 * `type`: mouseMoved | mousePressed | mouseReleased | mouseWheel.
 				 */
-				const sendInput = (targetId, type, params) => {
+				const sendInput = (targetId: any, type: any, params: any) => {
 					const targetValid = !!targetId
 					if (!targetValid || ((type !== 'mouseReleased' && type !== 'keyUp') && !effectiveVisible())) return
 					if (inputBusy && type === 'mouseMoved') return
@@ -1088,7 +1088,7 @@ declare function require(id: string): any
 						body: JSON.stringify({ targetId, type, ...params }),
 					}).then((res) => { if (res.status === 409) { liveImgTargetId = null; refresh() } }).catch(() => {})
 				}
-				const keyboardProxy = createKeyboardProxy((targetId, type, params) => sendInput(targetId, type, params))
+				const keyboardProxy = createKeyboardProxy((targetId: any, type: any, params: any) => sendInput(targetId, type, params))
 				/**
 				 * Map an event's client coords to the agent page's CSS pixels.
 				 *
@@ -1098,7 +1098,7 @@ declare function require(id: string): any
 				 * (frame) size vs its rendered box, then scale into the page's CSS
 				 * viewport (vw/vh), which the worker attaches to each frame.
 				 */
-				const browserXY = (e) => {
+				const browserXY = (e: any) => {
 					if (liveImgTargetId == null) return null
 					const m = pageMeta.get(liveImgTargetId)
 					const vw = m?.vw, vh = m?.vh
@@ -1132,7 +1132,7 @@ declare function require(id: string): any
 				//   Ctrl+drag    → pan the view (local only)
 				//   click        → click the agent page
 				//   dblclick     → reset the view zoom
-				const makeZoomImage = (urlEl, tagName = 'img') => {
+				const makeZoomImage = (urlEl: any, tagName = 'img') => {
 					const img = document.createElement(tagName) as any
 					img.className = 'dsh-ego-liveimg'
 					if (tagName === 'img') img.draggable = false
@@ -1141,9 +1141,9 @@ declare function require(id: string): any
 					// Hint swap: remember the real URL, show a tip while operating,
 					// restore it after a short quiet period.
 					const realText = urlEl ? urlEl.textContent : ''
-					let hintTimer = null
+					let hintTimer: any = null
 					const clearHint = () => { if (hintTimer) { window.clearTimeout(hintTimer); hintTimer = null } }
-					const showHint = (txt) => {
+					const showHint = (txt: any) => {
 						if (!urlEl) return
 						urlEl.textContent = txt
 						urlEl.classList.add('dsh-ego-hint')
@@ -1161,8 +1161,8 @@ declare function require(id: string): any
 					let viewPanning = false   // Ctrl+drag → local pan
 					let browserDrag = false   // plain drag → send to agent
 					let sx = 0, sy = 0, stx = 0, sty = 0
-					let lastDragPos = null     // last browser coords sent during drag
-					let dragTargetId = null
+					let lastDragPos: any = null     // last browser coords sent during drag
+					let dragTargetId: any = null
 					let downButtons = 0
 
 					const resetView = () => {
@@ -1173,7 +1173,7 @@ declare function require(id: string): any
 					img.title = wt('hintReset')
 
 					// Wheel: plain = scroll the agent page; Ctrl+wheel = view zoom.
-					img.addEventListener('wheel', (e) => {
+					img.addEventListener('wheel', (e: any) => {
 						e.preventDefault()
 						e.stopPropagation()
 						if (e.ctrlKey || e.metaKey) {
@@ -1195,7 +1195,7 @@ declare function require(id: string): any
 						}
 					}, { passive: false })
 
-					img.addEventListener('pointerdown', (e) => {
+					img.addEventListener('pointerdown', (e: any) => {
 						if (e.button !== 0) return // left button only
 						// T5.1b: while picking, a click on the live image IS the pick.
 						if (pickCtl.isEnabled()) {
@@ -1225,7 +1225,7 @@ declare function require(id: string): any
 							sendInput(dragTargetId, 'mousePressed', { x: p.x, y: p.y, button: 'left', buttons: 1, clickCount: 1 })
 						}
 					})
-					img.addEventListener('pointermove', (e) => {
+					img.addEventListener('pointermove', (e: any) => {
 						if (viewPanning) {
 							zoomState.tx = stx + (e.clientX - sx)
 							zoomState.ty = sty + (e.clientY - sy)
@@ -1246,7 +1246,7 @@ declare function require(id: string): any
 							lastDragPos = p
 						}
 					})
-					const stopDrag = (e) => {
+					const stopDrag = (e: any) => {
 						if (viewPanning) { viewPanning = false; img.style.cursor = e.ctrlKey ? 'grab' : 'grab' }
 						if (browserDrag) {
 							browserDrag = false
@@ -1259,8 +1259,8 @@ declare function require(id: string): any
 					}
 					img.addEventListener('pointerup', stopDrag)
 					img.addEventListener('pointercancel', stopDrag)
-					img.addEventListener('pointerleave', (e) => { if (browserDrag || viewPanning) stopDrag(e) })
-					img.addEventListener('dblclick', (e) => { e.preventDefault(); resetView() })
+					img.addEventListener('pointerleave', (e: any) => { if (browserDrag || viewPanning) stopDrag(e) })
+					img.addEventListener('dblclick', (e: any) => { e.preventDefault(); resetView() })
 					img.style.cursor = 'grab'
 					apply()
 					return img
@@ -1268,7 +1268,7 @@ declare function require(id: string): any
 
 
 				// ---- tab bar ----
-				const renderTabs = (spaces) => {
+				const renderTabs = (spaces: any) => {
 					tabsEl.innerHTML = ''
 					const list = Array.isArray(spaces) ? spaces : []
 					if (list.length === 0) { if (selectedTabId) selectedTabId = null; return }
@@ -1317,7 +1317,7 @@ declare function require(id: string): any
 				// whether this is the sticky (user-selected) view or the live one.
 				// Reuses the SAME large landscape layout as the live view so aspect
 				// ratio / sizing never changes between live and history preview.
-				const renderSingleView = (s) => {
+				const renderSingleView = (s: any) => {
 					body.innerHTML = ''
 					const view = document.createElement('div')
 					view.className = 'dsh-ego-liveview'
@@ -1349,7 +1349,7 @@ declare function require(id: string): any
 					const cached = frameCache.get(s.targetId)
 					if (captureBackend === 'ffmpeg' || cached) {
 						const img = makeZoomImage(u, captureBackend === 'ffmpeg' ? 'video' : 'img')
-						if (captureBackend === 'ffmpeg' && streamState === 'streaming') { stopVideo(); videoCleanup = createMsePlayer(img, streamGeneration, streamMime, (message) => { streamMessage = message }) }
+						if (captureBackend === 'ffmpeg' && streamState === 'streaming') { stopVideo(); videoCleanup = createMsePlayer(img, streamGeneration, streamMime, (message: any) => { streamMessage = message }) }
 						else img.src = cached
 						img.alt = 'live'
 						attachLiveImg(s.targetId, img)
@@ -1367,13 +1367,13 @@ declare function require(id: string): any
 
 				// Secondary view: open a specific history page in the main view,
 				// pinned until the user returns to live.
-				const openPreview = (s) => {
+				const openPreview = (s: any) => {
 					if (disposed) return
 					pinned = s
 					renderSingleView(s)
 				}
 
-				const renderSpaces = (spaces) => {
+				const renderSpaces = (spaces: any) => {
 					if (disposed) return
 					lastList = Array.isArray(spaces) ? spaces : []
 					// Keep pageMeta authoritative for the auto-follow AND for the
@@ -1446,14 +1446,14 @@ declare function require(id: string): any
 
 				// Point the realtime pipeline at this <img> so incoming SSE frames
 				// for `targetId` swap its src in place (no view teardown).
-				const attachLiveImg = (targetId, img) => {
+				const attachLiveImg = (targetId: any, img: any) => {
 					liveImg = img
 					liveImgTargetId = targetId
 					const cached = frameCache.get(targetId)
 					if (cached) img.src = cached
 				}
 
-				const renderLiveMain = (current, isPinned) => {
+				const renderLiveMain = (current: any, isPinned: any) => {
 					body.innerHTML = ''
 					const view = document.createElement('div')
 					view.className = 'dsh-ego-liveview'
@@ -1500,14 +1500,14 @@ declare function require(id: string): any
 					raiseBtn.textContent = wt('raiseWindow')
 					raiseBtn.addEventListener('click', () => {
 						fetch('/api/bcdp/raise', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
-							.then((r) => r.json().catch(() => null))
-							.catch(() => null)
+							.then((r) => r.json().catch((): any => null))
+							.catch((): any => null)
 					})
 					badge.appendChild(raiseBtn)
 					const cached = frameCache.get(current.targetId)
 					if (captureBackend === 'ffmpeg' || cached) {
 						const img = makeZoomImage(u, captureBackend === 'ffmpeg' ? 'video' : 'img')
-						if (captureBackend === 'ffmpeg' && streamState === 'streaming') { stopVideo(); videoCleanup = createMsePlayer(img, streamGeneration, streamMime, (message) => { streamMessage = message }) }
+						if (captureBackend === 'ffmpeg' && streamState === 'streaming') { stopVideo(); videoCleanup = createMsePlayer(img, streamGeneration, streamMime, (message: any) => { streamMessage = message }) }
 						else img.src = cached
 						img.alt = 'live'
 						attachLiveImg(current.targetId, img)
@@ -1563,12 +1563,12 @@ declare function require(id: string): any
 				// The panel no longer polls /api/bcdp/spaces on a timer. A one-shot
 				// `refresh()` is only called on initial mount and on SSE reconnect
 				// (via the `onerror` debouncer below) to re-sync after a stream gap.
-				let sse = null
+				let sse: any = null
 				let lastFrameAt = 0
 				const FRAME_FOLLOW_MIN_MS = 350 // throttle live-follow view swaps
-				let followTimer = null
+				let followTimer: any = null
 
-				const applyFrame = (targetId, dataUrl, vw, vh) => {
+				const applyFrame = (targetId: any, dataUrl: any, vw: any, vh: any) => {
 					if (disposed) return
 					frameCache.set(targetId, dataUrl)
 					// Bounded cache: cap live frames to the most recent few pages so a
@@ -1629,7 +1629,7 @@ declare function require(id: string): any
 					}
 				}
 
-				let reconnectFallbackTimer = null
+				let reconnectFallbackTimer: any = null
 				const openStream = () => {
 					if (disposed) return
 					fetch(WATCH_STATUS_ROUTE, { cache: 'no-store' }).then((res) => res.ok ? res.json() : null).then(applyCaptureStatus).catch(() => {})
@@ -1638,7 +1638,7 @@ declare function require(id: string): any
 					sse = new EventSource('/api/bcdp/stream')
 					sse.onopen = () => { doConnected = true }
 					// A frame event looks like: { targetId, data (base64 jpeg), ts, vw, vh }.
-					sse.addEventListener('frame', (ev) => {
+					sse.addEventListener('frame', (ev: any) => {
 						try {
 							const m = JSON.parse(ev.data)
 							if (!m || !m.targetId || !m.data) return
@@ -1652,7 +1652,7 @@ declare function require(id: string): any
 				// The worker also sends the live list on open (and on tab
 				// churn); treat it as the authoritative tab-list + main-view
 				// update. This replaces the old /api/bcdp/spaces polling loop.
-					sse.addEventListener('spaces', (ev) => {
+					sse.addEventListener('spaces', (ev: any) => {
 					if (disposed) return
 					try {
 						const list = JSON.parse(ev.data)
@@ -1663,7 +1663,7 @@ declare function require(id: string): any
 						}
 					} catch {}
 				})
-				sse.addEventListener('capture-status', (ev) => {
+				sse.addEventListener('capture-status', (ev: any) => {
 					try {
 						applyCaptureStatus(JSON.parse(ev.data))
 					} catch {}
@@ -1697,7 +1697,7 @@ declare function require(id: string): any
 				const DRAG_PANEL_KEY = 'dsh.ego.watch.panelPos'
 				const FAB_W = 48, FAB_H = 48
 				const PANEL_W = 408, PANEL_GAP = 8
-				const loadPos = (key) => {
+				const loadPos = (key: any) => {
 					try { const s = JSON.parse(localStorage.getItem(key) || 'null'); if (s && Number.isFinite(s.x) && Number.isFinite(s.y)) return s } catch {}
 					return null
 				}
@@ -1733,10 +1733,10 @@ declare function require(id: string): any
 				 * Movement under ~5px is treated as a click, so the FAB still toggles.
 				 * Interactive children (buttons/icons) never start a drag.
 				 */
-				const makeDraggable = (el, which) => {
+				const makeDraggable = (el: any, which: any) => {
 					const state = () => (which === 'fab' ? pos : panelPos)
 					let sx = 0, sy = 0, bx = 0, by = 0, active = false, dragged = false
-					const down = (e) => {
+					const down = (e: any) => {
 						if (e.button !== 0) return
 						if (e.target && e.target.closest) {
 							const hit = e.target.closest('button, a, input, [role="button"]')
@@ -1749,7 +1749,7 @@ declare function require(id: string): any
 						el.classList.add('dsh-ego-dragging')
 						e.preventDefault()
 					}
-					const move = (e) => {
+					const move = (e: any) => {
 						if (!active) return
 						const dx = e.clientX - sx, dy = e.clientY - sy
 						if (!dragged && Math.abs(dx) + Math.abs(dy) > 5) dragged = true
@@ -1758,7 +1758,7 @@ declare function require(id: string): any
 							which === 'fab' ? placeFab() : placePanel()
 						}
 					}
-					const up = (e) => {
+					const up = (e: any) => {
 						if (!active) return
 						active = false
 						el.classList.remove('dsh-ego-dragging')
@@ -1777,7 +1777,7 @@ declare function require(id: string): any
 				makeDraggable(fab, 'fab')
 				makeDraggable(panel.querySelector('#dsh-ego-head'), 'panel')
 
-				const setOpen = (open) => {
+				const setOpen = (open: any) => {
 					if (open) {
 						// Reveal then transition in, so the pop-out animation plays
 						// (hidden -> display:flex would otherwise jump with no tween).
@@ -2089,7 +2089,7 @@ clearTimeout((panel as any)._dshHideT)
 		 *   {"cdpEndpoint":..., "targetId":..., "pageUrl":..., "elements":[{n,backendNodeId,tag,id,name,focusable,describe}]}
 		 *   [/CDP-PICKS]
 		 */
-		function deliverPickToConversation(ctx, element, action) {
+		function deliverPickToConversation(ctx: any, element: any, action: any) {
 			try {
 				var describe = element && typeof element.describe === 'string' ? element.describe : ''
 				if (describe === '') return { ok: false, code: 'empty-describe' }
@@ -2153,24 +2153,24 @@ clearTimeout((panel as any)._dshHideT)
 		// and unmount disable the mode and strip the injected UI (T5.21).
 		// `deliver(element, action)` is the M1.6 seam — the conversation write
 		// path — invoked exactly once per delivered pick.
-		function createPickControl(onState, deliver) {
+		function createPickControl(onState: any, deliver: any) {
 			var enabled = false
-			var timer = null
+			var timer: any = null
 			var seenPicks = 0
 			var deliveredPicks = -1
-			var request = null
-			function emit(pick, message) { onState(pick, message) }
+			var request: any = null
+			function emit(pick: any, message: any) { onState(pick, message) }
 			function stopPolling() {
 				if (timer) { window.clearInterval(timer); timer = null }
 			}
-			function post(enabledNow, targetId) {
+			function post(enabledNow: any, targetId: any) {
 				var body: { enabled: unknown; targetId?: string } = { enabled: enabledNow }
 				if (targetId) body.targetId = targetId
 				return fetch('/api/bcdp/pick', {
 					method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
-				}).then(function (r) { return r.json().catch(function () { return null }) }).catch(function () { return null })
+				}).then(function (r) { return r.json().catch(function (): any { return null }) }).catch(function (): any { return null })
 			}
-			function applyState(state) {
+			function applyState(state: any) {
 				if (!state || typeof state !== 'object') return
 				// M1.6: deliver exactly once per pick — the worker re-arms fast,
 				// so the reliable trigger is `picks` advancing with an action set.
@@ -2204,14 +2204,14 @@ clearTimeout((panel as any)._dshHideT)
 			}
 			function pollOnce() {
 				if (request) return
-				request = fetch('/api/bcdp/pick').then(function (r) { return r.json().catch(function () { return null }) }).catch(function () { return null })
-				request.then(function (res) {
+				request = fetch('/api/bcdp/pick').then(function (r) { return r.json().catch(function (): any { return null }) }).catch(function (): any { return null })
+				request.then(function (res: any) {
 					request = null
 					if (res && res.ok !== false && res.state) applyState(res.state)
 					else { enabled = false; stopPolling(); emit('off', '') }
 				})
 			}
-			function toggle(targetId) {
+			function toggle(targetId: any) {
 				if (enabled) { disable(); return }
 				if (!targetId) { emit('failed', wt('noActivePages')); return }
 				post(true, targetId).then(function (res) {
@@ -2235,12 +2235,12 @@ clearTimeout((panel as any)._dshHideT)
 			}
 			// T5.1b — coordinate fallback: a click on the live screenshot picks
 			// via a server-side hit test instead of an Overlay inspect event.
-			function clickAt(x, y, targetId) {
+			function clickAt(x: any, y: any, targetId: any) {
 				if (!enabled || !targetId) return
 				fetch('/api/bcdp/pick/click', {
 					method: 'POST', headers: { 'content-type': 'application/json' },
 					body: JSON.stringify({ targetId: targetId, x: x, y: y }),
-				}).then(function (r) { return r.json().catch(function () { return null }) }).catch(function () { return null })
+				}).then(function (r) { return r.json().catch(function (): any { return null }) }).catch(function (): any { return null })
 					.then(function (res) {
 						if (res && res.ok !== false && res.state) applyState(res.state)
 						else emit('failed', (res && (res.error || res.code)) || wt('pickFailed'))
@@ -2259,7 +2259,7 @@ clearTimeout((panel as any)._dshHideT)
 			}
 		}
 
-		function LivePreviewController(ctx) {
+		function LivePreviewController(ctx: any) {
 			this.ctx = ctx
 			this.store = createSnapshotStore(this._initialState())
 			this.frameCache = new Map()
@@ -2305,14 +2305,14 @@ clearTimeout((panel as any)._dshHideT)
 			this._zoomHintTimer = null
 			this._pointerState = null
 			var self = this
-			this.keyboardProxy = createKeyboardProxy(function (targetId, type, params) { self.sendInput(targetId, type, params) })
+			this.keyboardProxy = createKeyboardProxy(function (targetId: any, type: any, params: any) { self.sendInput(targetId, type, params) })
 			this.dismissedGuides = { login: false, captcha: false }
 			this._pick = 'off'
 			this._pickMessage = ''
 			this._pickTargetId = null
-			this.pickControl = createPickControl(function (pick, message) { self._setPickState(pick, message) }, function (el, a) { return deliverPickToConversation(ctx, el, a) })
+			this.pickControl = createPickControl(function (pick: any, message: any) { self._setPickState(pick, message) }, function (el: any, a: any) { return deliverPickToConversation(ctx, el, a) })
 		}
-		LivePreviewController.prototype._initialState = function () {
+		LivePreviewController.prototype._initialState = function (): any {
 			return {
 				spaces: [],
 				pinned: null,
@@ -2330,32 +2330,32 @@ clearTimeout((panel as any)._dshHideT)
 				pick: 'off', pickMessage: '',
 			}
 		}
-		LivePreviewController.prototype.subscribe = function (cb) {
+		LivePreviewController.prototype.subscribe = function (cb: any) {
 			return this.store.subscribe(cb)
 		}
 		LivePreviewController.prototype.getSnapshot = function () {
 			return this.store.getSnapshot()
 		}
-		LivePreviewController.prototype._setPickState = function (pick, message) {
+		LivePreviewController.prototype._setPickState = function (pick: any, message: any) {
 			this._pick = pick
 			this._pickMessage = message || ''
 			var self = this
-			this.store.update(function (s) {
+			this.store.update(function (s: any) {
 				s.pick = self._pick
 				s.pickMessage = self._pickMessage
 			})
 		}
 		LivePreviewController.prototype._recompute = function () {
-			var hasPage = this.lastList.some(function (s) { return s.url && !s.url.startsWith('about:') })
-			var captchaHit = this.lastList.find(function (s) { return s.humanCheck && s.humanCheck.detected })
+			var hasPage = this.lastList.some(function (s: any) { return s.url && !s.url.startsWith('about:') })
+			var captchaHit = this.lastList.find(function (s: any) { return s.humanCheck && s.humanCheck.detected })
 			var self = this
-			var currentSpace = null
-			var currentTargetId = null
+			var currentSpace: any = null
+			var currentTargetId: any = null
 			if (this.pinned) {
 				currentSpace = this.pinned
 				currentTargetId = this.pinned.targetId
 			} else if (this.selectedTabId !== null) {
-				currentSpace = this.lastList.find(function (s) { return s.targetId === self.selectedTabId }) || null
+				currentSpace = this.lastList.find(function (s: any) { return s.targetId === self.selectedTabId }) || null
 				currentTargetId = this.selectedTabId
 				// spaces payloads no longer carry thumbnails; pull the latest
 				// cached JPEG from the SSE frame pipeline so the view shows
@@ -2365,9 +2365,9 @@ clearTimeout((panel as any)._dshHideT)
 					if (cached) currentSpace = Object.assign({}, currentSpace, { thumbnail: cached })
 				}
 			} else {
-				var activeMarked = this.lastList.find(function (s) { return s.active === true })
+				var activeMarked = this.lastList.find(function (s: any) { return s.active === true })
 				if (!activeMarked && this.lastList.length > 0) {
-					activeMarked = this.lastList.slice().sort(function (a, b) { return (b.lastActive || 0) - (a.lastActive || 0) })[0]
+					activeMarked = this.lastList.slice().sort(function (a: any, b: any) { return (b.lastActive || 0) - (a.lastActive || 0) })[0]
 				}
 				if (activeMarked) {
 					currentSpace = Object.assign({}, activeMarked)
@@ -2392,7 +2392,7 @@ clearTimeout((panel as any)._dshHideT)
 			if (this.pickControl.isEnabled() && currentTargetId !== this._pickTargetId) {
 				this.togglePick()
 			}
-			this.store.update(function (s) {
+			this.store.update(function (s: any) {
 				s.spaces = self.lastList
 				s.pinned = self.pinned
 				s.selectedTabId = self.selectedTabId
@@ -2453,7 +2453,7 @@ clearTimeout((panel as any)._dshHideT)
 				this._syncWatch(this.currentActiveId)
 			}
 		}
-		LivePreviewController.prototype.setVisible = function (v) {
+		LivePreviewController.prototype.setVisible = function (v: any) {
 			var changed = this.visible !== v
 			this.visible = v
 			var effective = v
@@ -2470,13 +2470,13 @@ clearTimeout((panel as any)._dshHideT)
 				this._destroyVideo()
 			}
 		}
-		LivePreviewController.prototype._requestWatch = function (route, body) {
+		LivePreviewController.prototype._requestWatch = function (route: any, body: any) {
 			if (this.watchRequest) return null
 			var self = this
 			this.watchRequest = postJson(route, body).finally(function () { self.watchRequest = null })
 			return this.watchRequest
 		}
-		LivePreviewController.prototype._applyCaptureStatus = function (status) {
+		LivePreviewController.prototype._applyCaptureStatus = function (status: any) {
 			if (!status || typeof status !== 'object') return
 			if (Number.isFinite(status.generation) && status.generation < this.streamGeneration) return
 			if (status.generation === this.streamGeneration && this.streamState === 'streaming' && status.state === 'starting') return
@@ -2488,7 +2488,7 @@ clearTimeout((panel as any)._dshHideT)
 			if (generationChanged || this.backend !== 'ffmpeg') this._destroyVideo()
 			this._recompute()
 		}
-		LivePreviewController.prototype._syncWatch = function (targetId) {
+		LivePreviewController.prototype._syncWatch = function (targetId: any) {
 			if (this.disposed || !this.visible || !targetId) return
 			var self = this
 			if (this.watchStopTimer) { window.clearTimeout(this.watchStopTimer); this.watchStopTimer = null }
@@ -2497,7 +2497,7 @@ clearTimeout((panel as any)._dshHideT)
 			var body = { clientId: this.clientId, targetId: targetId }
 			var request = this._requestWatch(route, body)
 			if (!request) { this.watchRequest.finally(function () { self._syncWatch(targetId) }); return }
-			request.then(function (status) {
+			request.then(function (status: any) {
 				self.watchStarted = status && status.ok !== false
 				self.watchTargetId = status && status.targetId || targetId
 				if (self.watchTargetId !== targetId) { self.selectedTabId = null; self.currentActiveId = self.watchTargetId }
@@ -2505,10 +2505,10 @@ clearTimeout((panel as any)._dshHideT)
 				if (!self.visible) self._stopWatch(true)
 			}).catch(function () {})
 			if (!this.watchRenewTimer) this.watchRenewTimer = window.setInterval(function () {
-				if (self.visible && self.watchTargetId) { var renewal = self._requestWatch(WATCH_START_ROUTE, { clientId: self.clientId, targetId: self.watchTargetId }); if (renewal) renewal.then(function (status) { self._applyCaptureStatus(status) }).catch(function () {}) }
+				if (self.visible && self.watchTargetId) { var renewal = self._requestWatch(WATCH_START_ROUTE, { clientId: self.clientId, targetId: self.watchTargetId }); if (renewal) renewal.then(function (status: any) { self._applyCaptureStatus(status) }).catch(function () {}) }
 			}, 5000)
 		}
-		LivePreviewController.prototype._stopWatch = function (immediate) {
+		LivePreviewController.prototype._stopWatch = function (immediate: any) {
 			var self = this
 			if (this.watchRenewTimer) { window.clearInterval(this.watchRenewTimer); this.watchRenewTimer = null }
 			var stop = function () {
@@ -2523,16 +2523,16 @@ clearTimeout((panel as any)._dshHideT)
 			if (this.videoCleanup) try { this.videoCleanup() } catch (e) {}
 			this.videoCleanup = null; this.liveVideo = null
 		}
-		LivePreviewController.prototype.setLiveVideo = function (video, targetId) {
+		LivePreviewController.prototype.setLiveVideo = function (video: any, targetId: any) {
 			this._destroyVideo()
 			this.liveVideo = video; this.liveImg = video; this.liveImgTargetId = targetId
 			if (!video || this.backend !== 'ffmpeg' || this.streamState !== 'streaming') return
 			var self = this
-			this.videoCleanup = createMsePlayer(video, this.streamGeneration, this.streamMime, function (message) {
+			this.videoCleanup = createMsePlayer(video, this.streamGeneration, this.streamMime, function (message: any) {
 				self.streamState = 'failed'; self.streamMessage = message; self._recompute()
 			})
 		}
-		LivePreviewController.prototype.setLiveImg = function (img, targetId) {
+		LivePreviewController.prototype.setLiveImg = function (img: any, targetId: any) {
 			this.liveImg = img
 			this.liveImgTargetId = targetId
 			if (img && targetId != null) {
@@ -2564,7 +2564,7 @@ clearTimeout((panel as any)._dshHideT)
 		LivePreviewController.prototype._renderEmpty = function () {
 			if (this.lastList.length === 0) this._processSpaces([])
 		}
-		LivePreviewController.prototype._processSpaces = function (spaces) {
+		LivePreviewController.prototype._processSpaces = function (spaces: any) {
 			if (this.disposed) return
 			this.lastList = Array.isArray(spaces) ? spaces : []
 			var self = this
@@ -2582,18 +2582,18 @@ clearTimeout((panel as any)._dshHideT)
 				else if (prev.vh !== undefined) meta.vh = prev.vh
 				this.pageMeta.set(s.targetId, meta)
 			}
-			var liveIds = new Set(this.lastList.map(function (s) { return s.targetId }))
+			var liveIds = new Set(this.lastList.map(function (s: any) { return s.targetId }))
 			var pm = this.pageMeta
-			pm.forEach(function (_, id) { if (!liveIds.has(id)) pm.delete(id) })
+			pm.forEach(function (_: any, id: any) { if (!liveIds.has(id)) pm.delete(id) })
 			var fc = this.frameCache
-			fc.forEach(function (_, id) { if (!liveIds.has(id)) fc.delete(id) })
-			var activeMarked = this.lastList.find(function (s) { return s.active === true })
+			fc.forEach(function (_: any, id: any) { if (!liveIds.has(id)) fc.delete(id) })
+			var activeMarked = this.lastList.find(function (s: any) { return s.active === true })
 			if (activeMarked) this.agentActiveId = activeMarked.targetId
 			this.liveCount = this.lastList.length
 			// Busy signal: derived from whether any page was touched recently.
 			// Previously this lived in the now-removed polling scheduler; moved
 			// here so the SSE `spaces` event keeps the status dot live.
-			var busy = this.lastList.some(function (s) { return (Date.now() - (s.lastActive || 0)) <= ACTIVE_WINDOW_MS })
+			var busy = this.lastList.some(function (s: any) { return (Date.now() - (s.lastActive || 0)) <= ACTIVE_WINDOW_MS })
 			if (busy !== this.lastSawActive) this.lastSawActive = busy
 			this._recompute()
 		}
@@ -2605,7 +2605,7 @@ clearTimeout((panel as any)._dshHideT)
 			try {
 				this.sse = new EventSource('/api/bcdp/stream')
 			} catch (e) { return }
-			this.sse.addEventListener('frame', function (ev) {
+			this.sse.addEventListener('frame', function (ev: any) {
 				try {
 					var m = JSON.parse(ev.data)
 					if (!m || !m.targetId || !m.data) return
@@ -2616,7 +2616,7 @@ clearTimeout((panel as any)._dshHideT)
 					self.applyFrame(m.targetId, 'data:image/jpeg;base64,' + m.data, m.vw, m.vh)
 				} catch (e) {}
 			})
-			this.sse.addEventListener('spaces', function (ev) {
+			this.sse.addEventListener('spaces', function (ev: any) {
 				if (self.disposed) return
 				try {
 					var list = JSON.parse(ev.data)
@@ -2630,7 +2630,7 @@ clearTimeout((panel as any)._dshHideT)
 					}
 				} catch (e) {}
 			})
-			this.sse.addEventListener('capture-status', function (ev) {
+			this.sse.addEventListener('capture-status', function (ev: any) {
 				try {
 					self._applyCaptureStatus(JSON.parse(ev.data))
 				} catch (e) {}
@@ -2654,14 +2654,14 @@ clearTimeout((panel as any)._dshHideT)
 			try { if (this.sse) this.sse.close() } catch (e) {}
 			this.sse = null
 		}
-		LivePreviewController.prototype.applyFrame = function (targetId, dataUrl, vw, vh) {
+		LivePreviewController.prototype.applyFrame = function (targetId: any, dataUrl: any, vw: any, vh: any) {
 			if (this.disposed) return
 			this.frameCache.delete(targetId)
 			this.frameCache.set(targetId, dataUrl)
 			var MAX_CACHED_FRAMES = 12
 			if (this.frameCache.size > MAX_CACHED_FRAMES) {
 				var self = this
-				this.frameCache.forEach(function (_, id) {
+				this.frameCache.forEach(function (_: any, id: any) {
 					if (self.frameCache.size <= MAX_CACHED_FRAMES) return
 					if (id === targetId || id === self.liveImgTargetId) return
 					self.frameCache.delete(id)
@@ -2701,7 +2701,7 @@ clearTimeout((panel as any)._dshHideT)
 				}
 			}
 		}
-		LivePreviewController.prototype.sendInput = function (targetId, type, params) {
+		LivePreviewController.prototype.sendInput = function (targetId: any, type: any, params: any) {
 			var targetValid = !!targetId
 			if (!targetValid || this.disposed || ((type !== 'mouseReleased' && type !== 'keyUp') && !this.visible)) return
 			var self = this
@@ -2717,7 +2717,7 @@ clearTimeout((panel as any)._dshHideT)
 				}
 			}).catch(function () {})
 		}
-		LivePreviewController.prototype.browserXY = function (e) {
+		LivePreviewController.prototype.browserXY = function (e: any) {
 			if (this.liveImgTargetId == null || !this.liveImg) return null
 			var m = this.pageMeta.get(this.liveImgTargetId)
 			var vw = m && m.vw, vh = m && m.vh
@@ -2736,7 +2736,7 @@ clearTimeout((panel as any)._dshHideT)
 			var ry = e.clientY - rect.top - oy
 			return { x: (rx / contentW) * vw, y: (ry / contentH) * vh }
 		}
-		LivePreviewController.prototype.pinTo = function (space) {
+		LivePreviewController.prototype.pinTo = function (space: any) {
 			if (this.disposed) return
 			this.pinned = space
 			this.selectedTabId = null
@@ -2746,7 +2746,7 @@ clearTimeout((panel as any)._dshHideT)
 			this.pinned = null
 			this._recompute()
 		}
-		LivePreviewController.prototype.selectTab = function (targetId) {
+		LivePreviewController.prototype.selectTab = function (targetId: any) {
 			if (this.selectedTabId === targetId) {
 				this.selectedTabId = null
 				this.pinned = null
@@ -2757,7 +2757,7 @@ clearTimeout((panel as any)._dshHideT)
 			this._recompute()
 			this._syncWatch(this.selectedTabId || this.currentActiveId)
 		}
-		LivePreviewController.prototype.closeTab = function (targetId) {
+		LivePreviewController.prototype.closeTab = function (targetId: any) {
 			var self = this
 			void (async function () {
 				try {
@@ -2771,7 +2771,7 @@ clearTimeout((panel as any)._dshHideT)
 			this.historyOpen = !this.historyOpen
 			this._recompute()
 		}
-		LivePreviewController.prototype.dismissGuide = function (which) {
+		LivePreviewController.prototype.dismissGuide = function (which: any) {
 			this.dismissedGuides[which] = true
 			this._recompute()
 		}
@@ -2782,7 +2782,7 @@ clearTimeout((panel as any)._dshHideT)
 			})()
 		}
 		// Zoom/pan/input handlers (called from React JSX)
-		LivePreviewController.prototype._showHint = function (txt) {
+		LivePreviewController.prototype._showHint = function (txt: any) {
 			this._zoomHint = txt
 			this._recompute()
 			if (this._zoomHintTimer) window.clearTimeout(this._zoomHintTimer)
@@ -2829,7 +2829,7 @@ clearTimeout((panel as any)._dshHideT)
 			this._applyZoom()
 			this._showHint(wt('hintReset'))
 		}
-		LivePreviewController.prototype.handleWheel = function (e) {
+		LivePreviewController.prototype.handleWheel = function (e: any) {
 			e.preventDefault()
 			e.stopPropagation()
 			if (e.ctrlKey || e.metaKey) {
@@ -2856,7 +2856,7 @@ clearTimeout((panel as any)._dshHideT)
 				this._signalUnwired()
 			}
 		}
-		LivePreviewController.prototype.handlePointerDown = function (e) {
+		LivePreviewController.prototype.handlePointerDown = function (e: any) {
 			if (e.button !== 0) return
 			// T5.1b: while picking, a click on the live image IS the pick — the
 			// coordinates go to the hit-test fallback instead of the browser.
@@ -2889,7 +2889,7 @@ clearTimeout((panel as any)._dshHideT)
 				this._signalUnwired()
 			}
 		}
-		LivePreviewController.prototype.handlePointerMove = function (e) {
+		LivePreviewController.prototype.handlePointerMove = function (e: any) {
 			if (!this._pointerState) {
 				var p = this.browserXY(e)
 				if (p) this.sendInput(this.liveImgTargetId, 'mouseMoved', { x: p.x, y: p.y, buttons: 0 })
@@ -2909,7 +2909,7 @@ clearTimeout((panel as any)._dshHideT)
 				}
 			}
 		}
-		LivePreviewController.prototype.handlePointerUp = function (e) {
+		LivePreviewController.prototype.handlePointerUp = function (e: any) {
 			if (!this._pointerState) return
 			if (this._pointerState.viewPanning) {
 				if (e.currentTarget) e.currentTarget.style.cursor = 'grab'
@@ -2925,7 +2925,7 @@ clearTimeout((panel as any)._dshHideT)
 			if (e.currentTarget) e.currentTarget.style.cursor = 'grab'
 			this._pointerState = null
 		}
-		LivePreviewController.prototype.handleDoubleClick = function (e) {
+		LivePreviewController.prototype.handleDoubleClick = function (e: any) {
 			e.preventDefault()
 			this.resetZoom()
 		}
@@ -2936,11 +2936,11 @@ clearTimeout((panel as any)._dshHideT)
 		// pointer/wheel events on the live <img> to controller methods. The
 		// controller holds a direct ref to the <img> so SSE frames swap src at rAF
 		// cadence without triggering React re-renders per frame.
-		function EgoBrowserTab(props) {
+		function EgoBrowserTab(props: any) {
 			var visible = props.visible
 			var ctx = props.ctx
 			var controllerRef = React.useRef(null)
-			if (controllerRef.current === null) controllerRef.current = new LivePreviewController(ctx)
+			if (controllerRef.current === null) controllerRef.current = new (LivePreviewController as any)(ctx)
 			var controller = controllerRef.current
 
 			// Create the snapshot hook once per controller instance
@@ -2952,7 +2952,7 @@ clearTimeout((panel as any)._dshHideT)
 			// function arg (it uses useSyncExternalStoreWithSelector internally).
 			// Calling it with no args → "w is not a function" (w is the minified
 			// selector param). Pass identity selector to get the whole snapshot.
-			var state = useSnapshotRef.current(function (s) { return s })
+			var state = useSnapshotRef.current(function (s: any) { return s })
 
 			var imgRef = React.useRef(null)
 			var videoRef = React.useRef(null)
@@ -2964,7 +2964,7 @@ clearTimeout((panel as any)._dshHideT)
 			// moment, so the effect never wires it: liveImgTargetId stays null and
 			// every click/keypress is silently dropped. A ref callback fires on every
 			// attach, so the wiring cannot be missed regardless of mount order.
-			var bindLiveImg = function (el) {
+			var bindLiveImg = function (el: any) {
 				imgRef.current = el
 				if (el && state.currentTargetId != null &&
 					(controller.liveImg !== el || controller.liveImgTargetId !== state.currentTargetId)) {
@@ -2972,7 +2972,7 @@ clearTimeout((panel as any)._dshHideT)
 					controller.noteWired()
 				}
 			}
-			var bindLiveVideo = function (el) {
+			var bindLiveVideo = function (el: any) {
 				videoRef.current = el
 				if (el && state.currentTargetId != null &&
 					(controller.liveImg !== el || controller.liveImgTargetId !== state.currentTargetId)) {
@@ -3002,7 +3002,7 @@ clearTimeout((panel as any)._dshHideT)
 			React.useEffect(function () {
 				var img = imgRef.current || videoRef.current
 				if (!img) return
-				var handler = function (e) { controller.handleWheel(e) }
+				var handler = function (e: any) { controller.handleWheel(e) }
 				img.addEventListener('wheel', handler, { passive: false })
 				return function () { img.removeEventListener('wheel', handler) }
 			}, [controller, state.currentTargetId, state.backend, state.streamGeneration])
@@ -3031,7 +3031,7 @@ clearTimeout((panel as any)._dshHideT)
 
 			// History overlay: covers the body area
 			if (state.historyOpen) {
-				var sorted = state.spaces.slice().sort(function (a, b) { return (a.lastActive || 0) - (b.lastActive || 0) })
+				var sorted = state.spaces.slice().sort(function (a: any, b: any) { return (a.lastActive || 0) - (b.lastActive || 0) })
 				return h('div', { className: 'dsh-ego-side-root' },
 					header,
 					h('div', { className: 'dsh-ego-side-history' },
@@ -3042,7 +3042,7 @@ clearTimeout((panel as any)._dshHideT)
 						h('div', { className: 'dsh-ego-side-historylist' },
 							sorted.length === 0
 								? h('div', { className: 'dsh-ego-side-hnone' }, wt('noHistory'))
-								: sorted.map(function (s) {
+								: sorted.map(function (s: any) {
 									return h('div', {
 										key: s.targetId,
 										className: 'dsh-ego-side-hitem' + (s.targetId === state.currentTargetId ? ' active' : ''),
@@ -3075,7 +3075,7 @@ clearTimeout((panel as any)._dshHideT)
 			// Tab strip
 			var tabsEl = state.spaces.length > 0
 				? h('div', { className: 'dsh-ego-side-tabs' },
-					state.spaces.map(function (s) {
+					state.spaces.map(function (s: any) {
 						var isActive = s.targetId === state.selectedTabId || (state.selectedTabId === null && s.targetId === state.currentTargetId)
 						return h('div', {
 							key: s.targetId,
@@ -3088,7 +3088,7 @@ clearTimeout((panel as any)._dshHideT)
 							h('span', {
 								className: 'dsh-ego-side-tabclose',
 								title: wt('closeTab'),
-								onClick: function (e) { e.stopPropagation(); controller.closeTab(s.targetId) },
+								onClick: function (e: any) { e.stopPropagation(); controller.closeTab(s.targetId) },
 							}, '×')
 						)
 					})
@@ -3109,7 +3109,7 @@ clearTimeout((panel as any)._dshHideT)
 				var liveImg = state.backend === 'ffmpeg'
 					? h('video', {
 						ref: bindLiveVideo, key: 'livevideo-' + state.streamGeneration, className: 'dsh-ego-side-liveimg', muted: true, autoPlay: true, playsInline: true,
-						onPointerDown: function (e) { controller.handlePointerDown(e) }, onPointerMove: function (e) { controller.handlePointerMove(e) }, onPointerUp: function (e) { controller.handlePointerUp(e) }, onPointerCancel: function (e) { controller.handlePointerUp(e) }, onDoubleClick: function (e) { controller.handleDoubleClick(e) },
+						onPointerDown: function (e: any) { controller.handlePointerDown(e) }, onPointerMove: function (e: any) { controller.handlePointerMove(e) }, onPointerUp: function (e: any) { controller.handlePointerUp(e) }, onPointerCancel: function (e: any) { controller.handlePointerUp(e) }, onDoubleClick: function (e: any) { controller.handleDoubleClick(e) },
 					})
 					: currentSpace.thumbnail
 					? h('img', {
@@ -3119,11 +3119,11 @@ clearTimeout((panel as any)._dshHideT)
 						src: currentSpace.thumbnail,
 						alt: 'live',
 						draggable: false,
-						onPointerDown: function (e) { controller.handlePointerDown(e) },
-						onPointerMove: function (e) { controller.handlePointerMove(e) },
-						onPointerUp: function (e) { controller.handlePointerUp(e) },
-						onPointerCancel: function (e) { controller.handlePointerUp(e) },
-						onDoubleClick: function (e) { controller.handleDoubleClick(e) },
+						onPointerDown: function (e: any) { controller.handlePointerDown(e) },
+						onPointerMove: function (e: any) { controller.handlePointerMove(e) },
+						onPointerUp: function (e: any) { controller.handlePointerUp(e) },
+						onPointerCancel: function (e: any) { controller.handlePointerUp(e) },
+						onDoubleClick: function (e: any) { controller.handleDoubleClick(e) },
 					})
 					: h('div', { className: 'dsh-ego-side-liveurl' }, state.streamMessage || wt('noScreenshot'))
 
@@ -3161,8 +3161,8 @@ clearTimeout((panel as any)._dshHideT)
 								title: wt('raiseWindowHint'),
 								onClick: function () {
 									fetch('/api/bcdp/raise', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
-										.then(function (r) { return r.json().catch(function () { return null }) })
-										.catch(function () { return null })
+										.then(function (r) { return r.json().catch(function (): any { return null }) })
+										.catch(function (): any { return null })
 								},
 							}, wt('raiseWindow'))
 						),
@@ -3176,7 +3176,7 @@ clearTimeout((panel as any)._dshHideT)
 			return h('div', { className: 'dsh-ego-side-root' }, header, guides, tabsEl, body)
 		}
 
-		function EgoLoginGuide(props) {
+		function EgoLoginGuide(props: any) {
 			var controller = props.controller
 			var h = React.createElement
 			var noteState = React.useState('')
@@ -3194,7 +3194,7 @@ clearTimeout((panel as any)._dshHideT)
 					onClick: function () {
 						setSaving(true)
 						setNote('')
-						controller.flushLogin().then(function (j) {
+						controller.flushLogin().then(function (j: any) {
 							if (j && j.ok) setNote(wt('loginSaved', { n: j.total || '' }))
 							else setNote(j && j.error ? wt('loginNotConnected') : wt('loginFailed'))
 						}).catch(function () { setNote(wt('loginFailed')) }).finally(function () { setSaving(false) })
@@ -3208,7 +3208,7 @@ clearTimeout((panel as any)._dshHideT)
 			)
 		}
 
-		function EgoCaptchaGuide(props) {
+		function EgoCaptchaGuide(props: any) {
 			var controller = props.controller
 			var kind = props.kind
 			var h = React.createElement
@@ -3226,7 +3226,7 @@ clearTimeout((panel as any)._dshHideT)
 		}
 
 		// ── mountSidebarTab: register the CDP browser bridge watch tab ────────────────
-		function mountSidebarTab(ctx, betterSidebar) {
+		function mountSidebarTab(ctx: any, betterSidebar: any) {
 			if (!betterSidebar) return function () {}
 			// Inject Tab CSS once (cleaned up on dispose)
 			var styleEl = document.createElement('style')
@@ -3264,13 +3264,13 @@ clearTimeout((panel as any)._dshHideT)
 			// session, and the probe stream stays open (a later session must
 			// still be able to auto-open).
 			var probeDisposed = false
-			var baseline = null // null = not yet observed; set on first fetch
+			var baseline: any = null // null = not yet observed; set on first fetch
 			// Sessions whose sidebar already auto-opened this page load. Keyed PER
 			// SESSION: each conversation gets its own one-shot, and the open is scoped to
 			// the CALLING session, so a background conversation's tool call opens the Tab
 			// in ITS OWN sidebar instead of the one the user is looking at.
-			var autoOpened = {}
-			var openWatchTab = function (sessionId) {
+			var autoOpened: Record<string, boolean> = {}
+			var openWatchTab = function (sessionId: any) {
 				var key = sessionId || ''
 				if (autoOpened[key] === true) return
 				autoOpened[key] = true
@@ -3296,10 +3296,10 @@ clearTimeout((panel as any)._dshHideT)
 			// Listen for tool-call events on the shared SSE stream. The probe
 			// opens its OWN EventSource so it works even before the Tab is
 			// mounted (the Tab's controller only connects after the Tab opens).
-			var probeSse = null
+			var probeSse: any = null
 			try { probeSse = new EventSource('/api/bcdp/stream') } catch (e) {}
 			if (probeSse) {
-				probeSse.addEventListener('tool-call', function (ev) {
+				probeSse.addEventListener('tool-call', function (ev: any) {
 					if (probeDisposed) return
 					try {
 						var m = JSON.parse(ev.data)
@@ -3328,7 +3328,7 @@ clearTimeout((panel as any)._dshHideT)
 			}
 		}
 
-		function escapeHtml(s) {
+		function escapeHtml(s: any) {
 			return String(s).replace(/[&<>"']/g, (c) => ({
 				'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
 			}[c]))

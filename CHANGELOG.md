@@ -1,5 +1,10 @@
 ## [0.18.0] - 2026-09-29 — DSH 0.2.0-rc.1 线（compat/0.2.0：纯元数据适配，零代码改动）
 
+### 新增
+- **render worker `captureWithinBudget` 实现**（0.2.0 线修复真机阻断）：`bin/cdp-render-worker.mjs` 的 `capture` 此前调用一个从未定义的函数（真机链路 capture 必挂，且被门控探针掩盖）。现实现 JPEG 质量阶梯（72 起步、步长 12、下限 24，超预算如实上报 `overBudget`）+ `scale.maxWidth` 几何降采样 + PNG/无预算单发路径；`data` 以 base64 回传供 JEV 判定链消费。真机实测：Chrome/153 实连，预算一次达标（attempt 1, q=72）。
+- **client 半 `noImplicitAny` 开启**：`tsconfig.client.json` 升 `noImplicitAny: true`，401 处 implicit-any 全部显式化（`scripts/fix-implicit-any.mjs` 位置精确 codemod + 手工收尾）；类型注解零运行时影响，`client-input.test.ts` 源码正则同步。
+- **门控探针真机启用**：remote CDP 探针（4/4）与 render 探针（1/1）对本机真实 Chrome/153 实跑通过——discovery→attach→inspect→input→binding 回环 + 截图预算链路。cli-probe 与 login-import e2e 绑 vendored Linux 运行时，维持门控（本机 N/A）。
+
 ### 变更
 - **peerDependencies 换代（替换式）**：六项 `@deepseek-ai/dsh-client-locale` / `dsh-client-store` / `dsh-client-ui-settings-plugins` / `dsh-client-ui-slots` / `dsh-settings` / `dsh-tools` 由 `>=0.1.7-rc.1 <0.1.8-0` → `>=0.2.0-rc.1 <0.2.1-0`；0.1.7 线由 0.17.x 冻结续服，DSH 0.1.2-rc.1 ~ 0.1.7 请用 0.17.x。
 - **engines.dsh 两处同步**：顶层 `engines.dsh` 与嵌套 `dsh.engines.dsh` 均换代至 `>=0.2.0-rc.1 <0.2.1-0`（运行时门只读 peer，元数据保持一致）。

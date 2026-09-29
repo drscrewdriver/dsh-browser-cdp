@@ -1,7 +1,7 @@
 # dsh-browser-cdp — 看得见的 Agent 浏览器（CDP 接入）
 
 <p align="center">
-  <img src="https://img.shields.io/badge/DSH-%3E%3D0.1.7--rc.1-blue" alt="DSH >= 0.1.7-rc.1">
+  <img src="https://img.shields.io/badge/DSH-%3E%3D0.2.0--rc.1-blue" alt="DSH >= 0.2.0-rc.1">
   <img src="https://img.shields.io/badge/DSH--better--sidebar-%3E%3D0.12.2(optional)-red" alt="dsh-better-sidebar >= 0.12.2 (optional)">
   <img src="https://img.shields.io/badge/Node-%3E%3D22-brightgreen?logo=node.js&logoColor=white" alt="Node >= 22">
 </p>
@@ -12,11 +12,11 @@
 
 | 依赖 | 最低版本 | 推荐版本 | 说明 |
 |---|---|---|---|
-| **DSH** (DeepSeek Harness) | `0.1.7-rc.1` | `≥ 0.1.7-rc.1` | 0.1.7 起设置面为声明式（Config `.volatile()` 字段自动生成设置表单），`.volatile()` 在更早的宿主上不存在。peer 依赖同步锁定 `>=0.1.7-rc.1 <0.2.0-0`。DSH `0.1.2-rc.1` ~ `0.1.6` 请使用 0.16.x 版本线（含旧的 `settings.plugin.item` 设置卡），0.1.0-rc.x / 0.1.1-rc.x 请使用 v0.8.0 及更早版本 |
+| **DSH** (DeepSeek Harness) | `0.2.0-rc.1` | `≥ 0.2.0-rc.1 <0.2.1-0` | 0.2.0 线：peer 依赖同步锁定 `>=0.2.0-rc.1 <0.2.1-0`；宿主对插件 API 向后兼容（0.2.0 的 composer/`forkSession` 为签名扩展，插件仅作调用方，免改）。声明式设置面自 0.1.7 引入（Config `.volatile()` 字段自动生成设置表单），0.2.0 延续该形态。DSH `0.1.2-rc.1` ~ `0.1.7` 请使用 **0.17.x** 版本线，0.1.0-rc.x / 0.1.1-rc.x 请使用 v0.8.0 及更早版本 |
 | **dsh-better-sidebar** | `0.12.2`（可选） | `≥ 0.17.1` | 未安装时自动回退浮动观察球；`< 0.12.2` 可运行但外部链接拦截（`urlTarget`）静默降级 |
 | **Node.js** | `22` | — | harness 环境自带 |
 
-**DSH 全版本适配说明**：本版本（v0.17.0 起）面向 DSH `0.1.7-rc.1+` 的声明式设置面：插件不再注册任何设置节（`ctx.settings` 注册类 API 已被宿主删除），改为在 Config schema 上以 `.volatile()` 标记可配置字段，由宿主设置页自动生成表单；volatile 字段变更通过 `loader/volatile-update` 事件热生效，无需重载插件。核心宿主 API（`defineTool`、`ctx.tools.register`、`ctx.subprocess.spawn`、`ctx.webServer.register`、`ctx.inject`、`ModuleLoader` CJS factory、`cordis.patch.yml`）沿用 0.1.2 以来形态。DSH `0.1.2-rc.1` ~ `0.1.6` 请使用 0.16.x 版本线。
+**DSH 全版本适配说明**：本版本（**v0.18.0 起，0.2.0 线**）面向 DSH `0.2.0-rc.1+`：相对 0.1.7 线（v0.17.x）**零代码改动**，纯依赖/元数据换代——0.2.0 宿主对插件 API 向后兼容，本插件经 `ctx.get('conversation').input` 门面投递选区（不调 `submit()`、不 override），不在 0.2.0 变更影响面内。声明式设置面自 0.1.7 引入：插件不再注册任何设置节（`ctx.settings` 注册类 API 已被宿主删除），改为在 Config schema 上以 `.volatile()` 标记可配置字段，由宿主设置页自动生成表单；volatile 字段变更通过 `loader/volatile-update` 事件热生效，无需重载插件。核心宿主 API（`defineTool`、`ctx.tools.register`、`ctx.subprocess.spawn`、`ctx.webServer.register`、`ctx.inject`、`ModuleLoader` CJS factory、`cordis.patch.yml`）沿用 0.1.2 以来形态。DSH `0.1.2-rc.1` ~ `0.1.7` 请使用 **0.17.x** 版本线。
 
 **dsh-better-sidebar 适配说明**：本插件通过 `ctx.betterSidebar` 服务（try-catch 防御性获取）注册侧边栏 Tab 并监听外部链接。关键 API 引入版本：
 

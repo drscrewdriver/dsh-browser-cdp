@@ -1,3 +1,19 @@
+## [0.18.0] - 2026-09-29 — DSH 0.2.0-rc.1 线（compat/0.2.0：纯元数据适配，零代码改动）
+
+### 变更
+- **peerDependencies 换代（替换式）**：六项 `@deepseek-ai/dsh-client-locale` / `dsh-client-store` / `dsh-client-ui-settings-plugins` / `dsh-client-ui-slots` / `dsh-settings` / `dsh-tools` 由 `>=0.1.7-rc.1 <0.1.8-0` → `>=0.2.0-rc.1 <0.2.1-0`；0.1.7 线由 0.17.x 冻结续服，DSH 0.1.2-rc.1 ~ 0.1.7 请用 0.17.x。
+- **engines.dsh 两处同步**：顶层 `engines.dsh` 与嵌套 `dsh.engines.dsh` 均换代至 `>=0.2.0-rc.1 <0.2.1-0`（运行时门只读 peer，元数据保持一致）。
+- **devDependencies 换代**：`@deepseek-ai/dsh-tools` 与 `@deepseek-ai/dsh-sandbox` 由 0.1.7 线 → `>=0.2.0-rc.1 <0.2.1-0`，typecheck 据此解析 0.2.0 宿主类型——「全绿」证明的是 0.2.0 兼容而非 0.1.7 残留。
+- **零代码依据**：0.2.0 的 composer/`forkSession` 为向后兼容签名扩展，本插件经 `ctx.get('conversation').input` 门面投递选区（不调 `submit()`、不 override 契约），不在影响面内。
+- README 徽章/版本兼容矩阵/适配说明改写为 0.2.0 口径。
+
+### 验证
+- 双 tsconfig typecheck + build + vitest（656 passed / 11 skipped）针对 `dsh-tools@0.2.0-rc.1` 全绿；`npm ls` 无 invalid / peer 冲突。
+
+### 其他
+- `dsh-plugin.json` 版本 0.17.0 → 0.18.0（该字段此前落后于 package.json，本版一并拉齐）。
+- 依赖树由 npmmirror 全量重建，`package-lock.json` 重新生成提交。
+
 ## [Unreleased] — JEV 风格管道：DOM+截图+意图 → Laya/JEV 判定（阶段 10 / R5-R6，分支 stage9-ego-cli）
 
 ### 新增

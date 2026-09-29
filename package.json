@@ -94,6 +94,6 @@
     "url": "git+https://github.com/drscrewdriver/dsh-browser-cdp.git"
   },
   "publishConfig": {
-    "tag": "dsh-0.1.7"
+    "tag": "dsh-0.2.0"
   }
 }

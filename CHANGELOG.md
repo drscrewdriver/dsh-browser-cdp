@@ -44,6 +44,15 @@
 ### 修复
 - `makeWhich` 的路径分隔符与 PATH 分隔符改为跟随**被模拟的平台**（原用 `node:path` 的宿主值，darwin/linux 查找在 Windows 上会拼成 `dir\file` 而永远找不到）。
 
+## [0.17.11] - 2026-10-03 — 真机反馈⑥：`sessions` 未声明 inject（用户提供的诊断实锤）
+
+### 修复（根因）
+- 用户控制台回报 `window.__dshBrowserCdpDeco = { stage:'error', error:'cannot get property "sessions" without inject', anchor:false }`——strict resolver 下裸访问未声明的服务即抛（issue #29 同类）。装饰卡与投递都裸访问 `ctx.sessions` / `ctx.get('conversation')`。
+- **修复**：客户端静态 inject 声明补入 `'sessions'` 与 `'conversation'`（两者均为宿主 web UI 核心服务、必然已加载，不属于可选服务禁硬声明的雷区——better-sidebar 那类）。
+
+### 验证
+- `typecheck` 过；692 passed / 11 skipped。
+
 ## [0.17.10] - 2026-10-03 — 真机反馈⑤：包装卡渲染重写（body 固定定位 + 可诊断）
 
 ### 修复

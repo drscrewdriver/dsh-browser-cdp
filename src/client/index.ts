@@ -77,7 +77,11 @@ interface LocaleLike {
 		// any row that statically injects it pending forever — which blocks the
 		// whole web boot (issue #29, reproduced on DSH 0.1.2-rc.1 without the
 		// sidebar installed). Probe it defensively in apply() instead.
-		const inject = ['slots', 'locale', 'connection']
+		// sessions + conversation：点选投递（deliverPickToConversation）与 composer
+// 包装卡（mountComposerDecoration）裸访问 ctx.sessions / ctx.get('conversation')。
+// 两者都是宿主 web UI 的核心服务（必然已加载），声明后 strict resolver 才放行
+// ——否则抛 cannot get property "sessions" without inject（issue #29 同类）。
+const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 
 		// ── Watch panel locale ────────────────────────────────────────────
 		var _egoLocale = (function () {
@@ -2200,11 +2204,11 @@ clearTimeout((panel as any)._dshHideT)
 		// contenteditable/textarea fallbacks). Diagnostics (devtools console):
 		// window.__dshBrowserCdpDeco { stage, error, anchor, cards, draftLen }.
 		function mountComposerDecoration(ctx) {
-			var cards = []
+			var cards: any[] = []
 			var lastSig = ''
 			var diag = { stage: 'init', error: '', anchor: false, cards: 0, draftLen: -1 }
-			try { window.__dshBrowserCdpDeco = diag } catch (e) {}
-			var CARD_STYLE = { position: 'fixed', zIndex: '9998', display: 'grid', gap: '4px', padding: '8px 10px', font: 'inherit', fontSize: '12px', color: 'var(--dsw-alias-label-primary, inherit)', background: 'var(--dsw-alias-bg-surface, rgba(127,127,127,.14))', border: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.35))', borderRadius: '12px', boxShadow: '0 8px 24px rgba(0,0,0,.18)', boxSizing: 'border-box', pointerEvents: 'auto' }
+			try { (window as any).__dshBrowserCdpDeco = diag } catch (e) {}
+			var CARD_STYLE: Record<string, string> = { position: 'fixed', zIndex: '9998', display: 'grid', gap: '4px', padding: '8px 10px', font: 'inherit', fontSize: '12px', color: 'var(--dsw-alias-label-primary, inherit)', background: 'var(--dsw-alias-bg-surface, rgba(127,127,127,.14))', border: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.35))', borderRadius: '12px', boxShadow: '0 8px 24px rgba(0,0,0,.18)', boxSizing: 'border-box', pointerEvents: 'auto' }
 			var HEAD_STYLE = { display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }
 			var SUB_STYLE = { fontSize: '11px', color: 'var(--dsw-alias-label-tertiary, rgba(127,127,127,.75))', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }
 			var CHIP_STYLE = { display: 'flex', alignItems: 'baseline', gap: '6px', padding: '3px 8px', background: 'var(--dsw-alias-bg-module-platform, rgba(127,127,127,.1))', border: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.22))', borderRadius: '8px', minWidth: 0 }
@@ -2216,7 +2220,7 @@ clearTimeout((panel as any)._dshHideT)
 				cards = []
 				diag.cards = 0
 			}
-			function el2(tag, style, text) {
+			function el2(tag: any, style: any, text?: any) {
 				var el = document.createElement(tag)
 				if (style) for (var k in style) el.style[k] = style[k]
 				if (text !== undefined && text !== null && text !== '') el.textContent = String(text)
@@ -2237,7 +2241,7 @@ clearTimeout((panel as any)._dshHideT)
 				hide()
 				var card = document.createElement('div')
 				card.setAttribute('data-dsh-cdp-picks-card', '')
-				for (var k in CARD_STYLE) card.style[k] = CARD_STYLE[k]
+				var cs = card.style as any; for (var k in CARD_STYLE) cs[k] = CARD_STYLE[k]
 				card.style.left = Math.max(8, rect.left) + 'px'
 				card.style.width = Math.min(Math.max(rect.width, 240), 620) + 'px'
 				card.style.bottom = Math.max(8, window.innerHeight - rect.top + 8) + 'px'

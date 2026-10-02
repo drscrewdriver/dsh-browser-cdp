@@ -44,6 +44,16 @@
 ### 修复
 - `makeWhich` 的路径分隔符与 PATH 分隔符改为跟随**被模拟的平台**（原用 `node:path` 的宿主值，darwin/linux 查找在 Windows 上会拼成 `dir\file` 而永远找不到）。
 
+## [0.17.8] - 2026-10-03 — 真机反馈③：点选投递到输入框修复（list.current 同款破坏点）
+
+### 修复（根因）
+- **「引用到对话后输入框无变化」**：投递函数第一步就读 `ctx.sessions.list.getSnapshot().current`——宿主在 **0.1.6-alpha.2**（`6830e1460d`，session-controller 收回 Client Session 代际）把快照的 `current` 字段**整个删掉**（契约注释 "navigation belongs to view owners"）。0.1.7/0.2.0 上它恒为 `undefined` → 投递返回 `no-active-session` 静默退出 → 草稿从未写入。点选管线在旧宿主（0.1.2~0.1.6，即 0.16.x 线）验证过，声明级 diff 没覆盖这个行为面——与 `dsh-arrowkey-nav` 的破坏点**完全同源**（本会话早前的根因分析文档已记录该断点）。
+- **修复**：按宿主自己的现行推导取"当前会话"——扫 `byId` 找 `retainedBy.mainView > 0` 的行（与宿主侧边栏同款，`ui-workspace tree.ts:40`）；≤0.1.6 快照仍带 `current`，兼容读取放最前。全客户端扫描确认无其他同类用法；`sessions.scope(id)` 与 `conversation.input.setDraft` 在 0.2.0 宿主源码逐环验证健在。
+- **投递块头行加 🌐 标识**：`[🌐 CDP-PICKS page=… targetId=… endpoint=…]`——一眼可辨"这是浏览器点选进来的"；块体保持纯 JSON（合并解析依赖），宿主暂无第三方自定义 composer chip 的公开缝（文件 chip 是 `ui-attachment` 内部闭合系统），chip 化留作宿主侧 feature 请求。
+
+### 验证
+- `typecheck` 过；692 passed / 11 skipped（+1 契约：`retainedBy.mainView` 推导在位、被删的 `getSnapshot().current` 读取不得回流）。
+
 ## [0.17.7] - 2026-10-03 — 真机反馈②：点选失败根因修复（与上游插件的状态文件互踩）
 
 ### 修复（根因）

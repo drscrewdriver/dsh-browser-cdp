@@ -44,6 +44,25 @@
 ### 修复
 - `makeWhich` 的路径分隔符与 PATH 分隔符改为跟随**被模拟的平台**（原用 `node:path` 的宿主值，darwin/linux 查找在 Windows 上会拼成 `dir\file` 而永远找不到）。
 
+## [0.17.5] - 2026-10-03 — FamLinks v2：连接目标编辑器 + 双设置挂载
+
+### 新增
+- **连接目标直接在设置里增删改**：family 设置卡的 links 区升级为完整编辑器——每行启用开关、激活、标签/端点/CLI 路径就位编辑（草稿 + onBlur/Enter 提交，绝不每键写盘）、逐行**探测**（`POST /bcdp/api/cdp-probe`，结果写回该行 probe 字段）、上移/下移、删除；底部内联表单添加 CDP 端点 / 本机 ego CLI。
+- **插件详情页设置卡**：同一张 `FamilySettingsCard` 以 keyed 席位注册到 `plugins.bundle.config`（thinking-levels b660785 模式）——不装 thinking-levels 时（family tab 的属主缺席）这是唯一设置入口；未声明该席位的宿主上注入空转不阻塞。
+- **ego CLI 行**：`useSdkPath` 行内开关；`cdpMode=remote` 时行内预警 `mode-kind-mismatch`。
+- **9 语言**：新增 21 个 `links*` 文案键 ×9 字典（zh/en 复用旧定制卡定稿文案；ja/ko/fr/de/it/ru/es 机翻待人工校对）。
+
+### 行为
+- **删激活行 = 清空激活**，绝不顺延（先写 `links` 再清 `activeTargetId`，同一交互完成；顺延等于替用户把所有 `bcdp_*` 重指到另一台浏览器）。
+- **写前守卫与宿主读路径同构**（`src/client/fam-links.ts`，无 react 纯函数）：ego-cli 单例（第二条拒绝——整组写回会绕过宿主 `upsertLink` 的结构化拒绝，这里是唯一闸门）、`MAX_LINKS=32` 上限、endpoint 轻校验（空/非法端点行能过设置写入却会被宿主 `coerceLink` 静默丢弃）。
+- 编辑一律 `{...row, patch}` 全行展开——probe 状态是唯一不随读路径重建的字段，重建瘦行会丢徽标、写坏枚举会被设置层整段拒绝；`scope.set` 返回 false 时界面提示 `linksWriteFailed`。
+
+### 验证
+- `typecheck` 全过（含 9 语 `Record<CdpKey,string>` 键集编译门）；
+- 688 passed / 11 skipped（基线 666/11，新增 fam-links 纯函数 + 9 语 parity + 源码契约测试）；
+- `lib/client.js` 189,640 → 214,204 B（FamLinks v2 + fam-links 模块 + 双挂载）；
+- 待真机目验：family tab / 插件详情页两处卡片可见可写；增删改激活探测全链路；重启后 `cordis.patch.yml` 落盘存活。
+
 ## [0.16.0] - 2026-09-23 — 阶段 2b 收尾 + 远端 CDP 软禁用开关
 
 ### 新增

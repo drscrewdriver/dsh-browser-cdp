@@ -144,6 +144,8 @@ dshx list                                                # 应显示：[on] dsh-
 
 ## 连接方式：CDP 端点 / 本机 ego CLI
 
+**连接目标直接在设置里增删改**（0.17.5 起）：设置卡有两处入口——「起子插件设置」family 区的本插件 tab（装了 `dsh-thinking-levels` 时），以及**插件详情页**的设置卡（`plugins.bundle.config`，不装 thinking-levels 时的独立入口）；两处渲染同一份组件。每行支持：启用开关、激活、标签/端点/CLI 路径就位编辑、逐行**探测**（一键打 `/bcdp/api/cdp-probe`，结果写回该行）、上移/下移、删除（删激活行会同时清空激活，**绝不顺延**）；底部内联表单直接添加 CDP 端点或本机 ego CLI（第二条本机 CLI 会被拒绝）。写回落在活动 profile 的 `cordis.patch.yml`，跨重启保留。0.17.5 之前，连接序列只能在 profile 的 `cordis.patch.yml` `links` 中手工维护。
+
 设置面板里的连接列表是**有序**的——**顺序即优先级**，被激活的那一项驱动每一次 `bcdp_*` 调用。列表元素有两种类型：
 
 | 类型 | 它做什么 | 约束 |

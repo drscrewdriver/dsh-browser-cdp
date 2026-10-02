@@ -52,4 +52,15 @@ describe("FamLinks v2 write discipline (source contracts)", () => {
   it("the probe button rides the runtime capability route, not the retired config pair", () => {
     expect(source).toMatch(/postJson\('\/bcdp\/api\/cdp-probe'/);
   });
+
+  it("the managed-local row is explicit and mode-synced", () => {
+    expect(source).toMatch(/wt\('linksLocalRow'\)/);
+    expect(source).toMatch(/void scope\.set\('cdpMode', 'local'\)/);
+    expect(source).toMatch(/if \(cdpMode === 'local'\) \{ void scope\.set\('cdpMode', 'auto'\) \}/);
+    expect(source).toMatch(/void scope\.set\('allowLocalFallback'/);
+  });
+
+  it("the first target added to an empty sequence activates itself", () => {
+    expect(source).toMatch(/activeId === ''/);
+  });
 });

@@ -167,6 +167,8 @@ export const zh = {
   'linksCliRemoteWarn': "cdpMode=remote 时激活 ego CLI 会报 mode-kind-mismatch",
   'linksCliSdk': "使用内置 harness",
   'linksDisabledHint': "已停用——先勾选启用才能激活",
+  'linksLocalRow': "本机 Chrome（受管启动）",
+  'linksLocalEnableHint': "勾选 = 允许 auto 模式在激活目标不可达时回落本机启动",
   'linksActivate': '激活',
 }
 
@@ -317,6 +319,8 @@ export const en: Record<CdpKey, string> = {
   'linksCliRemoteWarn': "Activating an ego CLI link under cdpMode=remote fails with mode-kind-mismatch",
   'linksCliSdk': "Use bundled harness",
   'linksDisabledHint': "Disabled — enable it before activating",
+  'linksLocalRow': "Local Chrome (managed)",
+  'linksLocalEnableHint': "Checked = auto mode may fall back to the managed local browser when the activated target is unreachable",
   'linksActivate': 'activate',
 }
 
@@ -464,6 +468,8 @@ export const ja: Record<CdpKey, string> = {
   'linksCliRemoteWarn': "cdpMode=remote で ego CLI をアクティブ化すると mode-kind-mismatch になります",
   'linksCliSdk': "同梱ハーネスを使う",
   'linksDisabledHint': "無効 — アクティブ化する前に有効化してください",
+  'linksLocalRow': "ローカル Chrome（管理起動）",
+  'linksLocalEnableHint': "チェック = アクティブなターゲットに到達できない場合、auto モードはローカル起動にフォールバックします",
   'linksActivate': 'アクティブ化',
 }
 
@@ -611,6 +617,8 @@ export const ko: Record<CdpKey, string> = {
   'linksCliRemoteWarn': "cdpMode=remote에서 ego CLI를 활성화하면 mode-kind-mismatch가 발생합니다",
   'linksCliSdk': "내장 하네스 사용",
   'linksDisabledHint': "비활성 — 활성화하기 전에 사용으로 설정하세요",
+  'linksLocalRow': "로컬 Chrome(관리 시작)",
+  'linksLocalEnableHint': "체크 = 활성 대상에 도달할 수 없을 때 auto 모드가 로컬 시작으로 대체됩니다",
   'linksActivate': '활성화',
 }
 
@@ -758,6 +766,8 @@ export const fr: Record<CdpKey, string> = {
   'linksCliRemoteWarn': "Activer un lien ego CLI avec cdpMode=remote échoue avec mode-kind-mismatch",
   'linksCliSdk': "Utiliser le harnais intégré",
   'linksDisabledHint': "Désactivé — activez-le avant de le rendre actif",
+  'linksLocalRow': "Chrome local (gestionné)",
+  'linksLocalEnableHint': "Coché = le mode auto peut basculer vers le navigateur local si la cible activée est injoignable",
   'linksActivate': 'activer',
 }
 
@@ -905,6 +915,8 @@ export const de: Record<CdpKey, string> = {
   'linksCliRemoteWarn': "Aktivieren eines ego-CLI-Links bei cdpMode=remote schlägt mit mode-kind-mismatch fehl",
   'linksCliSdk': "Mitgeliefertes Harness verwenden",
   'linksDisabledHint': "Deaktiviert — erst aktivieren, dann aktiv schalten",
+  'linksLocalRow': "Lokales Chrome (verwaltet)",
+  'linksLocalEnableHint': "Aktiviert = der Auto-Modus darf auf den verwalteten lokalen Browser ausweichen, wenn das aktivierte Ziel nicht erreichbar ist",
   'linksActivate': 'aktivieren',
 }
 
@@ -1052,6 +1064,8 @@ export const it: Record<CdpKey, string> = {
   'linksCliRemoteWarn': "Attivare un link ego CLI con cdpMode=remote fallisce con mode-kind-mismatch",
   'linksCliSdk': "Usa harness integrato",
   'linksDisabledHint': "Disabilitato — abilitalo prima di attivarlo",
+  'linksLocalRow': "Chrome locale (gestito)",
+  'linksLocalEnableHint': "Selezionato = la modalità auto può ripiegare sul browser locale gestito se la destinazione attiva è irraggiungibile",
   'linksActivate': 'attiva',
 }
 
@@ -1199,6 +1213,8 @@ export const ru: Record<CdpKey, string> = {
   'linksCliRemoteWarn': "Активация ego CLI при cdpMode=remote завершится ошибкой mode-kind-mismatch",
   'linksCliSdk': "Использовать встроенный harness",
   'linksDisabledHint': "Отключено — сначала включите, затем активируйте",
+  'linksLocalRow': "Локальный Chrome (управляемый)",
+  'linksLocalEnableHint': "Отмечено = режим auto может откатиться на управляемый локальный браузер, если активная цель недоступна",
   'linksActivate': 'активировать',
 }
 
@@ -1346,6 +1362,8 @@ export const es: Record<CdpKey, string> = {
   'linksCliRemoteWarn': "Activar un enlace ego CLI con cdpMode=remote falla con mode-kind-mismatch",
   'linksCliSdk': "Usar harness integrado",
   'linksDisabledHint': "Desactivado — actívalo antes de activarlo",
+  'linksLocalRow': "Chrome local (gestionado)",
+  'linksLocalEnableHint': "Marcado = el modo auto puede replegarse al navegador local gestionado si el destino activo no responde",
   'linksActivate': 'activar',
 }
 

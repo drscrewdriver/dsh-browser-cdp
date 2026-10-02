@@ -96,7 +96,7 @@ export const Config = z.object({
   cursorHud: z.boolean().description('Draw the agent cursor HUD into screenshots.'),
   cursorName: z.string().description('Name label shown in the cursor HUD.'),
   // ── M0.9 local launcher knobs (declared now, launcher lands in T2.11+) ──
-  allowLocalFallback: z.boolean().description('auto mode may fall back to launching a local browser when the activated target is unreachable. Off by default: the fallback must be explicit.'),
+  allowLocalFallback: z.boolean().description('auto mode may fall back to launching a local browser when the activated target is unreachable. Off by default: the fallback must be explicit.').volatile(),
   legacyEgoToolNames: z.boolean().description('ALSO register the tools under their old ego_* names for scripts written before the bcdp_* rename. Off by default; mutually exclusive with installing the upstream ego-browser plugin (same tool names).'),
   localHeadless: z.boolean().description('Run the locally launched browser headless.'),
   remoteEnabled: z.boolean().description('Master switch for REMOTE attach. Off = the configured target sequence is preserved but inert (nothing probes or connects remotely); flip back on any time. Does not affect cdpMode=local.').volatile(),

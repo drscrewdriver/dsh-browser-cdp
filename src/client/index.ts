@@ -2358,8 +2358,7 @@ clearTimeout((panel as any)._dshHideT)
 				var timer = window.setInterval(function () { setTick(function (n: any) { return n + 1 }) }, 1000)
 				return function () { window.clearInterval(timer) }
 			}, [])
-			var snap = input && input.state && input.state.getSnapshot ? input.state.getSnapshot() : null
-			var draft = snap && typeof snap.draft === 'string' ? snap.draft : ''
+			var draft = readDraftText(input)
 			var re = /\[(?:🌐 )?CDP-PICKS\s+page="([^"]*)"\s+targetId="([^"]*)"\s+endpoint="([^"]*)"\]\n([\s\S]*?)\n\[\/CDP-PICKS\]/g
 			var found = [], mm
 			while ((mm = re.exec(draft)) !== null) {
@@ -2370,9 +2369,10 @@ clearTimeout((panel as any)._dshHideT)
 			try { (window as any).__dshBrowserCdpDeco = { stage: found.length ? 'rendered' : 'no-blocks', blocks: found.length, draftLen: draft.length } } catch (e) {}
 			function removeBlock(block: any) {
 				if (!input || typeof input.setDraft !== 'function') return
-				var idx = draft.indexOf(block)
+				var cur = readDraftText(input)
+				var idx = cur.indexOf(block)
 				if (idx < 0) return
-				var next = draft.slice(0, idx) + draft.slice(idx + block.length)
+				var next = cur.slice(0, idx) + cur.slice(idx + block.length)
 				// 空输入框不留原文：整块移除后把残余空白行一并清掉。
 				next = next.replace(/^\s*\n+/, '').replace(/\n+\s*$/, '')
 				input.setDraft(next)
@@ -2433,6 +2433,16 @@ clearTimeout((panel as any)._dshHideT)
 				}, CdpPicksDockCard)
 			}, 'dsh-browser-cdp: picks dock card')
 		}
+		function readDraftText(input: any) {
+			if (!input) return ''
+			try { if (typeof input.draft === 'string') return input.draft } catch (e) {}
+			try {
+				var snap = input.state && input.state.getSnapshot ? input.state.getSnapshot() : null
+				if (snap && typeof snap.draft === 'string') return snap.draft
+			} catch (e) {}
+			return ''
+		}
+
 		// 「当前会话」推导：宿主在 0.1.6-alpha.2（6830e1460d）把 list 快照的
 		// `current` 字段删掉了（契约注释 "navigation belongs to view owners"），
 		// 现行推导 = 扫 byId 找 retainedBy.mainView > 0 的行——与宿主侧边栏同款
@@ -2465,8 +2475,8 @@ clearTimeout((panel as any)._dshHideT)
 				if (!conversation || !conversation.input) return { ok: false, code: 'no-conversation-service' }
 				var input = conversation.input.for(actx)
 				if (!input || typeof input.setDraft !== 'function') return { ok: false, code: 'no-input-facade' }
-				var snap = input.state && input.state.getSnapshot ? input.state.getSnapshot() : null
-				var draft = snap && typeof snap.draft === 'string' ? snap.draft : ''
+				var draft = readDraftText(input)
+
 				var src = element.source || { endpoint: '', targetId: '', pageUrl: '', pageTitle: '' }
 				var entry: any = {
 					backendNodeId: element.backendNodeId,

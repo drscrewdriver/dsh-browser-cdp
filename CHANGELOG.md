@@ -44,6 +44,18 @@
 ### 修复
 - `makeWhich` 的路径分隔符与 PATH 分隔符改为跟随**被模拟的平台**（原用 `node:path` 的宿主值，darwin/linux 查找在 Windows 上会拼成 `dir\file` 而永远找不到）。
 
+## [0.17.7] - 2026-10-03 — 真机反馈②：点选失败根因修复（与上游插件的状态文件互踩）
+
+### 修复（根因）
+- **「切换选择元素 → 点选失败」的真凶不是点选本身**：与上游 `dsh-ego-browser` 同机同 profile 安装时，两家的 cast worker **共写同一个状态文件** `ego-cast.json`（同一状态目录、同一文件名）——上游 worker 后写文件后，本插件的面板按文件桥接，桥到了**上游 worker**（它没有本插件扩展的 `pick`/`marks`/`raise` 路由）→ 这些请求 404 → 面板报「点选失败」。流媒体不受影响（上游 worker 也有 watch/stream），所以只有点选坏。
+- **修复**：本插件的状态文件更名为 **`dsh-browser-cdp.cast.json`**（worker 写入端、cast-server 读取端、`bcdp_auth_flush` 读取端三处同步），并**绝不回读共享名**——两家各自桥接各自的 worker，真共存（v0.12.0 承诺的工具名/路由错开之外，补上状态文件这最后一处）。
+- 升级即生效：新文件不存在 → cast-server 下一次请求自动拉起本插件自己的 worker；旧的无主 worker 由闲置回收/宿主重启清理，上游插件不受影响。
+- **点选失败详情可见**：失败时 worker 的真实 code/message 挂到工具栏按钮的 hover title（悬浮窗与侧栏 tab 两处），不再只有一句泛化的「点选失败」。
+
+### 验证
+- 复现实证：对远程目标（192.168.100.25:9223，Linux 有头 Chrome 153）独立起 worker，pick arm 与坐标点选均成功（`code:"picked"`、元素 payload 完整）——点选管线本身无恙，问题全在桥接错worker；
+- `typecheck` 过；691 passed / 11 skipped（+1 状态文件命名空间契约，防回归到共享名）。
+
 ## [0.17.6] - 2026-10-03 — 真机反馈：本机 Chrome 固定行 + 激活模式同步 + 首行自动激活
 
 ### 修复

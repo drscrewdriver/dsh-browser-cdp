@@ -63,4 +63,15 @@ describe("FamLinks v2 write discipline (source contracts)", () => {
   it("the first target added to an empty sequence activates itself", () => {
     expect(source).toMatch(/activeId === ''/);
   });
+  it("the cast worker state file is plugin-namespaced (upstream ego-cast.json coexistence)", async () => {
+    expect(source).toMatch(/void scope\.set\('cdpMode', 'local'\)/);
+    const { readFile } = await import("node:fs/promises");
+    const workerTs = await readFile(new URL("../src/worker/cdp-cast-worker.ts", import.meta.url), "utf8");
+    const castServer = await readFile(new URL("../src/cast-server.ts", import.meta.url), "utf8");
+    expect(workerTs).toContain("dsh-browser-cdp.cast.json");
+    expect(castServer).toContain("dsh-browser-cdp.cast.json");
+    // the shared upstream name must not appear as a quoted path in our code
+    expect(workerTs).not.toMatch(/['"]ego-cast\.json['"]/);
+    expect(castServer).not.toMatch(/['"]ego-cast\.json['"]/);
+  });
 });

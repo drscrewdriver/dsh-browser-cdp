@@ -19,7 +19,11 @@ const IS_WIN = platform() === 'win32'
 const STATE_HOME = IS_WIN ? process.env.LOCALAPPDATA || join(HOME, 'AppData', 'Local') : process.env.XDG_STATE_HOME || join(HOME, '.local', 'state')
 const STATE_DIR = process.env.EGO_LINUX_STATE_DIR || join(STATE_HOME, 'ego-lite-linux')
 const BROWSER_STATE_FILE = join(STATE_DIR, 'browser.json')
-const CAST_STATE_FILE = join(STATE_DIR, 'ego-cast.json')
+// Plugin-namespaced: the upstream dsh-ego-browser worker writes
+// ego-cast.json in the SAME state dir; sharing the file let whichever
+// worker wrote last hijack the other panel's bridge (its /api/pick
+// would 404 → 点选失败). Never bridge to a file we did not write.
+const CAST_STATE_FILE = join(STATE_DIR, 'dsh-browser-cdp.cast.json')
 
 interface CastConfig {
   captureBackend: string

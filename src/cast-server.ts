@@ -55,7 +55,7 @@ export function getAttachEndpoint(): string | null {
 /**
  * Stop a running worker so the next request respawns it with the new argv
  * seed (T2.4: an activation change must take effect on a live panel, not only
- * after a host restart). Kills only the pid WE spawned (per ego-cast.json) —
+ * after a host restart). Kills only the pid WE spawned (per our namespaced state file) —
  * never a name-matched sweep, which previously took out the DSH subprocess
  * runner along with our own tree (issues #34 defect 2 / #40).
  */
@@ -132,9 +132,13 @@ export function markEgoToolCall(sessionId?: string): void {
 
 function castStatePath(): string {
   // Mirror the ego-lite runtime state dir across platforms so we find the
-  // worker's ego-cast.json wherever it ran: Windows uses
+  // worker's state file wherever it ran: Windows uses
   // %LOCALAPPDATA%\ego-lite-linux; POSIX uses $XDG_STATE_HOME (default
   // ~/.local/state)/ego-lite-linux. Honors EGO_LINUX_STATE_DIR overrides.
+  // The FILE is plugin-namespaced (dsh-browser-cdp.cast.json): the upstream
+  // dsh-ego-browser worker shares this dir under ego-cast.json, and
+  // bridging to a foreign worker breaks every route we extended it with
+  // (pick/marks/raise 404). Read ONLY our own file.
   const e = process.env
   const isWin = process.platform === 'win32'
   const home = e.HOME || e.USERPROFILE || (isWin ? e.LOCALAPPDATA || '' : '/root')
@@ -142,8 +146,8 @@ function castStatePath(): string {
     ? (e.LOCALAPPDATA || `${home}\\AppData\\Local`)
     : (e.XDG_STATE_HOME || `${home}/.local/state`))
   return stateHome.endsWith('ego-lite-linux')
-    ? `${stateHome}/ego-cast.json`
-    : `${stateHome}/ego-lite-linux/ego-cast.json`
+    ? `${stateHome}/dsh-browser-cdp.cast.json`
+    : `${stateHome}/ego-lite-linux/dsh-browser-cdp.cast.json`
 }
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {

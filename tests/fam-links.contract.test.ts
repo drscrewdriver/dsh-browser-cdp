@@ -23,7 +23,7 @@ describe("FamLinks v2 write discipline (source contracts)", () => {
     expect(end).toBeGreaterThan(start);
     const fn = source.slice(start, end);
     expect(fn).toMatch(/onBlur: commit/);
-    expect(fn).toMatch(/onKeyDown: function \(e\) \{ if \(e\.key === 'Enter'\) \{ commit\(\) \} \}/);
+    expect(fn).toMatch(/onKeyDown: function \(e(?:: any)?\) \{ if \(e\.key === 'Enter'\) \{ commit\(\) \} \}/);
     expect(fn).not.toMatch(/scope\.set/);
   });
 
@@ -43,7 +43,7 @@ describe("FamLinks v2 write discipline (source contracts)", () => {
     // The watch panel's constant SVG icons legitimately ride
     // dangerouslySetInnerHTML; the links editor region must not.
     const start = source.indexOf("function FamRowInput");
-    const end = source.indexOf("function apply(ctx)");
+    const end = source.indexOf("function apply(ctx");
     expect(start).toBeGreaterThan(-1);
     expect(end).toBeGreaterThan(start);
     expect(source.slice(start, end)).not.toMatch(/innerHTML/);

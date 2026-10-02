@@ -1,3 +1,12 @@
+## [0.18.11] - 2026-10-03 — 包装卡定位诊断补丁（同 0.17.14 反向同源）
+
+### 变更
+- dock 注册补 `locale: 'dsh-browser-cdp'` + 注册即写 `__dshBrowserCdpDeco.stage='registered'`、inject 工厂失败记录 `inject-failed` + sessionId；
+- 点选卡片正则放宽：头行属性间允许任意空白/换行（composer 折行形态不漏配）。
+
+### 验证
+- `typecheck` 过；691 passed / 11 skipped。
+
 ## [0.18.10] - 2026-10-03 — 包装卡改挂官方 dock 缝：与 todo 同级（order 0）、浮在对话区一侧（同 0.17.13 反向同源）
 
 ### 变更

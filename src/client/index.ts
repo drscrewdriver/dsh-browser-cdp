@@ -158,6 +158,8 @@ import { addRow, applyProbe, buildCdpRow, buildCliRow, hasCliLink, isFull, isVal
 			linksActivate: 'activate',
 			linksLocalRow: 'Local Chrome (managed)',
 			linksLocalEnableHint: 'Checked = auto mode may fall back to the managed local browser when the activated target is unreachable',
+			pickCardTitle: 'Browser picks',
+			pickCardElements: '{n} element(s) picked',
 		}
 		var watchZh = {
 			title: 'CDP 浏览器',
@@ -242,6 +244,8 @@ import { addRow, applyProbe, buildCdpRow, buildCliRow, hasCliLink, isFull, isVal
 			linksActivate: '激活',
 			linksLocalRow: '本机 Chrome（受管启动）',
 			linksLocalEnableHint: '勾选 = 允许 auto 模式在激活目标不可达时回落本机启动',
+			pickCardTitle: '浏览器点选内容',
+			pickCardElements: '已选 {n} 个元素',
 		}
 		var watchDict: Record<string, any> = { en: watchEn, zh: watchZh }
 		function wt(key: any, params: any = undefined) {
@@ -2335,98 +2339,104 @@ clearTimeout((panel as any)._dshHideT)
 		 */
 		// M1.7 — composer decoration: the raw CDP-PICKS text block is for the
 		// agent; the human gets a decorated card (🌐 connection + tab + element
-		// chips) anchored next to the composer input. [data-composer-input] is
-		// verified stable across 0.1.7-rc.2 ↔ 0.2.0-rc.2 (arrowkey analysis,
-		// dependency table). The host has no public custom-chip seam (the file
-		// chip is ui-attachment's closed system) — this is the plugin-side form.
-		// 1s poll mirrors the panel's existing pick polling; rebuilds only when
-		// the draft signature changes. Must never break the composer: every step
-		// guarded, all DOM we add carries data-dsh-cdp-picks-card.
+		// chips) floating above the composer. The card lives on document.body
+		// with position:fixed — DOM inserted inside the host's React-managed
+		// composer tree gets reconciled away, and per-host anchoring is fragile.
+		// Rect comes from the composer element ([data-composer-input], with
+		// contenteditable/textarea fallbacks). Diagnostics (devtools console):
+		// window.__dshBrowserCdpDeco { stage, error, anchor, cards, draftLen }.
 		function mountComposerDecoration(ctx: any) {
 			var cards: any[] = []
 			var lastSig = ''
+			var diag = { stage: 'init', error: '', anchor: false, cards: 0, draftLen: -1 }
+			try { (window as any).__dshBrowserCdpDeco = diag } catch (e) {}
+			var CARD_STYLE: Record<string, string> = { position: 'fixed', zIndex: '9998', display: 'grid', gap: '4px', padding: '8px 10px', font: 'inherit', fontSize: '12px', color: 'var(--dsw-alias-label-primary, inherit)', background: 'var(--dsw-alias-bg-surface, rgba(127,127,127,.14))', border: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.35))', borderRadius: '12px', boxShadow: '0 8px 24px rgba(0,0,0,.18)', boxSizing: 'border-box', pointerEvents: 'auto' }
+			var HEAD_STYLE = { display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }
+			var SUB_STYLE = { fontSize: '11px', color: 'var(--dsw-alias-label-tertiary, rgba(127,127,127,.75))', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }
+			var CHIP_STYLE = { display: 'flex', alignItems: 'baseline', gap: '6px', padding: '3px 8px', background: 'var(--dsw-alias-bg-module-platform, rgba(127,127,127,.1))', border: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.22))', borderRadius: '8px', minWidth: 0 }
+			var NUM_STYLE = { fontWeight: 700, flex: '0 0 auto', color: 'var(--dsw-alias-label-tertiary, rgba(127,127,127,.75))' }
+			var TAG_STYLE = { fontWeight: 600, flex: '0 0 auto' }
+			var DESC_STYLE = { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }
 			function hide() {
-				for (var i = 0; i < cards.length; i++) { var el = cards[i]; el && el.parentNode && el.parentNode.removeChild(el) }
+				for (var i = 0; i < cards.length; i++) { var el = cards[i]; if (el && el.parentNode) el.parentNode.removeChild(el) }
 				cards = []
+				diag.cards = 0
 			}
-			function ensureAnchor() {
-				var input = document.querySelector('[data-composer-input]')
-				if (!input || !input.parentNode) return null
-				return input.parentNode
-			}
-			function cardStyle() {
-				return { display: 'grid', gap: '4px', margin: '0 0 6px', padding: '8px 10px', font: 'inherit', fontSize: '12px', color: 'var(--dsw-alias-label-primary, inherit)', background: 'var(--dsw-alias-bg-module-platform, rgba(127,127,127,.08))', border: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.3))', borderRadius: '12px', boxSizing: 'border-box', width: '100%' }
-			}
-			function chipStyle() {
-				return { display: 'flex', alignItems: 'baseline', gap: '6px', padding: '3px 8px', background: 'var(--dsw-alias-bg-module-platform, rgba(127,127,127,.1))', border: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.22))', borderRadius: '8px', minWidth: 0 }
-			}
-			function render(pageTitle: any, endpoint: any, pageUrl: any, elements: any) {
-				var anchor = ensureAnchor()
-				if (!anchor) { hide(); return }
-				hide()
-				var h = React.createElement
-				var head = h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' } },
-					h('span', { style: badgeLike() }, '🌐'),
-					h('span', { style: { fontWeight: 600 } }, wt('pickCardTitle')),
-					h('span', { style: { color: 'var(--dsw-alias-label-tertiary, rgba(127,127,127,.75))', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 } }, (endpoint || '') + ' · ' + (pageTitle || pageUrl || '')),
-					h('span', { style: { color: 'var(--dsw-alias-label-tertiary, rgba(127,127,127,.75))', flex: '0 0 auto' } }, wt('pickCardElements', { n: elements.length })))
-				var chips = elements.slice(0, 6).map(function (el: any) {
-					return h('div', { key: el.n, style: chipStyle() },
-						h('span', { style: { fontWeight: 700, flex: '0 0 auto', color: 'var(--dsw-alias-label-tertiary, rgba(127,127,127,.75))' } }, '#' + el.n),
-						h('span', { style: { fontWeight: 600, flex: '0 0 auto' } }, el.tag || '?'),
-						h('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 } }, el.describe || el.name || ''))
-					})
-				if (elements.length > 6) chips.push(h('div', { style: { fontSize: '11px', color: 'var(--dsw-alias-label-tertiary, rgba(127,127,127,.7))' } }, '… +' + (elements.length - 6)))
-				var card = document.createElement('div')
-				card.setAttribute('data-dsh-cdp-picks-card', '')
-				var host = null
-				try { host = /** @type {any} */ (renderToDom(h('div', { style: cardStyle() }, head, chips))) } catch (e) { host = null }
-				if (!host) return
-				card.appendChild(host)
-				anchor.insertBefore(card, anchor.firstChild)
-				cards.push(card)
-			}
-			function badgeLike() {
-				return { fontSize: '12px', lineHeight: '16px' }
-			}
-			function renderToDom(vdom: any) {
-				// react-dom/client may be absent in this bundle; walk the plain-object
-				// vdom we built ourselves (strings + style objects only) by hand.
-				if (vdom === null || vdom === undefined || vdom === false) return document.createTextNode('')
-				if (typeof vdom === 'string' || typeof vdom === 'number') return document.createTextNode(String(vdom))
-				if (Array.isArray(vdom)) { var frag = document.createDocumentFragment(); for (var i = 0; i < vdom.length; i++) frag.appendChild(renderToDom(vdom[i])); return frag }
-				var el = document.createElement(vdom.type || 'div')
-				var props = vdom.props || {}
-				if (props.style) for (var k in props.style) el.style[k] = props.style[k]
-				if (props.key) el.setAttribute('data-key', String(props.key))
-				var children = props.children
-				el.appendChild(renderToDom(children === undefined ? null : children))
+			function el2(tag: any, style: any, text?: any) {
+				var el = document.createElement(tag)
+				if (style) for (var k in style) el.style[k] = style[k]
+				if (text !== undefined && text !== null && text !== '') el.textContent = String(text)
 				return el
 			}
-			var stop = null
+			function composerEl() {
+				var el = document.querySelector('[data-composer-input]')
+				if (!el) el = document.querySelector('[data-composer-input] [contenteditable="true"]')
+				if (!el) el = document.querySelector('[contenteditable="true"]')
+				if (!el) el = document.querySelector('textarea')
+				return el
+			}
+			function render(pageTitle: any, endpoint: any, elements: any) {
+				var comp = composerEl()
+				if (!comp) { diag.stage = 'no-composer'; diag.anchor = false; hide(); return }
+				diag.anchor = true
+				var rect = comp.getBoundingClientRect()
+				hide()
+				var card = document.createElement('div')
+				card.setAttribute('data-dsh-cdp-picks-card', '')
+				var cs = card.style as any; for (var k in CARD_STYLE) cs[k] = CARD_STYLE[k]
+				card.style.left = Math.max(8, rect.left) + 'px'
+				card.style.width = Math.min(Math.max(rect.width, 240), 620) + 'px'
+				card.style.bottom = Math.max(8, window.innerHeight - rect.top + 8) + 'px'
+				card.style.maxHeight = '40vh'
+				card.style.overflowY = 'auto'
+				var head = el2('div', HEAD_STYLE)
+				head.appendChild(el2('span', { fontWeight: 700 }, '🌐 ' + wt('pickCardTitle')))
+				head.appendChild(el2('span', SUB_STYLE, (endpoint || '') + ' · ' + (pageTitle || '')))
+				head.appendChild(el2('span', SUB_STYLE, wt('pickCardElements', { n: elements.length })))
+				card.appendChild(head)
+				var limit = Math.min(elements.length, 6)
+				for (var i = 0; i < limit; i++) {
+					var el = elements[i] || {}
+					var chip = el2('div', CHIP_STYLE)
+					chip.appendChild(el2('span', NUM_STYLE, '#' + (el.n || (i + 1))))
+					chip.appendChild(el2('span', TAG_STYLE, el.tag || '?'))
+					chip.appendChild(el2('span', DESC_STYLE, el.describe || el.name || ''))
+					card.appendChild(chip)
+				}
+				if (elements.length > 6) card.appendChild(el2('div', SUB_STYLE, '… +' + (elements.length - 6)))
+				document.body.appendChild(card)
+				cards.push(card)
+				diag.cards = cards.length
+				diag.stage = 'rendered'
+			}
 			function tick() {
+				diag.stage = 'tick'
 				try {
 					var sid = currentSessionId(ctx.sessions.list.getSnapshot())
-					if (!sid) { if (lastSig !== '') { lastSig = ''; hide() } return }
+					if (!sid) { diag.stage = 'no-session'; if (lastSig !== '') { lastSig = ''; hide() } return }
 					var conversation = ctx.get('conversation')
-					if (!conversation || !conversation.input) return
+					if (!conversation || !conversation.input) { diag.stage = 'no-conversation'; return }
 					var actx = ctx.sessions.scope(sid)
-					if (!actx) return
+					if (!actx) { diag.stage = 'no-scope'; return }
 					var input = conversation.input.for(actx)
 					var snap = input && input.state && input.state.getSnapshot ? input.state.getSnapshot() : null
 					var draft = snap && typeof snap.draft === 'string' ? snap.draft : ''
-					if (draft === lastSig) return
+					diag.draftLen = draft.length
+					if (draft === lastSig) { diag.stage = 'same-draft'; return }
 					lastSig = draft
 					var re = /\[(?:🌐 )?CDP-PICKS page="([^"]*)" targetId="([^"]*)" endpoint="([^"]*)"\]\n([\s\S]*?)\n\[\/CDP-PICKS\]/g
 					var found = [], mm
 					while ((mm = re.exec(draft)) !== null) {
 						var elements = []
 						try { var obj = JSON.parse(mm[4]); elements = (obj && obj.elements) || [] } catch (e) {}
-						found.push({ title: mm[1], targetId: mm[2], endpoint: mm[3], elements: elements })
+						found.push({ title: mm[1], endpoint: mm[3], elements: elements })
 					}
-					if (found.length === 0) { hide(); return }
-					for (var i = 0; i < found.length; i++) render(found[i].title, found[i].endpoint, found[i].title, found[i].elements)
-				} catch (e) { /* decoration must never break the composer */ }
+					if (found.length === 0) { diag.stage = 'no-blocks'; hide(); return }
+					for (var i = 0; i < found.length; i++) render(found[i].title, found[i].endpoint, found[i].elements)
+				} catch (e) {
+					diag.stage = 'error'
+					diag.error = String((e && e.message) || e)
+				}
 			}
 			var timer = window.setInterval(tick, 1000)
 			tick()

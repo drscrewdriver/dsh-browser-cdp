@@ -1,3 +1,11 @@
+## [0.18.7] - 2026-10-03 — 真机反馈⑤：包装卡渲染重写（同 0.17.10 反向同源）
+
+### 修复
+- **0.18.4 起的包装卡真机上未出现**：卡片原插进 composer 的宿主 React 容器（会被协调回收）+ 失败静默吞掉。重写：卡片挂 `document.body` + `position:fixed`（按 composer 矩形定位，三级回退取矩形）；`window.__dshBrowserCdpDeco`（`stage`/`error`/`anchor`/`cards`/`draftLen`）控制台可诊断；补齐遗漏的 `pickCardTitle`/`pickCardElements` 键（内联 zh/en）。
+
+### 验证
+- `typecheck` 过（client `noImplicitAny`）；690 passed / 11 skipped。
+
 ## [0.18.6] - 2026-10-03 — 0.18.5 同内容重发（npmjs 暂存位卡住）
 
 - 0.18.5 被 npm registry 受理后长时间停留在 staged 状态（`EPUBLISHCONFLICT: previously staged "0.18.5"`，读路径 404），重发被拒——换号 0.18.6 绕开。内容与 0.18.5 完全一致：composer 包装卡 + 同页合并正则修复（详见 0.18.5 条）。

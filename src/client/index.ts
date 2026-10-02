@@ -2227,11 +2227,22 @@ clearTimeout((panel as any)._dshHideT)
 				return el
 			}
 			function composerEl() {
-				var el = document.querySelector('[data-composer-input]')
-				if (!el) el = document.querySelector('[data-composer-input] [contenteditable="true"]')
-				if (!el) el = document.querySelector('[contenteditable="true"]')
-				if (!el) el = document.querySelector('textarea')
-				return el
+				// hosts keep hidden composer clones/templates: enumerate every
+				// candidate, keep only VISIBLE rects (real size, on screen), and take
+				// the lowest one — that is the live composer.
+				var selectors = ['[data-composer-input]', '[contenteditable="true"]', 'textarea']
+				for (var s = 0; s < selectors.length; s++) {
+					var list = document.querySelectorAll(selectors[s])
+					var best = null, bestBottom = -1
+					for (var i = 0; i < list.length; i++) {
+						var r = list[i].getBoundingClientRect()
+						if (r.width < 120 || r.height < 32) continue
+						if (r.top > window.innerHeight || r.bottom < 0) continue
+						if (r.bottom > bestBottom) { bestBottom = r.bottom; best = list[i] }
+					}
+					if (best) return best
+				}
+				return null
 			}
 			function render(pageTitle, endpoint, elements) {
 				var comp = composerEl()

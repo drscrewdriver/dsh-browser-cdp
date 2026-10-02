@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Navigateur CDP",
+    "description": "Plugin navigateur DSH : se rattache à un Chrome/Edge en cours d'exécution via CDP (aucun navigateur fourni) ; plus de 30 outils d'automatisation bcdp_* et un panneau d'observation en temps réel (diffusion SSE en direct, interaction souris directe, capture des téléchargements, alertes de vérification humaine)."
+  }
+}

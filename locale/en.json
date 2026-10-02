@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "CDP Browser",
+    "description": "DSH browser plugin: attach to a running Chrome/Edge over CDP (no bundled browser needed); 30+ bcdp_* automation tools plus a realtime watch panel (live SSE screencast, direct mouse interaction, download capture, human-verification notices)."
+  }
+}

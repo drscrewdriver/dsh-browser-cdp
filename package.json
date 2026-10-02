@@ -8,11 +8,13 @@
     ".": "./lib/index.js",
     "./client": "./lib/client.js",
     "./dsh-plugin.json": "./dsh-plugin.json",
+    "./locale/*.json": "./locale/*.json",
     "./package.json": "./package.json"
   },
   "files": [
     "lib/",
     "bin/",
+    "locale/",
     "runtime/",
     "cordis.patch.yml",
     "dsh-plugin.json",
@@ -28,7 +30,9 @@
     },
     "client": {
       "platform": "web",
-      "inject": []
+      "inject": [
+        "@deepseek-ai/dsh-client-locale"
+      ]
     }
   },
   "scripts": {

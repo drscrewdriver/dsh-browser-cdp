@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Navegador CDP",
+    "description": "Complemento de navegador DSH: se conecta a un Chrome/Edge en ejecución mediante CDP (sin navegador incluido); más de 30 herramientas de automatización bcdp_* y un panel de observación en tiempo real (retransmisión SSE en vivo, interacción directa con el ratón, captura de descargas, avisos de verificación humana)."
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Browser CDP",
+    "description": "Plugin browser DSH: si aggancia a un Chrome/Edge in esecuzione via CDP (nessun browser incluso); oltre 30 strumenti di automazione bcdp_* più un pannello di osservazione in tempo reale (diretta SSE dello schermo, interazione diretta del mouse, cattura dei download, avvisi di verifica umana)."
+  }
+}

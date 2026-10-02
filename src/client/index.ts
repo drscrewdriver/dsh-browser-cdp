@@ -1,6 +1,15 @@
 /** Injected by the DSH ModuleLoader factory wrapper (tsdown banner). */
 declare function require(id: string): any
 
+import { NS, dictionaries } from './locales'
+
+// Structural view of the host locale service (register + bind is all this
+// plugin touches; kept local so the client build needs no type deps).
+interface LocaleLike {
+	register: (ns: string, dicts: Record<string, Record<string, string>>) => () => void
+	bind: (ns: string) => (key: string) => string
+}
+
 		// #region CDP browser bridge client: realtime watch-bubble
 		//
 		// A floating "watch" bubble (bottom-right) plus an expandable overlay
@@ -73,122 +82,20 @@ declare function require(id: string): any
 		var _egoLocale = (function () {
 			try { var lang = navigator.language || ''; return lang.startsWith('zh') ? 'zh' : 'en' } catch { return 'en' }
 		})()
-		var watchEn = {
-			title: 'Agent Browser',
-			titleLive: 'Agent Browser · Live',
-			liveView: 'Live view',
-			pinned: 'Pinned',
-			realtime: 'Live',
-			noScreenshot: '(no screenshot — about:blank or browser not rendering)',
-			noActivePages: 'No active browser pages',
-			noActiveHint: 'Pages will appear here as the agent browses with bcdp_*',
-			openExternal: 'Open real page',
-		raiseWindow: 'Pop out window',
-		raiseWindowHint: 'Raise the agent browser as a real window (a headless instance is replaced by a visible one on the same profile)',
-			pickMode: 'Pick element',
-			pickModeHint: 'Click an element in the live page to quote it into the conversation',
-			picking: 'Picking… click an element in the page',
-			picked: 'Element captured',
-			pickFailed: 'Pick failed',
-			pickQuoted: '✓ Quoted to composer',
-			pickDeliverFailed: 'Delivery failed',
-			noUrl: 'No URL to open',
-			closeTab: 'Close tab',
-			newTab: '(new tab)',
-			history: 'Browsing history',
-			historyHide: 'Hide history',
-			historyShow: 'Show history',
-			noHistory: 'No browsing history',
-			current: 'current',
-			refresh: 'Refresh',
-			backToLive: '← Back to live',
-			dragHint: 'Drag to move panel',
-			loginTitle: 'Log in via the CDP browser bridge window on your desktop',
-			loginBtn: 'Logged in, save',
-			loginSaving: 'Saving…',
-			loginSaved: 'Saved {n} sessions',
-			loginNotConnected: 'Browser not connected',
-			loginFailed: 'Save failed',
-			loginDismiss: 'Dismiss',
-			captchaTitle: '⚠️ CAPTCHA detected',
-			captchaHint: 'Complete verification in the CDP browser bridge window; the agent will continue.',
-			captchaDismiss: 'Dismiss',
-			hintReset: 'Reset · scroll to pan · Ctrl+scroll to zoom · double-click to reset',
-			hintPan: 'Ctrl+scroll to zoom · Ctrl+drag to pan · double-click to reset',
-			hintScroll: 'Ctrl+drag to pan · scroll to pan',
-			hintNotCaptured: 'Not captured · operation not delivered · click again to recover',
-			failed: 'failed',
-			stale: '⚠ Not captured',
-			captured: 'Captured',
-			fabTitle: 'Agent Browser live view',
-			settingsTitle: 'Show settings',
-			settingsHide: 'Hide settings',
-			famTitle: 'CDP Browser',
-			famIsolate: 'Space isolation',
-			famIsolateDesc: 'Off = persistent profile (logins survive restarts); on = isolated sandbox',
-			famIdle: 'Auto-stop idle browser (minutes, 0 = off)',
-			famIdleDesc: 'Stops the backing browser after N minutes without a bcdp_* call; relaunches on demand',
-		}
-		var watchZh = {
-			title: 'CDP 浏览器',
-			titleLive: 'CDP 浏览器 · 实时',
-			liveView: '只读观察窗',
-			pinned: '已固定查看',
-			realtime: '正在实时浏览',
-			noScreenshot: '（暂无截图 — about:blank 或浏览器未渲染）',
-			noActivePages: '暂无活跃浏览器页',
-			noActiveHint: '当 agent 开始用 bcdp_* 操作网页时，这里会实时显示',
-			openExternal: '⧉ 打开真实页',
-		raiseWindow: '弹出窗口',
-		raiseWindowHint: '把 agent 浏览器弹出为真实窗口（无头实例会被同 Profile 的有头实例替换，标签页保留）',
-			pickMode: '选择元素',
-			pickModeHint: '在实时页面里点选一个元素，引用到对话',
-			picking: '点选中…请点击页面里的元素',
-			picked: '已捕获元素',
-			pickFailed: '点选失败',
-			pickQuoted: '✓ 已引用到输入框',
-			pickDeliverFailed: '投递失败',
-			noUrl: '无可打开的地址',
-			closeTab: '关闭标签',
-			newTab: '(新标签页)',
-			history: '历史浏览轨迹',
-			historyHide: '收起历史轨迹',
-			historyShow: '历史浏览轨迹',
-			noHistory: '暂无浏览记录',
-			current: '当前',
-			refresh: '刷新',
-			backToLive: '← 返回实时',
-			dragHint: '拖动移动面板',
-			loginTitle: '需要账号登录时，请到桌面上那个 「CDP 浏览器代理」 Chrome 窗口完成登录。',
-			loginBtn: '已登录，保存',
-			loginSaving: '保存中…',
-			loginSaved: '已保存 {n} 条会话',
-			loginNotConnected: '未连接浏览器',
-			loginFailed: '保存失败',
-			loginDismiss: '关闭提示',
-			captchaTitle: '⚠️ 检测到人机验证',
-			captchaHint: '请在桌面那个 「CDP 浏览器代理」 浏览器窗口手动完成验证，agent 会继续。',
-			captchaDismiss: '关闭提示',
-			hintReset: '已复位 · 滚轮滚动页面 · Ctrl+滚轮缩放 · 双击复位',
-			hintPan: 'Ctrl+滚轮缩放 · Ctrl+拖动平移 · 双击复位',
-			hintScroll: 'Ctrl+拖动平移 · 滚轮滚动页面',
-			hintNotCaptured: '画面未接管 · 本次操作未送达 · 再点一次即可恢复',
-			failed: '失败',
-			stale: '⚠ 未接管',
-			captured: '已接管',
-			fabTitle: 'CDP 浏览器实时视图',
-			settingsTitle: '展开设置',
-			settingsHide: '收起设置',
-			famTitle: 'CDP 浏览器',
-			famIsolate: '空间隔离',
-			famIsolateDesc: '关 = 持久化配置（重启保留登录态）；开 = 每次隔离沙箱',
-			famIdle: '空闲自动停止（分钟，0 = 不停）',
-			famIdleDesc: '超过 N 分钟没有 bcdp_* 调用即停止后台浏览器，下次调用按需重启',
-		}
-		var watchDict = { en: watchEn, zh: watchZh }
+		// Dictionaries live in ./locales.ts (nine languages, zh = source of truth).
+		// `wt` prefers the host locale service binding installed by apply() (all
+		// nine languages, live-switching); `watchDict` keeps the previous zh/en
+		// navigator fallback for hosts without the locale service or for render
+		// before registration. Key missing everywhere -> raw key (as before).
+		var watchDict = dictionaries
+		var _localeBind = null
 		function wt(key, params = undefined) {
-			var dict = watchDict[_egoLocale] || watchEn
-			var text = dict[key] || watchEn[key] || key
+			var text = null
+			if (_localeBind) { try { text = _localeBind(key) || null } catch { text = null } }
+			if (text == null) {
+				var dict = watchDict[_egoLocale] || watchDict.en
+				text = dict[key] || key
+			}
 			if (params) { for (var k in params) { text = text.replace(new RegExp('{' + k + '}', 'g'), String(params[k])) } }
 			return text
 		}
@@ -331,7 +238,7 @@ declare function require(id: string): any
 		}
 
 		function createMsePlayer(video, generation, mime, onFailure) {
-			if (!window.MediaSource || !window.MediaSource.isTypeSupported(mime)) { onFailure('当前浏览器不支持此 H.264 流'); return function () {} }
+			if (!window.MediaSource || !window.MediaSource.isTypeSupported(mime)) { onFailure(wt('videoUnsupported')); return function () {} }
 			var mediaSource = new MediaSource()
 			var objectUrl = URL.createObjectURL(mediaSource)
 			var abort = new AbortController()
@@ -349,7 +256,7 @@ declare function require(id: string): any
 				reader.read().then(function (part) {
 					reading = false
 					if (disposed) return
-					if (part.done) { onFailure('视频流已断开'); return }
+					if (part.done) { onFailure(wt('videoDisconnected')); return }
 					queue.push(part.value); queuedBytes += part.value.byteLength; appendNext(); pump()
 				}).catch(function (error) { reading = false; if (!disposed && error.name !== 'AbortError') onFailure(error.message) })
 			}
@@ -366,7 +273,7 @@ declare function require(id: string): any
 					appendNext(); pump()
 				})
 				fetch(VIDEO_ROUTE + '?generation=' + encodeURIComponent(generation), { signal: abort.signal }).then(function (res) {
-					if (!res.ok || !res.body) throw new Error('视频流连接失败 (' + res.status + ')')
+					if (!res.ok || !res.body) throw new Error(wt('videoConnectFailed', { status: res.status }))
 					reader = res.body.getReader(); pump()
 				}).catch(function (error) { if (!disposed && error.name !== 'AbortError') onFailure(error.message) })
 			})
@@ -625,60 +532,60 @@ declare function require(id: string): any
 
 		// 全量设置面：Config 里所有用户可调 volatile 字段按组分块渲染。
 		// kind: bool=checkbox / num=数字 / str=文本 / secret=密码 / sel=下拉。
-		// 文案直接内联 en/zh（跟随 wt 的 _egoLocale），不再膨胀字典键。
+		// 文案走 wt 字典：lk = 标题键，dk = 描述键（无描述则不写 dk）。
+		// isolateSpaces / idleTimeoutMin 复用旧 famIsolate / famIdle 键（值相同）。
 		var FAM_FIELD_GROUPS = [
-			{ gk: 'gBasic', en: 'Basics', zh: '基础', fields: [
-				{ k: 'isolateSpaces', kind: 'bool', en: ['Space isolation', 'Off = persistent profile (logins survive restarts); on = isolated sandbox'], zh: ['空间隔离', '关 = 持久化配置（重启保留登录态）；开 = 每次隔离沙箱'] },
-				{ k: 'idleTimeoutMin', kind: 'num', min: 0, max: 1440, step: 1, en: ['Auto-stop idle browser (minutes, 0 = off)', 'Stops the backing browser after N minutes without a bcdp_* call; relaunches on demand'], zh: ['空闲自动停止（分钟，0 = 不停）', '超过 N 分钟没有 bcdp_* 调用即停止后台浏览器，下次调用按需重启'] },
-				{ k: 'cdpMode', kind: 'sel', options: ['auto', 'local', 'remote'], en: ['Connection mode', 'auto = activated target only; remote = never start a local browser; local = always local control'], zh: ['连接模式', 'auto = 只用已激活目标；remote = 绝不静默启动本地浏览器；local = 始终本地控制'] },
-				{ k: 'remoteEnabled', kind: 'bool', en: ['Remote attach master switch', 'Off = the target sequence is preserved but inert; does not affect local mode'], zh: ['远程接管总开关', '关 = 目标序列保留但不生效；不影响 local 模式'] },
-				{ k: 'allowLocalFallback', kind: 'bool', en: ['Allow local fallback in auto mode', 'auto may launch a local browser when the activated target is unreachable'], zh: ['auto 模式允许本地回退', '已激活目标不可达时允许自动拉起本地浏览器'] },
-				{ k: 'chromePath', kind: 'str', en: ['Chrome/Chromium path', 'Empty = auto-detect'], zh: ['Chrome/Chromium 路径', '留空 = 自动探测'] },
-				{ k: 'localHeadless', kind: 'bool', en: ['Launch local browser headless', 'Applies to the locally launched browser'], zh: ['本地浏览器无头启动', '仅作用于本地拉起的浏览器'] },
-				{ k: 'localUserDataDir', kind: 'str', en: ['Local profile dir', 'Empty = managed dir; never point at your daily Chrome profile'], zh: ['本地浏览器 Profile 目录', '留空 = 托管目录；不要指向日常使用的 Chrome 配置'] },
-				{ k: 'legacyEgoToolNames', kind: 'bool', en: ['Also register legacy ego_* tool names', 'For scripts written before the bcdp_* rename; conflicts with the upstream ego-browser plugin'], zh: ['同时注册旧版 ego_* 工具名', '给 bcdp_* 更名前的脚本用；与上游 ego-browser 插件互斥'] },
+			{ gk: 'gBasic', fields: [
+				{ k: 'isolateSpaces', kind: 'bool', lk: 'famIsolate', dk: 'famIsolateDesc' },
+				{ k: 'idleTimeoutMin', kind: 'num', min: 0, max: 1440, step: 1, lk: 'famIdle', dk: 'famIdleDesc' },
+				{ k: 'cdpMode', kind: 'sel', options: ['auto', 'local', 'remote'], lk: 'cdpMode', dk: 'cdpModeDesc' },
+				{ k: 'remoteEnabled', kind: 'bool', lk: 'remoteEnabled', dk: 'remoteEnabledDesc' },
+				{ k: 'allowLocalFallback', kind: 'bool', lk: 'allowLocalFallback', dk: 'allowLocalFallbackDesc' },
+				{ k: 'chromePath', kind: 'str', lk: 'chromePath', dk: 'chromePathDesc' },
+				{ k: 'localHeadless', kind: 'bool', lk: 'localHeadless', dk: 'localHeadlessDesc' },
+				{ k: 'localUserDataDir', kind: 'str', lk: 'localUserDataDir', dk: 'localUserDataDirDesc' },
+				{ k: 'legacyEgoToolNames', kind: 'bool', lk: 'legacyEgoToolNames', dk: 'legacyEgoToolNamesDesc' },
 			] },
-			{ gk: 'gCapture', en: 'Capture & streaming', zh: '截图与推流', fields: [
-				{ k: 'captureBackend', kind: 'sel', options: ['auto', 'cdp', 'ffmpeg'], en: ['Capture backend', 'auto, cdp, or ffmpeg'], zh: ['截取后端', 'auto / cdp / ffmpeg'] },
-				{ k: 'streamProfile', kind: 'sel', options: ['low', 'balanced', 'high'], en: ['Capture quality profile', 'Overall quality preset'], zh: ['画质档位', '整体画质预设'] },
-				{ k: 'cdpFps', kind: 'num', min: 5, max: 30, step: 1, en: ['CDP preview FPS', ''], zh: ['CDP 预览帧率', ''] },
-				{ k: 'cdpQuality', kind: 'num', min: 1, max: 100, step: 1, en: ['CDP JPEG quality', ''], zh: ['CDP JPEG 质量', ''] },
-				{ k: 'cdpMaxWidth', kind: 'num', min: 320, max: 1920, step: 40, en: ['CDP frame max width', ''], zh: ['CDP 帧最大宽度', ''] },
-				{ k: 'cdpBackstopIntervalMs', kind: 'num', min: 1000, max: 10000, step: 100, en: ['CDP recovery interval (ms)', ''], zh: ['CDP 恢复截图间隔（ms）', ''] },
-				{ k: 'ffmpegFps', kind: 'num', min: 5, max: 30, step: 1, en: ['FFmpeg video FPS', ''], zh: ['FFmpeg 视频帧率', ''] },
-				{ k: 'ffmpegMaxWidth', kind: 'num', min: 320, max: 1920, step: 40, en: ['FFmpeg max width', ''], zh: ['FFmpeg 最大宽度', ''] },
-				{ k: 'ffmpegBitrateKbps', kind: 'num', min: 500, max: 20000, step: 250, en: ['FFmpeg bitrate (kbps)', ''], zh: ['FFmpeg 码率（kbps）', ''] },
-				{ k: 'ffmpegEncoder', kind: 'sel', options: ['auto', 'software', 'h264_mf', 'h264_nvenc', 'h264_qsv', 'h264_amf', 'h264_videotoolbox', 'h264_vaapi'], en: ['FFmpeg H.264 encoder', ''], zh: ['FFmpeg H.264 编码器', ''] },
-				{ k: 'ffmpegPath', kind: 'str', en: ['FFmpeg path', 'Empty = detect PATH or managed install'], zh: ['FFmpeg 路径', '留空 = 探测 PATH 或托管安装'] },
-				{ k: 'cursorHud', kind: 'bool', en: ['Draw cursor HUD into screenshots', ''], zh: ['截图绘制光标 HUD', ''] },
-				{ k: 'cursorName', kind: 'str', en: ['Cursor HUD label', ''], zh: ['光标 HUD 名称', ''] },
-				{ k: 'githubMirror', kind: 'str', en: ['GitHub download mirror', 'HTTPS base replacing https://github.com for managed downloads'], zh: ['GitHub 下载镜像', '托管下载时替换 https://github.com 的 HTTPS 前缀'] },
-				{ k: 'runtimeArgs', kind: 'str', en: ['Extra runtime args', 'Appended to the vendored runtime argv; next bcdp_* call'], zh: ['运行时附加参数', '追加到托管运行时 argv；下次 bcdp_* 调用生效'] },
-				{ k: 'chromeArgs', kind: 'str', en: ['Extra Chrome args', 'Appended to the Chrome launch argv; next cold start'], zh: ['Chrome 附加启动参数', '追加到 Chrome 启动 argv；下次冷启动生效'] },
+			{ gk: 'gCapture', fields: [
+				{ k: 'captureBackend', kind: 'sel', options: ['auto', 'cdp', 'ffmpeg'], lk: 'captureBackend', dk: 'captureBackendDesc' },
+				{ k: 'streamProfile', kind: 'sel', options: ['low', 'balanced', 'high'], lk: 'streamProfile', dk: 'streamProfileDesc' },
+				{ k: 'cdpFps', kind: 'num', min: 5, max: 30, step: 1, lk: 'cdpFps' },
+				{ k: 'cdpQuality', kind: 'num', min: 1, max: 100, step: 1, lk: 'cdpQuality' },
+				{ k: 'cdpMaxWidth', kind: 'num', min: 320, max: 1920, step: 40, lk: 'cdpMaxWidth' },
+				{ k: 'cdpBackstopIntervalMs', kind: 'num', min: 1000, max: 10000, step: 100, lk: 'cdpBackstopIntervalMs' },
+				{ k: 'ffmpegFps', kind: 'num', min: 5, max: 30, step: 1, lk: 'ffmpegFps' },
+				{ k: 'ffmpegMaxWidth', kind: 'num', min: 320, max: 1920, step: 40, lk: 'ffmpegMaxWidth' },
+				{ k: 'ffmpegBitrateKbps', kind: 'num', min: 500, max: 20000, step: 250, lk: 'ffmpegBitrateKbps' },
+				{ k: 'ffmpegEncoder', kind: 'sel', options: ['auto', 'software', 'h264_mf', 'h264_nvenc', 'h264_qsv', 'h264_amf', 'h264_videotoolbox', 'h264_vaapi'], lk: 'ffmpegEncoder' },
+				{ k: 'ffmpegPath', kind: 'str', lk: 'ffmpegPath', dk: 'ffmpegPathDesc' },
+				{ k: 'cursorHud', kind: 'bool', lk: 'cursorHud' },
+				{ k: 'cursorName', kind: 'str', lk: 'cursorName' },
+				{ k: 'githubMirror', kind: 'str', lk: 'githubMirror', dk: 'githubMirrorDesc' },
+				{ k: 'runtimeArgs', kind: 'str', lk: 'runtimeArgs', dk: 'runtimeArgsDesc' },
+				{ k: 'chromeArgs', kind: 'str', lk: 'chromeArgs', dk: 'chromeArgsDesc' },
 			] },
-			{ gk: 'gJudge', en: 'Judgement (JEV / Laya)', zh: '评审（JEV / Laya）', fields: [
-				{ k: 'judgePrefer', kind: 'str', en: ['Judge hop order', 'Comma separated; defaults to "laya,rule"'], zh: ['评审跳序', '逗号分隔；默认 "laya,rule"'] },
-				{ k: 'jevUrl', kind: 'str', en: ['JEV base URL', 'Leave empty to skip the jev hop'], zh: ['JEV 基础 URL', '留空 = 跳过 jev 跳'] },
-				{ k: 'jevKey', kind: 'secret', en: ['JEV bearer key', 'Empty = the jev hop is skipped'], zh: ['JEV Bearer Key', '留空 = 跳过 jev 跳'] },
-				{ k: 'jevModel', kind: 'str', en: ['JEV model', ''], zh: ['JEV 模型名', ''] },
-				{ k: 'jevChunkSize', kind: 'num', min: 1, max: 255, step: 1, en: ['JEV candidates per round', ''], zh: ['JEV 每轮候选上限', ''] },
-				{ k: 'jevMaxImageBytes', kind: 'num', min: 0, step: 1024, en: ['JEV frame byte budget (0 = unbounded)', ''], zh: ['JEV 单帧字节预算（0 = 不限）', ''] },
-				{ k: 'jevHistoryLimit', kind: 'num', min: 0, max: 20, step: 1, en: ['JEV recent-step window', ''], zh: ['JEV 近期步数窗口', ''] },
-				{ k: 'jevArchiveImage', kind: 'bool', en: ['Embed screenshot in archived bundle', ''], zh: ['归档包内嵌截图', ''] },
-				{ k: 'jevEvaluate', kind: 'bool', en: ['Evaluate every action with the judge', 'Costs one judgement call per action'], zh: ['每步动作都过评审', '每步多花一次评审调用'] },
-				{ k: 'jevStepBudget', kind: 'num', min: 1, max: 200, step: 1, en: ['Rounds per bcdp_jev_run', ''], zh: ['单次 bcdp_jev_run 轮数上限', ''] },
-				{ k: 'jevWallMs', kind: 'num', min: 1000, max: 3600000, step: 1000, en: ['Wall-clock ceiling per run (ms)', ''], zh: ['单次运行墙钟上限（ms）', ''] },
-				{ k: 'layaUrl', kind: 'str', en: ['Laya base URL', 'The sidecar serves 8000'], zh: ['Laya 基础 URL', 'sidecar 服务 8000 端口'] },
-				{ k: 'layaKey', kind: 'secret', en: ['Laya key (required)', 'Keyless calls are a guaranteed 401'], zh: ['Laya Key（必填）', '无 Key 必然 401'] },
-				{ k: 'layaModel', kind: 'str', en: ['Laya model', ''], zh: ['Laya 模型名', ''] },
+			{ gk: 'gJudge', fields: [
+				{ k: 'judgePrefer', kind: 'str', lk: 'judgePrefer', dk: 'judgePreferDesc' },
+				{ k: 'jevUrl', kind: 'str', lk: 'jevUrl', dk: 'jevUrlDesc' },
+				{ k: 'jevKey', kind: 'secret', lk: 'jevKey', dk: 'jevKeyDesc' },
+				{ k: 'jevModel', kind: 'str', lk: 'jevModel' },
+				{ k: 'jevChunkSize', kind: 'num', min: 1, max: 255, step: 1, lk: 'jevChunkSize' },
+				{ k: 'jevMaxImageBytes', kind: 'num', min: 0, step: 1024, lk: 'jevMaxImageBytes' },
+				{ k: 'jevHistoryLimit', kind: 'num', min: 0, max: 20, step: 1, lk: 'jevHistoryLimit' },
+				{ k: 'jevArchiveImage', kind: 'bool', lk: 'jevArchiveImage' },
+				{ k: 'jevEvaluate', kind: 'bool', lk: 'jevEvaluate', dk: 'jevEvaluateDesc' },
+				{ k: 'jevStepBudget', kind: 'num', min: 1, max: 200, step: 1, lk: 'jevStepBudget' },
+				{ k: 'jevWallMs', kind: 'num', min: 1000, max: 3600000, step: 1000, lk: 'jevWallMs' },
+				{ k: 'layaUrl', kind: 'str', lk: 'layaUrl', dk: 'layaUrlDesc' },
+				{ k: 'layaKey', kind: 'secret', lk: 'layaKey', dk: 'layaKeyDesc' },
+				{ k: 'layaModel', kind: 'str', lk: 'layaModel' },
 			] },
 		]
 
-		// 文案助手：组标题/字段标题与描述（en 兜底，与 wt 同一 locale 源）。
+		// 文案助手：字段标题/描述走 wt（组标题由 FamGroup 直接 wt(group.gk)）。
 		function famText(item, kind) {
-			var pair = _egoLocale === 'zh' ? item.zh : item.en
-			if (kind === 'title') return pair[0]
-			return pair[1] || ''
+			if (kind === 'title') return wt(item.lk)
+			return item.dk ? wt(item.dk) : ''
 		}
 
 		function FamilySettingsCard(props) {
@@ -703,7 +610,7 @@ declare function require(id: string): any
 			var h = React.createElement
 			return h('div', { style: { borderTop: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.25))', paddingTop: '6px' } },
 				h('div', { style: { fontSize: '12px', fontWeight: 600, color: 'var(--dsw-alias-label-secondary, rgba(127,127,127,.9))', padding: '2px 0 4px' } },
-					_egoLocale === 'zh' ? group.zh : group.en),
+					wt(group.gk)),
 				group.fields.map(function (f) { return h(FamField, { key: f.k, f: f, group: group, ...props }) })
 			)
 		}
@@ -789,30 +696,38 @@ declare function require(id: string): any
 			}
 			return h('div', { style: { borderTop: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.25))', paddingTop: '6px' } },
 				h('div', { style: { fontSize: '12px', fontWeight: 600, color: 'var(--dsw-alias-label-secondary, rgba(127,127,127,.9))', padding: '2px 0 4px' } },
-					_egoLocale === 'zh' ? '连接目标（顺序即优先级）' : 'Connection targets (order = priority)'),
+					wt('linksTitle')),
 				links.length === 0
 					? h('div', { style: { fontSize: '12px', color: 'var(--dsw-alias-label-tertiary, rgba(127,127,127,.8))', padding: '4px 0' } },
-						_egoLocale === 'zh' ? '暂无目标 —— 连接序列在 profile 的 cordis.patch.yml links 中维护' : 'No targets — maintain the sequence in the profile cordis.patch.yml links')
+						wt('linksEmpty'))
 					: links.map(function (row, idx) {
 						var label = row.label || row.id || ('#' + idx)
 						var detail = row.kind === 'ego-cli' ? (row.cliPath || '') : (row.endpoint || '')
 						var isActive = row.id !== undefined && row.id === activeId
 						return h('div', { key: row.id || idx, style: { display: 'flex', alignItems: 'center', gap: '8px', padding: '5px 0', flexWrap: 'wrap' } },
 							h('input', { type: 'checkbox', checked: row.enabled === true, disabled: !writable,
-								title: _egoLocale === 'zh' ? '启用' : 'Enabled',
+								title: wt('linksEnabled'),
 								onChange: function (e) { setEnabled(idx, e.target.checked) } }),
 							h('span', { style: { fontSize: '13px', color: 'var(--dsw-alias-label-primary, inherit)' } }, label),
 							h('span', { style: { fontSize: '11px', color: 'var(--dsw-alias-label-tertiary, rgba(127,127,127,.7))', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: '1 1 120px' } }, detail),
 							isActive
-								? h('span', { style: { fontSize: '11px', color: '#30d158', flex: '0 0 auto' } }, _egoLocale === 'zh' ? '已激活' : 'active')
+								? h('span', { style: { fontSize: '11px', color: '#30d158', flex: '0 0 auto' } }, wt('linksActive'))
 								: h('button', { type: 'button', disabled: !writable,
 									style: { font: 'inherit', fontSize: '12px', cursor: writable ? 'pointer' : 'not-allowed', border: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.35))', background: 'none', color: 'var(--dsw-alias-label-primary, inherit)', borderRadius: '8px', padding: '2px 10px', flex: '0 0 auto' },
 									onClick: function () { void scope.set('activeTargetId', row.id) } },
-									_egoLocale === 'zh' ? '激活' : 'activate'))
+									wt('linksActivate')))
 					}))
 		}
 
 		function apply(ctx) {
+		// ── i18n: one register(NS, dictionaries) call activates all nine ────
+		// Guarded: hosts without the locale service keep wt()'s zh/en fallback
+		// (behaviour identical to the pre-i18n build on such hosts).
+		const localeSvc: LocaleLike | undefined = typeof ctx.get === 'function' ? ctx.get('locale') : undefined
+		if (localeSvc !== undefined) {
+			ctx.effect(() => localeSvc.register(NS, dictionaries), 'dsh-browser-cdp: dictionaries')
+			try { _localeBind = localeSvc.bind(NS) } catch (e) { _localeBind = null }
+		}
 		// ── Watch panel: sidebar tab & floating watch ─────────────────────
 		// betterSidebar is an OPTIONAL service and is intentionally absent from
 		// the static inject list (see its declaration above): on hosts without
@@ -1416,7 +1331,7 @@ declare function require(id: string): any
 					// view — otherwise the standing poll snaps it back to live.
 					if (pinned) return
 					if (lastList.length === 0) {
-						setTitle('Agent 浏览器')
+						setTitle(wt('titleIdle'))
 						body.innerHTML = `<div class="dsh-ego-empty">${wt('noActivePages')}<br><span style="font-size:11px;">${wt('noActiveHint')}</span></div>`
 						liveCount = 0
 						fab.classList.remove('dsh-ego-live', 'dsh-ego-busy')

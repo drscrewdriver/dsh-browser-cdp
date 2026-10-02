@@ -6218,7 +6218,7 @@ const IS_WIN = platform() === "win32";
 const STATE_HOME = IS_WIN ? process.env.LOCALAPPDATA || join(HOME, "AppData", "Local") : process.env.XDG_STATE_HOME || join(HOME, ".local", "state");
 const STATE_DIR = process.env.EGO_LINUX_STATE_DIR || join(STATE_HOME, "ego-lite-linux");
 const BROWSER_STATE_FILE = join(STATE_DIR, "browser.json");
-const CAST_STATE_FILE = join(STATE_DIR, "ego-cast.json");
+const CAST_STATE_FILE = join(STATE_DIR, "dsh-browser-cdp.cast.json");
 let castConfig = {
 	captureBackend: "auto",
 	streamProfile: "balanced",

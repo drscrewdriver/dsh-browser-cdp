@@ -1,3 +1,14 @@
+## [0.18.3] - 2026-10-03 — 真机反馈②：点选失败根因修复（与上游插件的状态文件互踩；同 0.17.7 反向同源）
+
+### 修复（根因）
+- **「切换选择元素 → 点选失败」的真凶**：与上游 `dsh-ego-browser` 同机同 profile 安装时，两家 cast worker **共写 `ego-cast.json`**——本插件面板按文件桥接，桥到了上游 worker（无本插件扩展的 `pick`/`marks`/`raise` 路由）→ 404 → 点选失败；流媒体不受影响（上游 worker 也有 watch/stream），故仅点选坏。
+- **修复**：本插件状态文件更名 **`dsh-browser-cdp.cast.json`**（worker 写入端 / cast-server 读取端 / `bcdp_auth_flush` 读取端三处同步），绝不回读共享名——两家各自桥接各自的 worker，真共存。升级即生效：下一次请求自动拉起本插件自己的 worker，上游插件不受影响。
+- **点选失败详情可见**：worker 真实 code/message 挂到工具栏按钮 hover title（悬浮窗 + 侧栏 tab）。
+
+### 验证
+- 复现实证：对远程目标（Linux 有头 Chrome 153）独立起 worker，pick arm 与坐标点选均成功——点选管线健康，问题全在桥接错 worker；
+- `typecheck` 过（client `noImplicitAny`）；689 passed / 11 skipped（+1 状态文件命名空间契约）。
+
 ## [0.18.2] - 2026-10-03 — 真机反馈：本机 Chrome 固定行 + 激活模式同步 + 首行自动激活（同 0.17.6 反向同源）
 
 ### 修复

@@ -1257,6 +1257,8 @@ import { addRow, applyProbe, buildCdpRow, buildCliRow, hasCliLink, isFull, isVal
 					if (pickBtnEl) {
 						pickBtnEl.textContent = pick === 'failed' ? wt('pickFailed') : pick === 'on' ? wt('picking') : wt('pickMode')
 						pickBtnEl.classList.toggle('dsh-ego-pick-on', pick === 'on')
+						// 失败详情（worker 的 code/message）挂到 hover，别再只有一句泛化文案。
+						pickBtnEl.title = pick === 'failed' ? (message || '') : ''
 					}
 				}, function (el: any, a: any) { return deliverPickToConversation(ctx, el, a) })
 				var pickBtnEl: any = null
@@ -3383,7 +3385,7 @@ clearTimeout((panel as any)._dshHideT)
 							h('button', {
 								className: 'dsh-ego-side-back' + (state.pick === 'on' ? ' dsh-ego-pick-on' : ''),
 								type: 'button',
-								title: wt('pickModeHint'),
+								title: state.pick === 'failed' ? (state.message || wt('pickFailed')) : wt('pickModeHint'),
 								onClick: function () { controller.togglePick() },
 							}, state.pick === 'failed' ? wt('pickFailed') : state.pick === 'on' ? wt('picking') : wt('pickMode')),
 							h('button', {

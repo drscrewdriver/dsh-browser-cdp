@@ -1278,7 +1278,7 @@ function registerAuthFlush(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool: T
           try {
             const { readFile } = await import('node:fs/promises')
             // Mirror the ego-cast worker's state-dir discovery so the flush
-            // tool actually finds ego-cast.json on every platform. The worker
+            // tool actually finds the worker's state file on every platform
             // (cast-worker.mjs) uses %LOCALAPPDATA%\ego-lite-linux on Windows
             // and $XDG_STATE_HOME/ego-lite-linux on POSIX; this used to hardcode
             // `$HOME/.local/state` which resolves to a dead path on Windows and
@@ -1294,7 +1294,7 @@ function registerAuthFlush(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool: T
             let port: number | null = null
             try {
               const state = JSON.parse(
-                await readFile(`${stateDir}/ego-cast.json`, 'utf8'),
+                await readFile(`${stateDir}/dsh-browser-cdp.cast.json`, 'utf8'),
               ) as { port?: unknown }
               port = typeof state.port === 'number' ? state.port : null
             } catch {

@@ -1,3 +1,20 @@
+## [0.18.1] - 2026-10-03 — FamLinks v2：连接目标编辑器 + 双设置挂载（自 0.17.5 反向同源移植）
+
+### 新增
+- **连接目标直接在设置里增删改**：family 设置卡的 links 区升级为完整编辑器——每行启用开关、激活、标签/端点/CLI 路径就位编辑（草稿 + onBlur/Enter 提交，绝不每键写盘）、逐行**探测**（`POST /bcdp/api/cdp-probe`，结果写回该行 probe 字段）、上移/下移、删除；底部内联表单添加 CDP 端点 / 本机 ego CLI。
+- **插件详情页设置卡**：同一张 `FamilySettingsCard` 以 keyed 席位注册到 `plugins.bundle.config`（thinking-levels b660785 模式）——不装 thinking-levels 时这是唯一设置入口。
+- **ego CLI 行**：`useSdkPath` 行内开关；`cdpMode=remote` 时行内预警 `mode-kind-mismatch`。
+- 文案：25 个 `links*` 键进内联 zh/en 双语（跟随本线惯例，不引入 9 语字典机制）。
+
+### 行为
+- 与 0.17.5 完全同源：删激活行 = 清空激活不顺延；写前守卫（ego-cli 单例 / `MAX_LINKS=32` / endpoint 轻校验，见 `src/client/fam-links.ts`）与宿主读路径同构；编辑全行展开保 probe 字段；`scope.set` 返回 false 时界面报错。
+
+### 验证
+- `typecheck` 过（本线 client `noImplicitAny`）；
+- 686 passed / 11 skipped（基线 656/11 附近，新增 fam-links 纯函数 + 源码契约测试；9 语 parity 块随 locales 机制留在 0.17.x 线）；
+- `lib/client.js` 133,325 → 149,686 B；
+- 待真机目验：family tab / 插件详情页两处卡片可见可写；增删改激活探测全链路；重启后 `cordis.patch.yml` 落盘存活。
+
 ## [0.18.0] - 2026-09-29 — DSH 0.2.0-rc.1 线（compat/0.2.0：纯元数据适配，零代码改动）
 
 ### 新增

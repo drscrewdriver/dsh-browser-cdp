@@ -1,3 +1,13 @@
+## [0.18.10] - 2026-10-03 — 包装卡改挂官方 dock 缝：与 todo 同级（order 0）、浮在对话区一侧（同 0.17.13 反向同源）
+
+### 变更
+- **包装卡不再是 body 悬浮件**：改注册为 `conversation.input.dock` 列表槽贡献者（`id: 'dsh-browser-cdp.picks'`）——宿主原生渲染，随文档流滚动，fixed/rect/重定位/可见过滤逻辑全部删除。
+- **与 `todo` 同级（`order: 0`）**：带区上沿、todo 面板同位，浮在对话区一侧；**无 `priority` 字段**（独立 cell id，不虚设）。
+- **✕ 撤销**：✕ 从草稿移除对应 CDP-PICKS 块（空输入框不留原文）。
+
+### 验证
+- `typecheck` 过（client `noImplicitAny`）；690 passed / 11 skipped（+1 dock 注册契约）。
+
 ## [0.18.9] - 2026-10-03 — 真机反馈⑦：包装卡定位修正（同 0.17.12 反向同源）
 
 ### 修复

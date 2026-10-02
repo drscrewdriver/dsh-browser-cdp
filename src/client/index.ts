@@ -164,6 +164,7 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 			linksLocalEnableHint: 'Checked = auto mode may fall back to the managed local browser when the activated target is unreachable',
 			pickCardTitle: 'Browser picks',
 			pickCardElements: '{n} element(s) picked',
+			pickCardRemove: 'Remove these picks',
 		}
 		var watchZh = {
 			title: 'CDP 浏览器',
@@ -250,6 +251,7 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 			linksLocalEnableHint: '勾选 = 允许 auto 模式在激活目标不可达时回落本机启动',
 			pickCardTitle: '浏览器点选内容',
 			pickCardElements: '已选 {n} 个元素',
+			pickCardRemove: '移除这段点选',
 		}
 		var watchDict: Record<string, any> = { en: watchEn, zh: watchZh }
 		function wt(key: any, params: any = undefined) {
@@ -1071,7 +1073,7 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 		// the service appears later (dynamic ctx.inject, same pattern as PR #45).
 		mountFamilySettingsCard(ctx)
 		mountPluginsPageCard(ctx)
-		var disposeComposerDecoration = mountComposerDecoration(ctx)
+		mountPicksDockCard(ctx)
 		var betterSidebarService: any
 		try { betterSidebarService = typeof ctx.get === 'function' ? ctx.get('betterSidebar') : undefined } catch (e) { betterSidebarService = undefined }
 		if (betterSidebarService !== undefined) {
@@ -2341,126 +2343,89 @@ clearTimeout((panel as any)._dshHideT)
 		 *   {"cdpEndpoint":..., "targetId":..., "pageUrl":..., "elements":[{n,backendNodeId,tag,id,name,focusable,describe}]}
 		 *   [/CDP-PICKS]
 		 */
-		// M1.7 — composer decoration: the raw CDP-PICKS text block is for the
-		// agent; the human gets a decorated card (🌐 connection + tab + element
-		// chips) floating above the composer. The card lives on document.body
-		// with position:fixed — DOM inserted inside the host's React-managed
-		// composer tree gets reconciled away, and per-host anchoring is fragile.
-		// Rect comes from the composer element ([data-composer-input], with
-		// contenteditable/textarea fallbacks). Diagnostics (devtools console):
-		// window.__dshBrowserCdpDeco { stage, error, anchor, cards, draftLen }.
-		function mountComposerDecoration(ctx: any) {
-			var cards: any[] = []
-			var lastSig = ''
-			var diag = { stage: 'init', error: '', anchor: false, cards: 0, draftLen: -1 }
-			try { (window as any).__dshBrowserCdpDeco = diag } catch (e) {}
-			var CARD_STYLE: Record<string, string> = { position: 'fixed', zIndex: '9998', display: 'grid', gap: '4px', padding: '8px 10px', font: 'inherit', fontSize: '12px', color: 'var(--dsw-alias-label-primary, inherit)', background: 'var(--dsw-alias-bg-surface, rgba(127,127,127,.14))', border: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.35))', borderRadius: '12px', boxShadow: '0 8px 24px rgba(0,0,0,.18)', boxSizing: 'border-box', pointerEvents: 'auto' }
-			var HEAD_STYLE = { display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }
-			var SUB_STYLE = { fontSize: '11px', color: 'var(--dsw-alias-label-tertiary, rgba(127,127,127,.75))', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }
-			var CHIP_STYLE = { display: 'flex', alignItems: 'baseline', gap: '6px', padding: '3px 8px', background: 'var(--dsw-alias-bg-module-platform, rgba(127,127,127,.1))', border: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.22))', borderRadius: '8px', minWidth: 0 }
-			var NUM_STYLE = { fontWeight: 700, flex: '0 0 auto', color: 'var(--dsw-alias-label-tertiary, rgba(127,127,127,.75))' }
-			var TAG_STYLE = { fontWeight: 600, flex: '0 0 auto' }
-			var DESC_STYLE = { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }
-			function hide() {
-				for (var i = 0; i < cards.length; i++) { var el = cards[i]; if (el && el.parentNode) el.parentNode.removeChild(el) }
-				cards = []
-				diag.cards = 0
+		// ── 点选包装卡（conversation.input.dock 贡献者）────────────────────
+		// 宿主把该带区渲染在 composer 卡正上方（随文档流滚动，无 fixed/rect/重
+		// 定位逻辑）。order 1000 = 带区最底部、紧贴输入框（显示位次由 order 升序
+		// 决定）；priority 0 = 独立 cell id，不参与任何同 id 竞争。卡片只在草稿
+		// 含 CDP-PICKS 块时渲染；✕ 从草稿移除对应块（空输入框不留原文）。
+		// 诊断：window.__dshBrowserCdpDeco { stage, blocks, draftLen }。
+		function CdpPicksDockCard(props: any) {
+			var input = props.input
+			var h = React.createElement
+			var tick = React.useState(0)
+			var setTick = tick[1]
+			React.useEffect(function () {
+				var timer = window.setInterval(function () { setTick(function (n: any) { return n + 1 }) }, 1000)
+				return function () { window.clearInterval(timer) }
+			}, [])
+			var snap = input && input.state && input.state.getSnapshot ? input.state.getSnapshot() : null
+			var draft = snap && typeof snap.draft === 'string' ? snap.draft : ''
+			var re = /\[(?:🌐 )?CDP-PICKS page="([^"]*)" targetId="([^"]*)" endpoint="([^"]*)"\]\n([\s\S]*?)\n\[\/CDP-PICKS\]/g
+			var found = [], mm
+			while ((mm = re.exec(draft)) !== null) {
+				var elements: any = []
+				try { var obj = JSON.parse(mm[4]); elements = (obj && obj.elements) || [] } catch (e) {}
+				found.push({ title: mm[1], endpoint: mm[3], elements: elements, block: mm[0] })
 			}
-			function el2(tag: any, style: any, text?: any) {
-				var el = document.createElement(tag)
-				if (style) for (var k in style) el.style[k] = style[k]
-				if (text !== undefined && text !== null && text !== '') el.textContent = String(text)
-				return el
+			try { (window as any).__dshBrowserCdpDeco = { stage: found.length ? 'rendered' : 'no-blocks', blocks: found.length, draftLen: draft.length } } catch (e) {}
+			function removeBlock(block: any) {
+				if (!input || typeof input.setDraft !== 'function') return
+				var idx = draft.indexOf(block)
+				if (idx < 0) return
+				var next = draft.slice(0, idx) + draft.slice(idx + block.length)
+				// 空输入框不留原文：整块移除后把残余空白行一并清掉。
+				next = next.replace(/^\s*\n+/, '').replace(/\n+\s*$/, '')
+				input.setDraft(next)
 			}
-			function composerEl() {
-				// hosts keep hidden composer clones/templates: enumerate every
-				// candidate, keep only VISIBLE rects (real size, on screen), and take
-				// the lowest one — that is the live composer.
-				var selectors = ['[data-composer-input]', '[contenteditable="true"]', 'textarea']
-				for (var s = 0; s < selectors.length; s++) {
-					var list = document.querySelectorAll(selectors[s])
-					var best = null, bestBottom = -1
-					for (var i = 0; i < list.length; i++) {
-						var r = list[i].getBoundingClientRect()
-						if (r.width < 120 || r.height < 32) continue
-						if (r.top > window.innerHeight || r.bottom < 0) continue
-						if (r.bottom > bestBottom) { bestBottom = r.bottom; best = list[i] }
-					}
-					if (best) return best
-				}
-				return null
-			}
-			function render(pageTitle: any, endpoint: any, elements: any) {
-				var comp = composerEl()
-				if (!comp) { diag.stage = 'no-composer'; diag.anchor = false; hide(); return }
-				diag.anchor = true
-				var rect = comp.getBoundingClientRect()
-				hide()
-				var card = document.createElement('div')
-				card.setAttribute('data-dsh-cdp-picks-card', '')
-				var cs = card.style as any; for (var k in CARD_STYLE) cs[k] = CARD_STYLE[k]
-				card.style.left = Math.max(8, rect.left) + 'px'
-				card.style.width = Math.min(Math.max(rect.width, 240), 620) + 'px'
-				card.style.bottom = Math.max(8, window.innerHeight - rect.top + 8) + 'px'
-				card.style.maxHeight = '40vh'
-				card.style.overflowY = 'auto'
-				var head = el2('div', HEAD_STYLE)
-				head.appendChild(el2('span', { fontWeight: 700 }, '🌐 ' + wt('pickCardTitle')))
-				head.appendChild(el2('span', SUB_STYLE, (endpoint || '') + ' · ' + (pageTitle || '')))
-				head.appendChild(el2('span', SUB_STYLE, wt('pickCardElements', { n: elements.length })))
-				card.appendChild(head)
-				var limit = Math.min(elements.length, 6)
-				for (var i = 0; i < limit; i++) {
-					var el = elements[i] || {}
-					var chip = el2('div', CHIP_STYLE)
-					chip.appendChild(el2('span', NUM_STYLE, '#' + (el.n || (i + 1))))
-					chip.appendChild(el2('span', TAG_STYLE, el.tag || '?'))
-					chip.appendChild(el2('span', DESC_STYLE, el.describe || el.name || ''))
-					card.appendChild(chip)
-				}
-				if (elements.length > 6) card.appendChild(el2('div', SUB_STYLE, '… +' + (elements.length - 6)))
-				document.body.appendChild(card)
-				cards.push(card)
-				diag.cards = cards.length
-				diag.stage = 'rendered'
-			}
-			function tick() {
-				diag.stage = 'tick'
-				try {
-					var sid = currentSessionId(ctx.sessions.list.getSnapshot())
-					if (!sid) { diag.stage = 'no-session'; if (lastSig !== '') { lastSig = ''; hide() } return }
-					var conversation = ctx.get('conversation')
-					if (!conversation || !conversation.input) { diag.stage = 'no-conversation'; return }
-					var actx = ctx.sessions.scope(sid)
-					if (!actx) { diag.stage = 'no-scope'; return }
-					var input = conversation.input.for(actx)
-					var snap = input && input.state && input.state.getSnapshot ? input.state.getSnapshot() : null
-					var draft = snap && typeof snap.draft === 'string' ? snap.draft : ''
-					diag.draftLen = draft.length
-					if (draft === lastSig) { diag.stage = 'same-draft'; return }
-					lastSig = draft
-					var re = /\[(?:🌐 )?CDP-PICKS page="([^"]*)" targetId="([^"]*)" endpoint="([^"]*)"\]\n([\s\S]*?)\n\[\/CDP-PICKS\]/g
-					var found = [], mm
-					while ((mm = re.exec(draft)) !== null) {
-						var elements = []
-						try { var obj = JSON.parse(mm[4]); elements = (obj && obj.elements) || [] } catch (e) {}
-						found.push({ title: mm[1], endpoint: mm[3], elements: elements })
-					}
-					if (found.length === 0) { diag.stage = 'no-blocks'; hide(); return }
-					for (var i = 0; i < found.length; i++) render(found[i].title, found[i].endpoint, found[i].elements)
-				} catch (e) {
-					diag.stage = 'error'
-					diag.error = String((e && e.message) || e)
-				}
-			}
-			var timer = window.setInterval(tick, 1000)
-			tick()
-			return function () {
-				window.clearInterval(timer)
-				hide()
-			}
+			var cardStyle: any = { display: 'grid', gap: '4px', padding: '8px 10px', font: 'inherit', fontSize: '12px', color: 'var(--dsw-alias-label-primary, inherit)', background: 'var(--dsw-alias-bg-surface, rgba(127,127,127,.14))', border: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.35))', borderRadius: '12px', boxSizing: 'border-box' }
+			var headStyle: any = { display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }
+			var subStyle: any = { fontSize: '11px', color: 'var(--dsw-alias-label-tertiary, rgba(127,127,127,.75))', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }
+			var chipStyle: any = { display: 'flex', alignItems: 'baseline', gap: '6px', padding: '3px 8px', background: 'var(--dsw-alias-bg-module-platform, rgba(127,127,127,.1))', border: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.22))', borderRadius: '8px', minWidth: 0 }
+			var numStyle: any = { fontWeight: 700, flex: '0 0 auto', color: 'var(--dsw-alias-label-tertiary, rgba(127,127,127,.75))' }
+			var tagStyle: any = { fontWeight: 600, flex: '0 0 auto' }
+			var descStyle: any = { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }
+			var closeStyle: any = { marginLeft: 'auto', flex: '0 0 auto', font: 'inherit', fontSize: '12px', cursor: 'pointer', border: 'none', background: 'none', color: 'var(--dsw-alias-label-tertiary, rgba(127,127,127,.75))', padding: '0 2px' }
+			return h('div', { style: { display: 'grid', gap: '6px' } }, found.map(function (f: any) {
+				var head = h('div', { style: headStyle },
+					h('span', { style: { fontWeight: 700 } }, '🌐 ' + wt('pickCardTitle')),
+					h('span', { style: subStyle }, (f.endpoint || '') + ' · ' + (f.title || '')),
+					h('span', { style: subStyle }, wt('pickCardElements', { n: f.elements.length })),
+					h('button', { type: 'button', title: wt('pickCardRemove'), style: closeStyle, onClick: function () { removeBlock(f.block) } }, '✕'))
+				var chips = f.elements.slice(0, 6).map(function (el: any) {
+					return h('div', { key: el.n, style: chipStyle },
+						h('span', { style: numStyle }, '#' + (el.n || '')),
+						h('span', { style: tagStyle }, el.tag || '?'),
+						h('span', { style: descStyle }, el.describe || el.name || ''))
+				})
+				if (f.elements.length > 6) chips.push(h('div', { style: subStyle }, '… +' + (f.elements.length - 6)))
+				return h('div', { key: f.targetId + ':' + f.endpoint, style: cardStyle }, head, chips)
+			 }))
 		}
-
+		
+		// 注册：order 1000 = dock 带区最底部、紧贴 composer 卡（该带区显示位次由
+		// order 升序决定，1000 高于全部已知贡献者：todo 0 / queue 20 / perm-gate
+		// 30）；priority 0 = 独立 cell id。dsh-input-traffic 同款缝，0.1.5-rc.1 →
+		// 0.2.0-rc.2 全宿主 tarball 验证。inject 工厂按会话拿到 input 门面。
+		function mountPicksDockCard(ctx: any) {
+			ctx.slots.inject('conversation.input.dock', function () {
+				return ctx.slots.register({
+					name: 'conversation.input.dock',
+					id: 'dsh-browser-cdp.picks',
+					// 与 todo 同级（order 0）：dock 带区按 order 升序排、0 最远离 composer
+					// 卡——包装卡要的就是这个"浮起来"的位置；独立 cell id，无 priority。
+					order: 0,
+					inject: function (sessionId: any) {
+						var input: any = null
+						try {
+							var actx = ctx.sessions.scope(sessionId)
+							var conversation = actx.get('conversation')
+							input = conversation.input.for(actx)
+						} catch (e) { input = null }
+						return { input: input }
+					},
+				}, CdpPicksDockCard)
+			}, 'dsh-browser-cdp: picks dock card')
+		}
 		// 「当前会话」推导：宿主在 0.1.6-alpha.2（6830e1460d）把 list 快照的
 		// `current` 字段删掉了（契约注释 "navigation belongs to view owners"），
 		// 现行推导 = 扫 byId 找 retainedBy.mainView > 0 的行——与宿主侧边栏同款

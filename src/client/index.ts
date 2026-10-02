@@ -2327,8 +2327,8 @@ clearTimeout((panel as any)._dshHideT)
 				if (!conversation || !conversation.input) return { ok: false, code: 'no-conversation-service' }
 				var input = conversation.input.for(actx)
 				if (!input || typeof input.setDraft !== 'function') return { ok: false, code: 'no-input-facade' }
-				var snap = input.state && input.state.getSnapshot ? input.state.getSnapshot() : null
-				var draft = snap && typeof snap.draft === 'string' ? snap.draft : ''
+				var draft = readDraftText(input)
+
 				var src = element.source || { endpoint: '', targetId: '', pageUrl: '', pageTitle: '' }
 				var entry: any = {
 					backendNodeId: element.backendNodeId,

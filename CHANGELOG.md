@@ -44,6 +44,15 @@
 ### 修复
 - `makeWhich` 的路径分隔符与 PATH 分隔符改为跟随**被模拟的平台**（原用 `node:path` 的宿主值，darwin/linux 查找在 Windows 上会拼成 `dir\file` 而永远找不到）。
 
+## [0.17.15] - 2026-10-03 — 草稿读取修复：活值在 `input.draft` 门面字段（用户诊断实锤）
+
+### 修复（根因）
+- 用户控制台回报 `__dshBrowserCdpDeco = { stage:'no-blocks', blocks:0, draftLen:0 }`——composer 可见有块，读到的草稿却是空。根因：0.1.7-rc.1+ 的 input 门面把 Lexical 编辑器的文本真值暴露为 **`input.draft`**（facade `readonly draft: string`），而 `input.state.getSnapshot()` 是 InputState 组合快照（phase/queue/notices/projections），**没有 draft 字段**——0.17.9 起的包装卡读取、同页合并读取、✕ 移除读取全部恒得空串（上一发 0.17.14 诊断版的正则放宽治不了这个）。
+- **修复**：新增 `readDraftText(input)` 兼容读（门面 `draft` 字段优先，旧式 state 快照兜底），包装卡轮询 / ✕ 移除（现取实时值）/ 投递合并 三处全部改走该读。
+
+### 验证
+- `typecheck` 过（9 语键集门）；693 passed / 11 skipped。
+
 ## [0.17.14] - 2026-10-03 — 包装卡定位诊断补丁（registry 暂存延迟期间的定位手段）
 
 ### 变更

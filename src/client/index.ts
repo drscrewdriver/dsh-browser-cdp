@@ -155,6 +155,9 @@ import { addRow, applyProbe, buildCdpRow, buildCliRow, hasCliLink, isFull, isVal
 			linksCliRemoteWarn: 'Activating an ego CLI link under cdpMode=remote fails with mode-kind-mismatch',
 			linksCliSdk: 'Use bundled harness',
 			linksDisabledHint: 'Disabled — enable it before activating',
+			linksActivate: 'activate',
+			linksLocalRow: 'Local Chrome (managed)',
+			linksLocalEnableHint: 'Checked = auto mode may fall back to the managed local browser when the activated target is unreachable',
 		}
 		var watchZh = {
 			title: 'CDP 浏览器',
@@ -236,6 +239,9 @@ import { addRow, applyProbe, buildCdpRow, buildCliRow, hasCliLink, isFull, isVal
 			linksCliRemoteWarn: 'cdpMode=remote 时激活 ego CLI 会报 mode-kind-mismatch',
 			linksCliSdk: '使用内置 harness',
 			linksDisabledHint: '已停用——先勾选启用才能激活',
+			linksActivate: '激活',
+			linksLocalRow: '本机 Chrome（受管启动）',
+			linksLocalEnableHint: '勾选 = 允许 auto 模式在激活目标不可达时回落本机启动',
 		}
 		var watchDict: Record<string, any> = { en: watchEn, zh: watchZh }
 		function wt(key: any, params: any = undefined) {
@@ -905,12 +911,20 @@ import { addRow, applyProbe, buildCdpRow, buildCliRow, hasCliLink, isFull, isVal
 				var res = addRow(links, buildCdpRow({ label: addLabel, endpoint: addEndpoint }))
 				if (res.code) { setErrText(res.code === 'link-limit-reached' ? limitText() : wt('linksEndpointInvalid')); return }
 				writeLinks(res.links)
+				if (activeId === '') {
+					// 空序列的第一个目标入列即激活（无歧义）；后续行保持不自动激活。
+					void scope.set('activeTargetId', res.links[res.links.length - 1].id)
+				}
 				setAddLabel(''); setAddEndpoint(''); setErrText('')
 			}
 			function addCli() {
 				var res = addRow(links, buildCliRow({ label: '', cliPath: addCliPath }))
 				if (res.code) { setErrText(res.code === 'link-limit-reached' ? limitText() : wt('linksAddCliExists')); return }
 				writeLinks(res.links)
+				if (activeId === '') {
+					// 空序列的第一个目标入列即激活（无歧义）；后续行保持不自动激活。
+					void scope.set('activeTargetId', res.links[res.links.length - 1].id)
+				}
 				setAddCliPath(''); setErrText('')
 			}
 			function removeOne(row: any) {
@@ -937,6 +951,22 @@ import { addRow, applyProbe, buildCdpRow, buildCliRow, hasCliLink, isFull, isVal
 					})
 					.then(function () { setProbingId('') })
 			}
+			// 受管本机浏览器固定行（LOCAL）：显性化本地唤起——激活 = cdpMode=local，
+			// 勾选 = allowLocalFallback（auto 回落许可）。固定列在序列末尾，不可
+			// 删除/排序，也无探测（本地未启动就没有端点）。
+			var localActive = cdpMode === 'local'
+			var localRow = h('div', { key: 'fam-links-local', style: { borderTop: '1px dashed var(--dsw-alias-border-l2, rgba(127,127,127,.18))', padding: '6px 0', display: 'grid', gap: '4px' } },
+				h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
+					h('input', { type: 'checkbox', checked: value.allowLocalFallback === true, disabled: !writable,
+						title: wt('linksLocalEnableHint'),
+						onChange: function (e: any) { void scope.set('allowLocalFallback', e.target.checked) } }),
+					h('span', { style: badgeStyle }, 'LOCAL'),
+					h('span', { style: { fontSize: '13px', color: 'var(--dsw-alias-label-primary, inherit)', flex: '1 1 120px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, wt('linksLocalRow')),
+					localActive
+						? h('span', { style: { fontSize: '11px', color: '#30d158', flex: '0 0 auto' } }, wt('linksActive'))
+						: h('button', { type: 'button', disabled: !writable, style: btnStyle,
+							onClick: function () { void scope.set('cdpMode', 'local') } },
+							wt('linksActivate'))))
 			return h('div', { style: { borderTop: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.25))', paddingTop: '6px', display: 'grid', gap: '4px' } },
 				h('div', { style: { fontSize: '12px', fontWeight: 600, color: 'var(--dsw-alias-label-secondary, rgba(127,127,127,.9))', padding: '2px 0 4px' } },
 					wt('linksTitle')),
@@ -966,7 +996,11 @@ import { addRow, applyProbe, buildCdpRow, buildCliRow, hasCliLink, isFull, isVal
 									? h('span', { style: { fontSize: '11px', color: '#30d158', flex: '0 0 auto' } }, wt('linksActive'))
 									: h('button', { type: 'button', disabled: !writable || row.enabled === false,
 										title: row.enabled === false ? wt('linksDisabledHint') : undefined, style: btnStyle,
-										onClick: function () { void scope.set('activeTargetId', row.id) } },
+										onClick: function () {
+											void scope.set('activeTargetId', row.id)
+											// 从受管本地切回目标序列：local 模式无视激活项，不同步模式就是点了没反应。
+											if (cdpMode === 'local') { void scope.set('cdpMode', 'auto') }
+										} },
 										wt('linksActivate'))),
 							h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
 								h(FamRowInput, { v: (isCli ? row.cliPath : row.endpoint) || '', writable: writable,
@@ -994,6 +1028,7 @@ import { addRow, applyProbe, buildCdpRow, buildCliRow, hasCliLink, isFull, isVal
 									? h('span', { style: { fontSize: '11px', color: '#ff9f0a', flex: '1 1 100%' } }, wt('linksCliRemoteWarn'))
 									: null))
 					}),
+				localRow,
 				h('div', { style: { display: 'grid', gap: '6px', paddingTop: '4px' } },
 					h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' } },
 						h('input', { type: 'text', value: addLabel, disabled: !writable || isFull(links), placeholder: wt('linksLabel'),

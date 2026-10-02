@@ -169,6 +169,8 @@ export const zh = {
   'linksDisabledHint': "已停用——先勾选启用才能激活",
   'linksLocalRow': "本机 Chrome（受管启动）",
   'linksLocalEnableHint': "勾选 = 允许 auto 模式在激活目标不可达时回落本机启动",
+  'pickCardTitle': "浏览器点选内容",
+  'pickCardElements': "已选 {n} 个元素",
   'linksActivate': '激活',
 }
 
@@ -321,6 +323,8 @@ export const en: Record<CdpKey, string> = {
   'linksDisabledHint': "Disabled — enable it before activating",
   'linksLocalRow': "Local Chrome (managed)",
   'linksLocalEnableHint': "Checked = auto mode may fall back to the managed local browser when the activated target is unreachable",
+  'pickCardTitle': "Browser picks",
+  'pickCardElements': "{n} element(s) picked",
   'linksActivate': 'activate',
 }
 
@@ -470,6 +474,8 @@ export const ja: Record<CdpKey, string> = {
   'linksDisabledHint': "無効 — アクティブ化する前に有効化してください",
   'linksLocalRow': "ローカル Chrome（管理起動）",
   'linksLocalEnableHint': "チェック = アクティブなターゲットに到達できない場合、auto モードはローカル起動にフォールバックします",
+  'pickCardTitle': "ブラウザ選択内容",
+  'pickCardElements': "{n} 個の要素を選択",
   'linksActivate': 'アクティブ化',
 }
 
@@ -619,6 +625,8 @@ export const ko: Record<CdpKey, string> = {
   'linksDisabledHint': "비활성 — 활성화하기 전에 사용으로 설정하세요",
   'linksLocalRow': "로컬 Chrome(관리 시작)",
   'linksLocalEnableHint': "체크 = 활성 대상에 도달할 수 없을 때 auto 모드가 로컬 시작으로 대체됩니다",
+  'pickCardTitle': "브라우저 선택 내용",
+  'pickCardElements': "{n}개 요소 선택됨",
   'linksActivate': '활성화',
 }
 
@@ -768,6 +776,8 @@ export const fr: Record<CdpKey, string> = {
   'linksDisabledHint': "Désactivé — activez-le avant de le rendre actif",
   'linksLocalRow': "Chrome local (gestionné)",
   'linksLocalEnableHint': "Coché = le mode auto peut basculer vers le navigateur local si la cible activée est injoignable",
+  'pickCardTitle': "Sélections du navigateur",
+  'pickCardElements': "{n} élément(s) sélectionné(s)",
   'linksActivate': 'activer',
 }
 
@@ -917,6 +927,8 @@ export const de: Record<CdpKey, string> = {
   'linksDisabledHint': "Deaktiviert — erst aktivieren, dann aktiv schalten",
   'linksLocalRow': "Lokales Chrome (verwaltet)",
   'linksLocalEnableHint': "Aktiviert = der Auto-Modus darf auf den verwalteten lokalen Browser ausweichen, wenn das aktivierte Ziel nicht erreichbar ist",
+  'pickCardTitle': "Browser-Auswahlen",
+  'pickCardElements': "{n} Element(e) ausgewählt",
   'linksActivate': 'aktivieren',
 }
 
@@ -1066,6 +1078,8 @@ export const it: Record<CdpKey, string> = {
   'linksDisabledHint': "Disabilitato — abilitalo prima di attivarlo",
   'linksLocalRow': "Chrome locale (gestito)",
   'linksLocalEnableHint': "Selezionato = la modalità auto può ripiegare sul browser locale gestito se la destinazione attiva è irraggiungibile",
+  'pickCardTitle': "Selezioni del browser",
+  'pickCardElements': "{n} elemento/i selezionato/i",
   'linksActivate': 'attiva',
 }
 
@@ -1215,6 +1229,8 @@ export const ru: Record<CdpKey, string> = {
   'linksDisabledHint': "Отключено — сначала включите, затем активируйте",
   'linksLocalRow': "Локальный Chrome (управляемый)",
   'linksLocalEnableHint': "Отмечено = режим auto может откатиться на управляемый локальный браузер, если активная цель недоступна",
+  'pickCardTitle': "Выбранное в браузере",
+  'pickCardElements': "Выбрано элементов: {n}",
   'linksActivate': 'активировать',
 }
 
@@ -1364,6 +1380,8 @@ export const es: Record<CdpKey, string> = {
   'linksDisabledHint': "Desactivado — actívalo antes de activarlo",
   'linksLocalRow': "Chrome local (gestionado)",
   'linksLocalEnableHint': "Marcado = el modo auto puede replegarse al navegador local gestionado si el destino activo no responde",
+  'pickCardTitle': "Selecciones del navegador",
+  'pickCardElements': "{n} elemento(s) seleccionado(s)",
   'linksActivate': 'activar',
 }
 

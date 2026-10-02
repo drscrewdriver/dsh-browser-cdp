@@ -44,6 +44,18 @@
 ### 修复
 - `makeWhich` 的路径分隔符与 PATH 分隔符改为跟随**被模拟的平台**（原用 `node:path` 的宿主值，darwin/linux 查找在 Windows 上会拼成 `dir\file` 而永远找不到）。
 
+## [0.17.10] - 2026-10-03 — 真机反馈⑤：包装卡渲染重写（body 固定定位 + 可诊断）
+
+### 修复
+- **0.17.9 的包装卡真机上未出现**：原实现把卡片**插进 composer 的宿主 React 管理容器**（会被协调回收/锚点脆弱），且 tick 的守卫把一切失败静默吞掉。重写：
+  - 卡片改挂 **`document.body` + `position:fixed`**（位置按 composer 矩形计算，绝不进入宿主管理的 DOM 子树）；
+  - composer 矩形取**三级回退**：`[data-composer-input]` → `[contenteditable="true"]` → `textarea`；
+  - **可诊断**：`window.__dshBrowserCdpDeco`（`stage`/`error`/`anchor`/`cards`/`draftLen`）——控制台一看便知卡在哪一级（`no-composer`/`no-session`/`rendered`…）；
+  - 补齐遗漏的字典键 `pickCardTitle` / `pickCardElements` ×9 语（0.17.9 的 CHANGELOG 声称已加，实际未落——卡片此前即使渲染也会显示裸键名）。
+
+### 验证
+- `typecheck` 过（9 语键集门）；692 passed / 11 skipped。
+
 ## [0.17.9] - 2026-10-03 — 真机反馈④：点选内容包装卡（composer 装饰）+ 同页合并正则修复
 
 ### 新增

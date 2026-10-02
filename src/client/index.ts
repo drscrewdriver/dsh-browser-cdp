@@ -2200,7 +2200,7 @@ clearTimeout((panel as any)._dshHideT)
 		// 定位逻辑）。order 1000 = 带区最底部、紧贴输入框（显示位次由 order 升序
 		// 决定）；priority 0 = 独立 cell id，不参与任何同 id 竞争。卡片只在草稿
 		// 含 CDP-PICKS 块时渲染；✕ 从草稿移除对应块（空输入框不留原文）。
-		// 诊断：window.__dshBrowserCdpDeco { stage, blocks, draftLen }。
+		// 诊断：(window as any).__dshBrowserCdpDeco { stage, blocks, draftLen }。
 		function CdpPicksDockCard(props) {
 			var input = props.input
 			var h = React.createElement
@@ -2212,7 +2212,7 @@ clearTimeout((panel as any)._dshHideT)
 			}, [])
 			var snap = input && input.state && input.state.getSnapshot ? input.state.getSnapshot() : null
 			var draft = snap && typeof snap.draft === 'string' ? snap.draft : ''
-			var re = /\[(?:🌐 )?CDP-PICKS page="([^"]*)" targetId="([^"]*)" endpoint="([^"]*)"\]\n([\s\S]*?)\n\[\/CDP-PICKS\]/g
+			var re = /\[(?:🌐 )?CDP-PICKS\s+page="([^"]*)"\s+targetId="([^"]*)"\s+endpoint="([^"]*)"\]\n([\s\S]*?)\n\[\/CDP-PICKS\]/g
 			var found = [], mm
 			while ((mm = re.exec(draft)) !== null) {
 				var elements = []
@@ -2259,10 +2259,14 @@ clearTimeout((panel as any)._dshHideT)
 		// 30）；priority 0 = 独立 cell id。dsh-input-traffic 同款缝，0.1.5-rc.1 →
 		// 0.2.0-rc.2 全宿主 tarball 验证。inject 工厂按会话拿到 input 门面。
 		function mountPicksDockCard(ctx) {
+			try {
+				(window as any).__dshBrowserCdpDeco = Object.assign({}, (window as any).__dshBrowserCdpDeco, { stage: 'registered' })
+			} catch (e) {}
 			ctx.slots.inject('conversation.input.dock', function () {
 				return ctx.slots.register({
 					name: 'conversation.input.dock',
 					id: 'dsh-browser-cdp.picks',
+					locale: 'dsh-browser-cdp',
 					// 与 todo 同级（order 0）：dock 带区按 order 升序排、0 最远离 composer
 					// 卡——包装卡要的就是这个"浮起来"的位置；独立 cell id，无 priority。
 					order: 0,
@@ -2272,7 +2276,10 @@ clearTimeout((panel as any)._dshHideT)
 							var actx = ctx.sessions.scope(sessionId)
 							var conversation = actx.get('conversation')
 							input = conversation.input.for(actx)
-						} catch (e) { input = null }
+						} catch (e) {
+							input = null
+							try { (window as any).__dshBrowserCdpDeco = Object.assign({}, (window as any).__dshBrowserCdpDeco, { stage: 'inject-failed', error: String((e && e.message) || e), sessionId: String(sessionId) }) } catch (e2) {}
+						}
 						return { input: input }
 					},
 				}, CdpPicksDockCard)

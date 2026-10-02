@@ -44,6 +44,15 @@
 ### 修复
 - `makeWhich` 的路径分隔符与 PATH 分隔符改为跟随**被模拟的平台**（原用 `node:path` 的宿主值，darwin/linux 查找在 Windows 上会拼成 `dir\file` 而永远找不到）。
 
+## [0.17.14] - 2026-10-03 — 包装卡定位诊断补丁（registry 暂存延迟期间的定位手段）
+
+### 变更
+- dock 注册补 `locale: 'dsh-browser-cdp'`（对齐官方 queue 贡献者形状）+ 注册即写 `__dshBrowserCdpDeco.stage='registered'`、inject 工厂失败记录 `inject-failed` + sessionId；
+- **点选卡片正则放宽**：头行属性间允许任意空白（含换行）——composer 对长行折行/归一化的形态不再漏配。
+
+### 验证
+- `typecheck` 过；693 passed / 11 skipped。
+
 ## [0.17.13] - 2026-10-03 — 包装卡改挂官方 dock 缝：与 todo 同级（order 0）、浮在对话区一侧
 
 ### 变更

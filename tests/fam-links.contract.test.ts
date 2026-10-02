@@ -74,4 +74,8 @@ describe("FamLinks v2 write discipline (source contracts)", () => {
     expect(workerTs).not.toMatch(/['"]ego-cast\.json['"]/);
     expect(castServer).not.toMatch(/['"]ego-cast\.json['"]/);
   });
+  it("pick delivery derives the current session the host's way (list.current was removed in 0.1.6-alpha.2)", () => {
+    expect(source).toMatch(/retainedBy\.mainView/);
+    expect(source).not.toMatch(/getSnapshot\(\)\.current/);
+  });
 });

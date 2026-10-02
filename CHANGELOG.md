@@ -1,3 +1,13 @@
+## [0.18.4] - 2026-10-03 — 真机反馈③：点选投递到输入框修复（同 0.17.8 反向同源）
+
+### 修复（根因）
+- **「引用到对话后输入框无变化」**：投递函数读 `sessions.list.getSnapshot().current`——宿主 0.1.6-alpha.2 起删除该字段，0.1.7/0.2.0 上恒 `undefined` → 静默 `no-active-session` → 草稿未写入（与 `dsh-arrowkey-nav` 同款破坏点；0.16.x 线不受影响，故只在 0.1.7/0.2.0 宿主上显现）。
+- **修复**：按宿主现行推导取当前会话（`byId` 扫 `retainedBy.mainView > 0`，与宿主侧边栏同款）；`sessions.scope(id)` 与 `conversation.input.setDraft` 在 0.2.0 宿主源码逐环验证健在。
+- **投递块头行加 🌐 标识**（`[🌐 CDP-PICKS …]`）：一眼可辨浏览器来源；块体保持纯 JSON。composer 的文件 chip 是 `ui-attachment` 闭合系统、无第三方注册缝——chip 化留作宿主侧 feature 请求。
+
+### 验证
+- `typecheck` 过（client `noImplicitAny`）；690 passed / 11 skipped（+1 契约）。
+
 ## [0.18.3] - 2026-10-03 — 真机反馈②：点选失败根因修复（与上游插件的状态文件互踩；同 0.17.7 反向同源）
 
 ### 修复（根因）

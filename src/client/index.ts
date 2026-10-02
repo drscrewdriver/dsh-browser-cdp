@@ -2332,12 +2332,31 @@ clearTimeout((panel as any)._dshHideT)
 		 *   {"cdpEndpoint":..., "targetId":..., "pageUrl":..., "elements":[{n,backendNodeId,tag,id,name,focusable,describe}]}
 		 *   [/CDP-PICKS]
 		 */
+		// 「当前会话」推导：宿主在 0.1.6-alpha.2（6830e1460d）把 list 快照的
+		// `current` 字段删掉了（契约注释 "navigation belongs to view owners"），
+		// 现行推导 = 扫 byId 找 retainedBy.mainView > 0 的行——与宿主侧边栏同款
+		// （ui-workspace tree.ts:40）。≤0.1.6 快照仍有 current，兼容读取放最前。
+		// （dsh-arrowkey-nav 同款破坏点：点选投递一直读 current，在 0.1.7/0.2.0
+		// 上恒 undefined → no-active-session → 输入框无变化。）
+		function currentSessionId(list: any) {
+			if (!list || typeof list !== 'object') return ''
+			if (typeof list.current === 'string') return list.current
+			var byId = list.byId
+			if (!byId || typeof byId !== 'object') return ''
+			var ids = Object.keys(byId)
+			for (var i = 0; i < ids.length; i++) {
+				var row = byId[ids[i]]
+				if (row && row.retainedBy && ((row.retainedBy.mainView ?? 0) > 0)) return ids[i]
+			}
+			return ''
+		}
+
 		function deliverPickToConversation(ctx: any, element: any, action: any) {
 			try {
 				var describe = element && typeof element.describe === 'string' ? element.describe : ''
 				if (describe === '') return { ok: false, code: 'empty-describe' }
 				if (action !== 'quote') return { ok: false, code: 'bad-action' }
-				var sessionId = ctx.sessions.list.getSnapshot().current
+				var sessionId = currentSessionId(ctx.sessions.list.getSnapshot())
 				if (!sessionId) return { ok: false, code: 'no-active-session' }
 				var actx = ctx.sessions.scope(sessionId)
 				if (!actx) return { ok: false, code: 'no-session-scope' }
@@ -2379,7 +2398,7 @@ clearTimeout((panel as any)._dshHideT)
 					} catch (e) { /* rebuild fresh */ }
 				}
 				if (!page.elements) page.elements = elements
-				var headerLine = '[CDP-PICKS page="' + String(src.pageTitle || src.pageUrl || '').replace(/"/g, "'") + '" targetId="' + src.targetId + '" endpoint="' + src.endpoint + '"]'
+				var headerLine = '[🌐 CDP-PICKS page="' + String(src.pageTitle || src.pageUrl || '').replace(/"/g, "'") + '" targetId="' + src.targetId + '" endpoint="' + src.endpoint + '"]'
 				var block = headerLine + '\n' + JSON.stringify(page, null, 2) + '\n[/CDP-PICKS]'
 				draft = draft ? draft + (draft.charAt(draft.length - 1) === '\n' ? '' : '\n') + block : block
 				input.setDraft(draft)

@@ -1,6 +1,8 @@
 /** Injected by the DSH ModuleLoader factory wrapper (tsdown banner). */
 declare function require(id: string): any
 
+import { addRow, applyProbe, buildCdpRow, buildCliRow, hasCliLink, isFull, isValidEndpoint, MAX_LINKS, moveRow, removeRow, updateRow } from './fam-links'
+
 		// #region CDP browser bridge client: realtime watch-bubble
 		//
 		// A floating "watch" bubble (bottom-right) plus an expandable overlay
@@ -128,6 +130,31 @@ declare function require(id: string): any
 			famIsolateDesc: 'Off = persistent profile (logins survive restarts); on = isolated sandbox',
 			famIdle: 'Auto-stop idle browser (minutes, 0 = off)',
 			famIdleDesc: 'Stops the backing browser after N minutes without a bcdp_* call; relaunches on demand',
+			linksTitle: 'Connection targets (order = priority)',
+			linksEmpty: 'No targets yet — add the first one with the form below',
+			linksEnabled: 'Enabled',
+			linksActive: 'active',
+			linksAddCdp: 'Add CDP endpoint',
+			linksAddCli: 'Add local ego CLI',
+			linksAddCliExists: 'The local ego CLI link already exists — local-only, one per machine',
+			linksEndpoint: 'Endpoint',
+			linksEndpointHint: 'http(s)://host:port or ws(s)://…',
+			linksEndpointInvalid: 'Invalid endpoint — not saved',
+			linksCliPath: 'ego CLI path',
+			linksCliPathHint: 'Empty = auto-detect (PATH → app bundle → bundled runtime)',
+			linksLabel: 'Label',
+			linksRemove: 'Remove',
+			linksMoveUp: 'Move up',
+			linksMoveDown: 'Move down',
+			linksProbe: 'Probe',
+			linksProbing: 'Probing…',
+			linksProbeOk: 'reachable',
+			linksProbeFail: 'unreachable',
+			linksLimitReached: 'The sequence is capped at {n} entries',
+			linksWriteFailed: 'Save failed — the settings layer rejected this write',
+			linksCliRemoteWarn: 'Activating an ego CLI link under cdpMode=remote fails with mode-kind-mismatch',
+			linksCliSdk: 'Use bundled harness',
+			linksDisabledHint: 'Disabled — enable it before activating',
 		}
 		var watchZh = {
 			title: 'CDP 浏览器',
@@ -184,6 +211,31 @@ declare function require(id: string): any
 			famIsolateDesc: '关 = 持久化配置（重启保留登录态）；开 = 每次隔离沙箱',
 			famIdle: '空闲自动停止（分钟，0 = 不停）',
 			famIdleDesc: '超过 N 分钟没有 bcdp_* 调用即停止后台浏览器，下次调用按需重启',
+			linksTitle: '连接目标（顺序即优先级）',
+			linksEmpty: '暂无目标——用下方表单添加第一个连接目标',
+			linksEnabled: '启用',
+			linksActive: '已激活',
+			linksAddCdp: '添加 CDP 端点',
+			linksAddCli: '添加本机 ego CLI',
+			linksAddCliExists: '本机 ego CLI 连接已存在——仅限本机，一台机器只允许一条',
+			linksEndpoint: '端点',
+			linksEndpointHint: 'http(s)://主机:端口 或 ws(s)://…',
+			linksEndpointInvalid: '端点无效，未保存',
+			linksCliPath: 'ego CLI 路径',
+			linksCliPathHint: '留空 = 自动检测（PATH → 应用包 → 内置运行时）',
+			linksLabel: '标签',
+			linksRemove: '删除',
+			linksMoveUp: '上移',
+			linksMoveDown: '下移',
+			linksProbe: '探测',
+			linksProbing: '探测中…',
+			linksProbeOk: '可达',
+			linksProbeFail: '不可达',
+			linksLimitReached: '连接序列最多 {n} 条',
+			linksWriteFailed: '保存失败——设置层拒绝了这次写入',
+			linksCliRemoteWarn: 'cdpMode=remote 时激活 ego CLI 会报 mode-kind-mismatch',
+			linksCliSdk: '使用内置 harness',
+			linksDisabledHint: '已停用——先勾选启用才能激活',
 		}
 		var watchDict: Record<string, any> = { en: watchEn, zh: watchZh }
 		function wt(key: any, params: any = undefined) {
@@ -623,6 +675,26 @@ declare function require(id: string): any
 			}, 'dsh-browser-cdp: family settings tab')
 		}
 
+		// ── 插件详情页设置卡（plugins.bundle.config keyed 席位）─────────────
+		// thinking-levels b660785 同款双挂载：同一张 FamilySettingsCard、同一个
+		// scope——family tab 之外，插件详情页的 keyed 席位（按包名分发）是独立
+		// 设置入口；不装 thinking-levels 时 family tab 的 inject 静默等待、本卡
+		// 无处出现，这个面就是唯一设置入口。0.1.7 / 0.2.0 宿主均声明该席位；
+		// 未声明它的宿主上 inject 空转不阻塞客户端半。卡是叶子组件（不消费
+		// renderSlot），无需 b660785 的缺席守卫。
+		function mountPluginsPageCard(ctx: any) {
+			var forms = typeof ctx.get === 'function' ? ctx.get('configForms') : undefined
+			if (!forms || typeof forms.get !== 'function') return
+			var scope = forms.get('dsh-browser-cdp')
+			ctx.slots.inject('plugins.bundle.config', function () {
+				return ctx.slots.register({
+					name: 'plugins.bundle.config',
+					key: 'dsh-browser-cdp',
+					inject: function () { return { scope: scope } },
+				}, FamilySettingsCard)
+			}, 'dsh-browser-cdp: plugins-page config card')
+		}
+
 		// 全量设置面：Config 里所有用户可调 volatile 字段按组分块渲染。
 		// kind: bool=checkbox / num=数字 / str=文本 / secret=密码 / sel=下拉。
 		// 文案直接内联 en/zh（跟随 wt 的 _egoLocale），不再膨胀字典键。
@@ -776,6 +848,28 @@ declare function require(id: string): any
 		}
 
 		// 连接目标（links）：按行渲染启用开关 + 激活按钮（写 activeTargetId）。
+		// 行内单字段的就位编辑：FamStrInput 的行级变体——本地草稿 + onBlur/Enter
+		// 提交（每次整组 set 都是宿主一次 patch 落盘，禁止每键提交），提交走
+		// onCommit 回调而非顶层字段。
+		function FamRowInput(props: any) {
+			var h = React.createElement
+			var empty = props.v === undefined || props.v === null ? '' : String(props.v)
+			var draft = React.useState(empty)
+			var v = draft[0], setV = draft[1]
+			React.useEffect(function () { setV(props.v === undefined || props.v === null ? '' : String(props.v)) }, [props.v])
+			function commit() { if (v !== empty) props.onCommit(v) }
+			return h('input', { type: 'text', value: v, disabled: !props.writable, placeholder: props.placeholder || '',
+				style: { flex: '1 1 140px', minWidth: 0, font: 'inherit', fontSize: '12px', color: 'inherit', background: 'var(--dsw-alias-bg-module-platform, rgba(127,127,127,.08))', border: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.35))', borderRadius: '8px', padding: '3px 8px' },
+				onChange: function (e: any) { setV(e.target.value) },
+				onBlur: commit,
+				onKeyDown: function (e: any) { if (e.key === 'Enter') { commit() } } })
+		}
+
+		// 连接目标（links）v2：启用 / 激活 / 就位编辑 / 探测 / 增删 / 排序。
+		// 写回只有一条通道：整组 scope.set('links', next)（行级 volatile 写不存在），
+		// 每个离散动作恰好一次 set。守卫规则在 ./fam-links（与宿主 sanitize/upsert
+		// 同构）：ego-cli 单例、MAX_LINKS 上限、endpoint 轻校验——空/非法端点行能过
+		// 设置写入，却会在宿主下次 resolve 时被 coerceLink 静默丢弃，必须写前挡住。
 		function FamLinks(props: any) {
 			var value = props.value
 			var writable = props.writable
@@ -783,33 +877,144 @@ declare function require(id: string): any
 			var h = React.createElement
 			var links = Array.isArray(value.links) ? value.links : []
 			var activeId = typeof value.activeTargetId === 'string' ? value.activeTargetId : ''
-			function setEnabled(idx: any, on: any) {
-				var next = links.map(function (row: any, i: any) { return i === idx ? { ...row, enabled: on } : row })
-				void scope.set('links', next)
+			var cdpMode = typeof value.cdpMode === 'string' ? value.cdpMode : 'auto'
+
+			var errState = React.useState('')
+			var errText = errState[0], setErrText = errState[1]
+			var probeState = React.useState('')
+			var probingId = probeState[0], setProbingId = probeState[1]
+			var addLabelState = React.useState('')
+			var addLabel = addLabelState[0], setAddLabel = addLabelState[1]
+			var addEndpointState = React.useState('')
+			var addEndpoint = addEndpointState[0], setAddEndpoint = addEndpointState[1]
+			var addCliPathState = React.useState('')
+			var addCliPath = addCliPathState[0], setAddCliPath = addCliPathState[1]
+
+			var btnStyle = { font: 'inherit', fontSize: '12px', cursor: writable ? 'pointer' : 'not-allowed', border: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.35))', background: 'none', color: 'var(--dsw-alias-label-primary, inherit)', borderRadius: '8px', padding: '2px 8px', flex: '0 0 auto' }
+			var badgeStyle = { fontSize: '10px', fontWeight: 600, letterSpacing: '.04em', flex: '0 0 auto', color: 'var(--dsw-alias-label-tertiary, rgba(127,127,127,.7))', border: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.25))', borderRadius: '6px', padding: '0 5px', lineHeight: '16px' }
+			var inputStyle = { font: 'inherit', fontSize: '12px', color: 'inherit', background: 'var(--dsw-alias-bg-module-platform, rgba(127,127,127,.08))', border: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.35))', borderRadius: '8px', padding: '3px 8px' }
+
+			function writeLinks(next: any) {
+				Promise.resolve(scope.set('links', next)).then(function (ok: any) {
+					if (ok === false) setErrText(wt('linksWriteFailed'))
+				}, function () { setErrText(wt('linksWriteFailed')) })
 			}
-			return h('div', { style: { borderTop: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.25))', paddingTop: '6px' } },
+			function limitText() { return wt('linksLimitReached', { n: MAX_LINKS }) }
+			function addCdp() {
+				if (!isValidEndpoint(addEndpoint)) { setErrText(wt('linksEndpointInvalid')); return }
+				var res = addRow(links, buildCdpRow({ label: addLabel, endpoint: addEndpoint }))
+				if (res.code) { setErrText(res.code === 'link-limit-reached' ? limitText() : wt('linksEndpointInvalid')); return }
+				writeLinks(res.links)
+				setAddLabel(''); setAddEndpoint(''); setErrText('')
+			}
+			function addCli() {
+				var res = addRow(links, buildCliRow({ label: '', cliPath: addCliPath }))
+				if (res.code) { setErrText(res.code === 'link-limit-reached' ? limitText() : wt('linksAddCliExists')); return }
+				writeLinks(res.links)
+				setAddCliPath(''); setErrText('')
+			}
+			function removeOne(row: any) {
+				var res = removeRow(links, row.id)
+				writeLinks(res.links)
+				// 删激活行 = 清空激活，不顺延（先 links 后 activeId；两次触发被
+				// 宿主 inFlight/pending 合并，瞬态悬挂无害）。
+				if (res.removed && res.removed.id !== undefined && res.removed.id === activeId) {
+					void scope.set('activeTargetId', '')
+				}
+			}
+			function probeOne(row: any) {
+				if (probingId !== '' || !isValidEndpoint(row.endpoint)) return
+				setProbingId(row.id); setErrText('')
+				postJson('/bcdp/api/cdp-probe', { endpoint: row.endpoint })
+					.then(function (data: any) {
+						var outcome = data && data.value && data.value.outcome
+							? data.value.outcome
+							: { ok: false, code: 'probe-failed', message: 'no outcome' }
+						writeLinks(applyProbe(links, row.id, outcome, Date.now()))
+					})
+					.catch(function (error: any) {
+						writeLinks(applyProbe(links, row.id, { ok: false, code: 'probe-failed', message: String((error && error.message) || error) }, Date.now()))
+					})
+					.then(function () { setProbingId('') })
+			}
+			return h('div', { style: { borderTop: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.25))', paddingTop: '6px', display: 'grid', gap: '4px' } },
 				h('div', { style: { fontSize: '12px', fontWeight: 600, color: 'var(--dsw-alias-label-secondary, rgba(127,127,127,.9))', padding: '2px 0 4px' } },
-					_egoLocale === 'zh' ? '连接目标（顺序即优先级）' : 'Connection targets (order = priority)'),
+					wt('linksTitle')),
 				links.length === 0
-					? h('div', { style: { fontSize: '12px', color: 'var(--dsw-alias-label-tertiary, rgba(127,127,127,.8))', padding: '4px 0' } },
-						_egoLocale === 'zh' ? '暂无目标 —— 连接序列在 profile 的 cordis.patch.yml links 中维护' : 'No targets — maintain the sequence in the profile cordis.patch.yml links')
+					? h('div', { style: { fontSize: '12px', color: 'var(--dsw-alias-label-tertiary, rgba(127,127,127,.8))', padding: '2px 0' } },
+						wt('linksEmpty'))
 					: links.map(function (row: any, idx: any) {
-						var label = row.label || row.id || ('#' + idx)
-						var detail = row.kind === 'ego-cli' ? (row.cliPath || '') : (row.endpoint || '')
+						var isCli = row.kind === 'ego-cli'
 						var isActive = row.id !== undefined && row.id === activeId
-						return h('div', { key: row.id || idx, style: { display: 'flex', alignItems: 'center', gap: '8px', padding: '5px 0', flexWrap: 'wrap' } },
-							h('input', { type: 'checkbox', checked: row.enabled === true, disabled: !writable,
-								title: _egoLocale === 'zh' ? '启用' : 'Enabled',
-								onChange: function (e: any) { setEnabled(idx, e.target.checked) } }),
-							h('span', { style: { fontSize: '13px', color: 'var(--dsw-alias-label-primary, inherit)' } }, label),
-							h('span', { style: { fontSize: '11px', color: 'var(--dsw-alias-label-tertiary, rgba(127,127,127,.7))', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: '1 1 120px' } }, detail),
-							isActive
-								? h('span', { style: { fontSize: '11px', color: '#30d158', flex: '0 0 auto' } }, _egoLocale === 'zh' ? '已激活' : 'active')
-								: h('button', { type: 'button', disabled: !writable,
-									style: { font: 'inherit', fontSize: '12px', cursor: writable ? 'pointer' : 'not-allowed', border: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.35))', background: 'none', color: 'var(--dsw-alias-label-primary, inherit)', borderRadius: '8px', padding: '2px 10px', flex: '0 0 auto' },
-									onClick: function () { void scope.set('activeTargetId', row.id) } },
-									_egoLocale === 'zh' ? '激活' : 'activate'))
-					}))
+						var probeBadge: any = null
+						if (row.probeStatus === 'ok' || row.probeStatus === 'error') {
+							probeBadge = h('span', { title: row.probeError || row.probeCode || '',
+								style: { fontSize: '11px', flex: '0 0 auto', color: row.probeStatus === 'ok' ? '#30d158' : '#ff453a' } },
+								wt(row.probeStatus === 'ok' ? 'linksProbeOk' : 'linksProbeFail')
+								+ (row.probeStatus === 'ok' && row.probeLatencyMs ? ' · ' + row.probeLatencyMs + 'ms' : ''))
+						}
+						return h('div', { key: row.id || idx, style: { borderTop: '1px dashed var(--dsw-alias-border-l2, rgba(127,127,127,.18))', padding: '6px 0', display: 'grid', gap: '4px' } },
+							h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
+								h('input', { type: 'checkbox', checked: row.enabled === true, disabled: !writable,
+									title: wt('linksEnabled'),
+									onChange: function (e: any) { writeLinks(updateRow(links, row.id, { enabled: e.target.checked })) } }),
+								h('span', { style: badgeStyle }, isCli ? 'CLI' : 'CDP'),
+								h(FamRowInput, { v: row.label || '', writable: writable, placeholder: wt('linksLabel'),
+									onCommit: function (v: any) { writeLinks(updateRow(links, row.id, { label: v })) } }),
+								probeBadge,
+								isActive
+									? h('span', { style: { fontSize: '11px', color: '#30d158', flex: '0 0 auto' } }, wt('linksActive'))
+									: h('button', { type: 'button', disabled: !writable || row.enabled === false,
+										title: row.enabled === false ? wt('linksDisabledHint') : undefined, style: btnStyle,
+										onClick: function () { void scope.set('activeTargetId', row.id) } },
+										wt('linksActivate'))),
+							h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
+								h(FamRowInput, { v: (isCli ? row.cliPath : row.endpoint) || '', writable: writable,
+									placeholder: isCli ? wt('linksCliPathHint') : wt('linksEndpointHint'),
+									onCommit: function (v: any) {
+										if (isCli) { writeLinks(updateRow(links, row.id, { cliPath: v })); return }
+										if (!isValidEndpoint(v)) { setErrText(wt('linksEndpointInvalid')); return }
+										writeLinks(updateRow(links, row.id, { endpoint: v }))
+									} }),
+								isCli ? h('label', { style: { display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: 'var(--dsw-alias-label-tertiary, rgba(127,127,127,.7))', flex: '0 0 auto' } },
+									h('input', { type: 'checkbox', checked: row.useSdkPath === true, disabled: !writable,
+										title: wt('linksCliSdk'),
+										onChange: function (e: any) { writeLinks(updateRow(links, row.id, { useSdkPath: e.target.checked })) } }),
+									wt('linksCliSdk')) : null,
+								!isCli ? h('button', { type: 'button', disabled: !writable || probingId === row.id, style: btnStyle,
+									onClick: function () { probeOne(row) } },
+									probingId === row.id ? wt('linksProbing') : wt('linksProbe')) : null,
+								h('button', { type: 'button', disabled: !writable || idx === 0, title: wt('linksMoveUp'), style: btnStyle,
+									onClick: function () { writeLinks(moveRow(links, row.id, -1)) } }, '↑'),
+								h('button', { type: 'button', disabled: !writable || idx === links.length - 1, title: wt('linksMoveDown'), style: btnStyle,
+									onClick: function () { writeLinks(moveRow(links, row.id, 1)) } }, '↓'),
+								h('button', { type: 'button', disabled: !writable, title: wt('linksRemove'), style: btnStyle,
+									onClick: function () { removeOne(row) } }, '✕'),
+								isCli && cdpMode === 'remote'
+									? h('span', { style: { fontSize: '11px', color: '#ff9f0a', flex: '1 1 100%' } }, wt('linksCliRemoteWarn'))
+									: null))
+					}),
+				h('div', { style: { display: 'grid', gap: '6px', paddingTop: '4px' } },
+					h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' } },
+						h('input', { type: 'text', value: addLabel, disabled: !writable || isFull(links), placeholder: wt('linksLabel'),
+							style: Object.assign({ width: '96px' }, inputStyle),
+							onChange: function (e: any) { setAddLabel(e.target.value) } }),
+						h('input', { type: 'text', value: addEndpoint, disabled: !writable || isFull(links), placeholder: wt('linksEndpointHint'),
+							style: Object.assign({ flex: '1 1 160px', minWidth: 0 }, inputStyle),
+							onChange: function (e: any) { setAddEndpoint(e.target.value) },
+							onKeyDown: function (e: any) { if (e.key === 'Enter') { addCdp() } } }),
+						h('button', { type: 'button', disabled: !writable || isFull(links),
+							title: isFull(links) ? limitText() : undefined, style: btnStyle, onClick: addCdp }, wt('linksAddCdp'))),
+					h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' } },
+						h('input', { type: 'text', value: addCliPath, disabled: !writable || isFull(links) || hasCliLink(links),
+							placeholder: wt('linksCliPathHint'),
+							style: Object.assign({ flex: '1 1 160px', minWidth: 0 }, inputStyle),
+							onChange: function (e: any) { setAddCliPath(e.target.value) },
+							onKeyDown: function (e: any) { if (e.key === 'Enter') { addCli() } } }),
+						h('button', { type: 'button', disabled: !writable || isFull(links) || hasCliLink(links),
+							title: hasCliLink(links) ? wt('linksAddCliExists') : (isFull(links) ? limitText() : undefined),
+							style: btnStyle, onClick: addCli }, wt('linksAddCli'))),
+					errText ? h('div', { style: { fontSize: '11px', color: '#ff453a' } }, errText) : null))
 		}
 
 		function apply(ctx: any) {
@@ -822,6 +1027,7 @@ declare function require(id: string): any
 		// floating watch panel immediately and upgrade to the sidebar tab if
 		// the service appears later (dynamic ctx.inject, same pattern as PR #45).
 		mountFamilySettingsCard(ctx)
+		mountPluginsPageCard(ctx)
 		var betterSidebarService: any
 		try { betterSidebarService = typeof ctx.get === 'function' ? ctx.get('betterSidebar') : undefined } catch (e) { betterSidebarService = undefined }
 		if (betterSidebarService !== undefined) {

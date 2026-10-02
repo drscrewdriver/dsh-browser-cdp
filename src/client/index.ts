@@ -921,6 +921,7 @@ interface LocaleLike {
 		// the service appears later (dynamic ctx.inject, same pattern as PR #45).
 		mountFamilySettingsCard(ctx)
 		mountPluginsPageCard(ctx)
+		var disposeComposerDecoration = mountComposerDecoration(ctx)
 		var betterSidebarService
 		try { betterSidebarService = typeof ctx.get === 'function' ? ctx.get('betterSidebar') : undefined } catch (e) { betterSidebarService = undefined }
 		if (betterSidebarService !== undefined) {
@@ -2190,6 +2191,109 @@ clearTimeout((panel as any)._dshHideT)
 		 *   {"cdpEndpoint":..., "targetId":..., "pageUrl":..., "elements":[{n,backendNodeId,tag,id,name,focusable,describe}]}
 		 *   [/CDP-PICKS]
 		 */
+		// M1.7 — composer decoration: the raw CDP-PICKS text block is for the
+		// agent; the human gets a decorated card (🌐 connection + tab + element
+		// chips) anchored next to the composer input. [data-composer-input] is
+		// verified stable across 0.1.7-rc.2 ↔ 0.2.0-rc.2 (arrowkey analysis,
+		// dependency table). The host has no public custom-chip seam (the file
+		// chip is ui-attachment's closed system) — this is the plugin-side form.
+		// 1s poll mirrors the panel's existing pick polling; rebuilds only when
+		// the draft signature changes. Must never break the composer: every step
+		// guarded, all DOM we add carries data-dsh-cdp-picks-card.
+		function mountComposerDecoration(ctx) {
+			var cards = []
+			var lastSig = ''
+			function hide() {
+				for (var i = 0; i < cards.length; i++) { var el = cards[i]; el && el.parentNode && el.parentNode.removeChild(el) }
+				cards = []
+			}
+			function ensureAnchor() {
+				var input = document.querySelector('[data-composer-input]')
+				if (!input || !input.parentNode) return null
+				return input.parentNode
+			}
+			function cardStyle() {
+				return { display: 'grid', gap: '4px', margin: '0 0 6px', padding: '8px 10px', font: 'inherit', fontSize: '12px', color: 'var(--dsw-alias-label-primary, inherit)', background: 'var(--dsw-alias-bg-module-platform, rgba(127,127,127,.08))', border: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.3))', borderRadius: '12px', boxSizing: 'border-box', width: '100%' }
+			}
+			function chipStyle() {
+				return { display: 'flex', alignItems: 'baseline', gap: '6px', padding: '3px 8px', background: 'var(--dsw-alias-bg-module-platform, rgba(127,127,127,.1))', border: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.22))', borderRadius: '8px', minWidth: 0 }
+			}
+			function render(pageTitle, endpoint, pageUrl, elements) {
+				var anchor = ensureAnchor()
+				if (!anchor) { hide(); return }
+				hide()
+				var h = React.createElement
+				var head = h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' } },
+					h('span', { style: badgeLike() }, '🌐'),
+					h('span', { style: { fontWeight: 600 } }, wt('pickCardTitle')),
+					h('span', { style: { color: 'var(--dsw-alias-label-tertiary, rgba(127,127,127,.75))', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 } }, (endpoint || '') + ' · ' + (pageTitle || pageUrl || '')),
+					h('span', { style: { color: 'var(--dsw-alias-label-tertiary, rgba(127,127,127,.75))', flex: '0 0 auto' } }, wt('pickCardElements', { n: elements.length })))
+				var chips = elements.slice(0, 6).map(function (el) {
+					return h('div', { key: el.n, style: chipStyle() },
+						h('span', { style: { fontWeight: 700, flex: '0 0 auto', color: 'var(--dsw-alias-label-tertiary, rgba(127,127,127,.75))' } }, '#' + el.n),
+						h('span', { style: { fontWeight: 600, flex: '0 0 auto' } }, el.tag || '?'),
+						h('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 } }, el.describe || el.name || ''))
+					})
+				if (elements.length > 6) chips.push(h('div', { style: { fontSize: '11px', color: 'var(--dsw-alias-label-tertiary, rgba(127,127,127,.7))' } }, '… +' + (elements.length - 6)))
+				var card = document.createElement('div')
+				card.setAttribute('data-dsh-cdp-picks-card', '')
+				var host = null
+				try { host = /** @type {any} */ (renderToDom(h('div', { style: cardStyle() }, head, chips))) } catch (e) { host = null }
+				if (!host) return
+				card.appendChild(host)
+				anchor.insertBefore(card, anchor.firstChild)
+				cards.push(card)
+			}
+			function badgeLike() {
+				return { fontSize: '12px', lineHeight: '16px' }
+			}
+			function renderToDom(vdom) {
+				// react-dom/client may be absent in this bundle; walk the plain-object
+				// vdom we built ourselves (strings + style objects only) by hand.
+				if (vdom === null || vdom === undefined || vdom === false) return document.createTextNode('')
+				if (typeof vdom === 'string' || typeof vdom === 'number') return document.createTextNode(String(vdom))
+				if (Array.isArray(vdom)) { var frag = document.createDocumentFragment(); for (var i = 0; i < vdom.length; i++) frag.appendChild(renderToDom(vdom[i])); return frag }
+				var el = document.createElement(vdom.type || 'div')
+				var props = vdom.props || {}
+				if (props.style) for (var k in props.style) el.style[k] = props.style[k]
+				if (props.key) el.setAttribute('data-key', String(props.key))
+				var children = props.children
+				el.appendChild(renderToDom(children === undefined ? null : children))
+				return el
+			}
+			var stop = null
+			function tick() {
+				try {
+					var sid = currentSessionId(ctx.sessions.list.getSnapshot())
+					if (!sid) { if (lastSig !== '') { lastSig = ''; hide() } return }
+					var conversation = ctx.get('conversation')
+					if (!conversation || !conversation.input) return
+					var actx = ctx.sessions.scope(sid)
+					if (!actx) return
+					var input = conversation.input.for(actx)
+					var snap = input && input.state && input.state.getSnapshot ? input.state.getSnapshot() : null
+					var draft = snap && typeof snap.draft === 'string' ? snap.draft : ''
+					if (draft === lastSig) return
+					lastSig = draft
+					var re = /\[(?:🌐 )?CDP-PICKS page="([^"]*)" targetId="([^"]*)" endpoint="([^"]*)"\]\n([\s\S]*?)\n\[\/CDP-PICKS\]/g
+					var found = [], mm
+					while ((mm = re.exec(draft)) !== null) {
+						var elements = []
+						try { var obj = JSON.parse(mm[4]); elements = (obj && obj.elements) || [] } catch (e) {}
+						found.push({ title: mm[1], targetId: mm[2], endpoint: mm[3], elements: elements })
+					}
+					if (found.length === 0) { hide(); return }
+					for (var i = 0; i < found.length; i++) render(found[i].title, found[i].endpoint, found[i].title, found[i].elements)
+				} catch (e) { /* decoration must never break the composer */ }
+			}
+			var timer = window.setInterval(tick, 1000)
+			tick()
+			return function () {
+				window.clearInterval(timer)
+				hide()
+			}
+		}
+
 		// 「当前会话」推导：宿主在 0.1.6-alpha.2（6830e1460d）把 list 快照的
 		// `current` 字段删掉了（契约注释 "navigation belongs to view owners"），
 		// 现行推导 = 扫 byId 找 retainedBy.mainView > 0 的行——与宿主侧边栏同款
@@ -2233,7 +2337,7 @@ clearTimeout((panel as any)._dshHideT)
 				}
 				// Find the block for THIS page (same targetId + endpoint) and
 				// merge into it; one page = one block, several pages = several.
-				var re = /\[CDP-PICKS[^\]]*\]\n([\s\S]*?)\n\[\/CDP-PICKS\]/g
+				var re = /\[(?:🌐 )?CDP-PICKS[^\]]*\]\n([\s\S]*?)\n\[\/CDP-PICKS\]/g
 				var found = null, mm, header = ''
 				while ((mm = re.exec(draft)) !== null) {
 					try {

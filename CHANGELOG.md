@@ -1,3 +1,12 @@
+## [0.18.8] - 2026-10-03 — 真机反馈⑥：`sessions` 未声明 inject（用户诊断实锤；同 0.17.11 反向同源）
+
+### 修复（根因）
+- 用户控制台回报 `window.__dshBrowserCdpDeco = { stage:'error', error:'cannot get property "sessions" without inject' }`——strict resolver 拒绝裸访问未声明服务。装饰卡与投递同源依赖 `ctx.sessions` / `ctx.get('conversation')`。
+- **修复**：客户端静态 inject 补入 `'sessions'` 与 `'conversation'`（宿主 web UI 核心服务，必然已加载）。
+
+### 验证
+- `typecheck` 过（client `noImplicitAny`）；690 passed / 11 skipped。
+
 ## [0.18.7] - 2026-10-03 — 真机反馈⑤：包装卡渲染重写（同 0.17.10 反向同源）
 
 ### 修复

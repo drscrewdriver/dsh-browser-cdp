@@ -69,7 +69,11 @@ import { addRow, applyProbe, buildCdpRow, buildCliRow, hasCliLink, isFull, isVal
 		// any row that statically injects it pending forever — which blocks the
 		// whole web boot (issue #29, reproduced on DSH 0.1.2-rc.1 without the
 		// sidebar installed). Probe it defensively in apply() instead.
-		const inject = ['slots', 'locale', 'connection']
+		// sessions + conversation：点选投递（deliverPickToConversation）与 composer
+// 包装卡（mountComposerDecoration）裸访问 ctx.sessions / ctx.get('conversation')。
+// 两者都是宿主 web UI 的核心服务（必然已加载），声明后 strict resolver 才放行
+// ——否则抛 cannot get property "sessions" without inject（issue #29 同类）。
+const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 
 		// ── Watch panel locale ────────────────────────────────────────────
 		var _egoLocale = (function () {

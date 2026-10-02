@@ -171,6 +171,7 @@ export const zh = {
   'linksLocalEnableHint': "勾选 = 允许 auto 模式在激活目标不可达时回落本机启动",
   'pickCardTitle': "浏览器点选内容",
   'pickCardElements': "已选 {n} 个元素",
+  'pickCardRemove': "移除这段点选",
   'linksActivate': '激活',
 }
 
@@ -325,6 +326,7 @@ export const en: Record<CdpKey, string> = {
   'linksLocalEnableHint': "Checked = auto mode may fall back to the managed local browser when the activated target is unreachable",
   'pickCardTitle': "Browser picks",
   'pickCardElements': "{n} element(s) picked",
+  'pickCardRemove': "Remove these picks",
   'linksActivate': 'activate',
 }
 
@@ -476,6 +478,7 @@ export const ja: Record<CdpKey, string> = {
   'linksLocalEnableHint': "チェック = アクティブなターゲットに到達できない場合、auto モードはローカル起動にフォールバックします",
   'pickCardTitle': "ブラウザ選択内容",
   'pickCardElements': "{n} 個の要素を選択",
+  'pickCardRemove': "この選択を削除",
   'linksActivate': 'アクティブ化',
 }
 
@@ -627,6 +630,7 @@ export const ko: Record<CdpKey, string> = {
   'linksLocalEnableHint': "체크 = 활성 대상에 도달할 수 없을 때 auto 모드가 로컬 시작으로 대체됩니다",
   'pickCardTitle': "브라우저 선택 내용",
   'pickCardElements': "{n}개 요소 선택됨",
+  'pickCardRemove': "이 선택 제거",
   'linksActivate': '활성화',
 }
 
@@ -778,6 +782,7 @@ export const fr: Record<CdpKey, string> = {
   'linksLocalEnableHint': "Coché = le mode auto peut basculer vers le navigateur local si la cible activée est injoignable",
   'pickCardTitle': "Sélections du navigateur",
   'pickCardElements': "{n} élément(s) sélectionné(s)",
+  'pickCardRemove': "Retirer ces sélections",
   'linksActivate': 'activer',
 }
 
@@ -929,6 +934,7 @@ export const de: Record<CdpKey, string> = {
   'linksLocalEnableHint': "Aktiviert = der Auto-Modus darf auf den verwalteten lokalen Browser ausweichen, wenn das aktivierte Ziel nicht erreichbar ist",
   'pickCardTitle': "Browser-Auswahlen",
   'pickCardElements': "{n} Element(e) ausgewählt",
+  'pickCardRemove': "Diese Auswahl entfernen",
   'linksActivate': 'aktivieren',
 }
 
@@ -1080,6 +1086,7 @@ export const it: Record<CdpKey, string> = {
   'linksLocalEnableHint': "Selezionato = la modalità auto può ripiegare sul browser locale gestito se la destinazione attiva è irraggiungibile",
   'pickCardTitle': "Selezioni del browser",
   'pickCardElements': "{n} elemento/i selezionato/i",
+  'pickCardRemove': "Rimuovi queste selezioni",
   'linksActivate': 'attiva',
 }
 
@@ -1231,6 +1238,7 @@ export const ru: Record<CdpKey, string> = {
   'linksLocalEnableHint': "Отмечено = режим auto может откатиться на управляемый локальный браузер, если активная цель недоступна",
   'pickCardTitle': "Выбранное в браузере",
   'pickCardElements': "Выбрано элементов: {n}",
+  'pickCardRemove': "Убрать это выделение",
   'linksActivate': 'активировать',
 }
 
@@ -1382,6 +1390,7 @@ export const es: Record<CdpKey, string> = {
   'linksLocalEnableHint': "Marcado = el modo auto puede replegarse al navegador local gestionado si el destino activo no responde",
   'pickCardTitle': "Selecciones del navegador",
   'pickCardElements': "{n} elemento(s) seleccionado(s)",
+  'pickCardRemove': "Quitar estas selecciones",
   'linksActivate': 'activar',
 }
 

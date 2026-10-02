@@ -78,4 +78,11 @@ describe("FamLinks v2 write discipline (source contracts)", () => {
     expect(source).toMatch(/retainedBy\.mainView/);
     expect(source).not.toMatch(/getSnapshot\(\)\.current/);
   });
+  it("the picks wrapper registers as a conversation.input.dock contributor (order 1000, priority 0)", () => {
+    expect(source).toMatch(/ctx\.slots\.inject\('conversation\.input\.dock'/);
+    expect(source).toMatch(/id: 'dsh-browser-cdp\.picks'/);
+    expect(source).toMatch(/order: 0/);
+    expect(source).not.toMatch(/priority: 0/);
+    expect(source).not.toMatch(/__dshBrowserCdpDeco = \{ stage: 'rendered'/);
+  });
 });

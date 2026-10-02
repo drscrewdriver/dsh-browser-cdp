@@ -44,6 +44,17 @@
 ### 修复
 - `makeWhich` 的路径分隔符与 PATH 分隔符改为跟随**被模拟的平台**（原用 `node:path` 的宿主值，darwin/linux 查找在 Windows 上会拼成 `dir\file` 而永远找不到）。
 
+## [0.17.13] - 2026-10-03 — 包装卡改挂官方 dock 缝：与 todo 同级（order 0）、浮在对话区一侧
+
+### 变更
+- **包装卡不再是 body 悬浮件**：改注册为 `conversation.input.dock` 列表槽贡献者（`id: 'dsh-browser-cdp.picks'`）——宿主原生渲染，随文档流滚动，fixed/rect/重定位/可见过滤逻辑全部删除。
+- **与 `todo` 同级（`order: 0`）**：dock 带区按 order 升序排、0 最远离 composer 卡——包装卡"浮起来"落在带区上沿（todo 面板同位），与输入框保持距离、不干扰输入。**无 `priority` 字段**（独立 cell id，不参与任何同 id 竞争，不虚设该值）。
+- **✕ 撤销**：卡片头部 ✕ 从草稿移除对应 CDP-PICKS 块（空输入框不留原文）；同页其余块卡片自动重渲染。
+- inject 工厂按会话拿 input 门面；strict resolver 下 `sessions`/`conversation` 已声明（0.17.11）。
+
+### 验证
+- `typecheck` 过（9 语键集门）；692 passed / 11 skipped（+1 dock 注册契约：order 0、无 priority）。
+
 ## [0.17.12] - 2026-10-03 — 真机反馈⑦：包装卡定位修正（可见 composer 过滤）
 
 ### 修复

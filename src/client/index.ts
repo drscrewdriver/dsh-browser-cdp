@@ -2,6 +2,7 @@
 declare function require(id: string): any
 
 import { NS, dictionaries } from './locales'
+import { addRow, applyProbe, buildCdpRow, buildCliRow, hasCliLink, isFull, isValidEndpoint, MAX_LINKS, moveRow, removeRow, updateRow } from './fam-links'
 
 // Structural view of the host locale service (register + bind is all this
 // plugin touches; kept local so the client build needs no type deps).
@@ -530,6 +531,27 @@ interface LocaleLike {
 			}, 'dsh-browser-cdp: family settings tab')
 		}
 
+		// ── 插件详情页设置卡（plugins.bundle.config keyed 席位）─────────────
+		// thinking-levels b660785 同款双挂载：同一张 FamilySettingsCard、同一个
+		// scope——family tab 之外，插件详情页的 keyed 席位（按包名分发）是独立
+		// 设置入口；不装 thinking-levels 时 family tab 的 inject 静默等待、本卡
+		// 无处出现，这个面就是唯一设置入口。0.1.7 / 0.2.0 宿主均声明该席位；
+		// 未声明它的宿主上 inject 空转不阻塞客户端半。卡是叶子组件（不消费
+		// renderSlot），无需 b660785 的缺席守卫。
+		function mountPluginsPageCard(ctx) {
+			var forms = typeof ctx.get === 'function' ? ctx.get('configForms') : undefined
+			if (!forms || typeof forms.get !== 'function') return
+			var scope = forms.get('dsh-browser-cdp')
+			ctx.slots.inject('plugins.bundle.config', function () {
+				return ctx.slots.register({
+					name: 'plugins.bundle.config',
+					key: 'dsh-browser-cdp',
+					locale: NS,
+					inject: function () { return { scope: scope } },
+				}, FamilySettingsCard)
+			}, 'dsh-browser-cdp: plugins-page config card')
+		}
+
 		// 全量设置面：Config 里所有用户可调 volatile 字段按组分块渲染。
 		// kind: bool=checkbox / num=数字 / str=文本 / secret=密码 / sel=下拉。
 		// 文案走 wt 字典：lk = 标题键，dk = 描述键（无描述则不写 dk）。
@@ -682,7 +704,28 @@ interface LocaleLike {
 				onKeyDown: function (e) { if (e.key === 'Enter') { void props.scope.set(f.k, v) } } })
 		}
 
-		// 连接目标（links）：按行渲染启用开关 + 激活按钮（写 activeTargetId）。
+		// 行内单字段的就位编辑：FamStrInput 的行级变体——本地草稿 + onBlur/Enter
+		// 提交（每次整组 set 都是宿主一次 patch 落盘，禁止每键提交），提交走
+		// onCommit 回调而非顶层字段。
+		function FamRowInput(props) {
+			var h = React.createElement
+			var empty = props.v === undefined || props.v === null ? '' : String(props.v)
+			var draft = React.useState(empty)
+			var v = draft[0], setV = draft[1]
+			React.useEffect(function () { setV(props.v === undefined || props.v === null ? '' : String(props.v)) }, [props.v])
+			function commit() { if (v !== empty) props.onCommit(v) }
+			return h('input', { type: 'text', value: v, disabled: !props.writable, placeholder: props.placeholder || '',
+				style: { flex: '1 1 140px', minWidth: 0, font: 'inherit', fontSize: '12px', color: 'inherit', background: 'var(--dsw-alias-bg-module-platform, rgba(127,127,127,.08))', border: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.35))', borderRadius: '8px', padding: '3px 8px' },
+				onChange: function (e) { setV(e.target.value) },
+				onBlur: commit,
+				onKeyDown: function (e) { if (e.key === 'Enter') { commit() } } })
+		}
+
+		// 连接目标（links）v2：启用 / 激活 / 就位编辑 / 探测 / 增删 / 排序。
+		// 写回只有一条通道：整组 scope.set('links', next)（行级 volatile 写不存在），
+		// 每个离散动作恰好一次 set。守卫规则在 ./fam-links（与宿主 sanitize/upsert
+		// 同构）：ego-cli 单例、MAX_LINKS 上限、endpoint 轻校验——空/非法端点行能过
+		// 设置写入，却会在宿主下次 resolve 时被 coerceLink 静默丢弃，必须写前挡住。
 		function FamLinks(props) {
 			var value = props.value
 			var writable = props.writable
@@ -690,33 +733,144 @@ interface LocaleLike {
 			var h = React.createElement
 			var links = Array.isArray(value.links) ? value.links : []
 			var activeId = typeof value.activeTargetId === 'string' ? value.activeTargetId : ''
-			function setEnabled(idx, on) {
-				var next = links.map(function (row, i) { return i === idx ? { ...row, enabled: on } : row })
-				void scope.set('links', next)
+			var cdpMode = typeof value.cdpMode === 'string' ? value.cdpMode : 'auto'
+
+			var errState = React.useState('')
+			var errText = errState[0], setErrText = errState[1]
+			var probeState = React.useState('')
+			var probingId = probeState[0], setProbingId = probeState[1]
+			var addLabelState = React.useState('')
+			var addLabel = addLabelState[0], setAddLabel = addLabelState[1]
+			var addEndpointState = React.useState('')
+			var addEndpoint = addEndpointState[0], setAddEndpoint = addEndpointState[1]
+			var addCliPathState = React.useState('')
+			var addCliPath = addCliPathState[0], setAddCliPath = addCliPathState[1]
+
+			var btnStyle = { font: 'inherit', fontSize: '12px', cursor: writable ? 'pointer' : 'not-allowed', border: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.35))', background: 'none', color: 'var(--dsw-alias-label-primary, inherit)', borderRadius: '8px', padding: '2px 8px', flex: '0 0 auto' }
+			var badgeStyle = { fontSize: '10px', fontWeight: 600, letterSpacing: '.04em', flex: '0 0 auto', color: 'var(--dsw-alias-label-tertiary, rgba(127,127,127,.7))', border: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.25))', borderRadius: '6px', padding: '0 5px', lineHeight: '16px' }
+			var inputStyle = { font: 'inherit', fontSize: '12px', color: 'inherit', background: 'var(--dsw-alias-bg-module-platform, rgba(127,127,127,.08))', border: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.35))', borderRadius: '8px', padding: '3px 8px' }
+
+			function writeLinks(next) {
+				Promise.resolve(scope.set('links', next)).then(function (ok) {
+					if (ok === false) setErrText(wt('linksWriteFailed'))
+				}, function () { setErrText(wt('linksWriteFailed')) })
 			}
-			return h('div', { style: { borderTop: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.25))', paddingTop: '6px' } },
+			function limitText() { return wt('linksLimitReached', { n: MAX_LINKS }) }
+			function addCdp() {
+				if (!isValidEndpoint(addEndpoint)) { setErrText(wt('linksEndpointInvalid')); return }
+				var res = addRow(links, buildCdpRow({ label: addLabel, endpoint: addEndpoint }))
+				if (res.code) { setErrText(res.code === 'link-limit-reached' ? limitText() : wt('linksEndpointInvalid')); return }
+				writeLinks(res.links)
+				setAddLabel(''); setAddEndpoint(''); setErrText('')
+			}
+			function addCli() {
+				var res = addRow(links, buildCliRow({ label: '', cliPath: addCliPath }))
+				if (res.code) { setErrText(res.code === 'link-limit-reached' ? limitText() : wt('linksAddCliExists')); return }
+				writeLinks(res.links)
+				setAddCliPath(''); setErrText('')
+			}
+			function removeOne(row) {
+				var res = removeRow(links, row.id)
+				writeLinks(res.links)
+				// 删激活行 = 清空激活，不顺延（先 links 后 activeId；两次触发被
+				// 宿主 inFlight/pending 合并，瞬态悬挂无害）。
+				if (res.removed && res.removed.id !== undefined && res.removed.id === activeId) {
+					void scope.set('activeTargetId', '')
+				}
+			}
+			function probeOne(row) {
+				if (probingId !== '' || !isValidEndpoint(row.endpoint)) return
+				setProbingId(row.id); setErrText('')
+				postJson('/bcdp/api/cdp-probe', { endpoint: row.endpoint })
+					.then(function (data) {
+						var outcome = data && data.value && data.value.outcome
+							? data.value.outcome
+							: { ok: false, code: 'probe-failed', message: 'no outcome' }
+						writeLinks(applyProbe(links, row.id, outcome, Date.now()))
+					})
+					.catch(function (error) {
+						writeLinks(applyProbe(links, row.id, { ok: false, code: 'probe-failed', message: String((error && error.message) || error) }, Date.now()))
+					})
+					.then(function () { setProbingId('') })
+			}
+			return h('div', { style: { borderTop: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.25))', paddingTop: '6px', display: 'grid', gap: '4px' } },
 				h('div', { style: { fontSize: '12px', fontWeight: 600, color: 'var(--dsw-alias-label-secondary, rgba(127,127,127,.9))', padding: '2px 0 4px' } },
 					wt('linksTitle')),
 				links.length === 0
-					? h('div', { style: { fontSize: '12px', color: 'var(--dsw-alias-label-tertiary, rgba(127,127,127,.8))', padding: '4px 0' } },
+					? h('div', { style: { fontSize: '12px', color: 'var(--dsw-alias-label-tertiary, rgba(127,127,127,.8))', padding: '2px 0' } },
 						wt('linksEmpty'))
 					: links.map(function (row, idx) {
-						var label = row.label || row.id || ('#' + idx)
-						var detail = row.kind === 'ego-cli' ? (row.cliPath || '') : (row.endpoint || '')
+						var isCli = row.kind === 'ego-cli'
 						var isActive = row.id !== undefined && row.id === activeId
-						return h('div', { key: row.id || idx, style: { display: 'flex', alignItems: 'center', gap: '8px', padding: '5px 0', flexWrap: 'wrap' } },
-							h('input', { type: 'checkbox', checked: row.enabled === true, disabled: !writable,
-								title: wt('linksEnabled'),
-								onChange: function (e) { setEnabled(idx, e.target.checked) } }),
-							h('span', { style: { fontSize: '13px', color: 'var(--dsw-alias-label-primary, inherit)' } }, label),
-							h('span', { style: { fontSize: '11px', color: 'var(--dsw-alias-label-tertiary, rgba(127,127,127,.7))', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: '1 1 120px' } }, detail),
-							isActive
-								? h('span', { style: { fontSize: '11px', color: '#30d158', flex: '0 0 auto' } }, wt('linksActive'))
-								: h('button', { type: 'button', disabled: !writable,
-									style: { font: 'inherit', fontSize: '12px', cursor: writable ? 'pointer' : 'not-allowed', border: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.35))', background: 'none', color: 'var(--dsw-alias-label-primary, inherit)', borderRadius: '8px', padding: '2px 10px', flex: '0 0 auto' },
-									onClick: function () { void scope.set('activeTargetId', row.id) } },
-									wt('linksActivate')))
-					}))
+						var probeBadge = null
+						if (row.probeStatus === 'ok' || row.probeStatus === 'error') {
+							probeBadge = h('span', { title: row.probeError || row.probeCode || '',
+								style: { fontSize: '11px', flex: '0 0 auto', color: row.probeStatus === 'ok' ? '#30d158' : '#ff453a' } },
+								wt(row.probeStatus === 'ok' ? 'linksProbeOk' : 'linksProbeFail')
+								+ (row.probeStatus === 'ok' && row.probeLatencyMs ? ' · ' + row.probeLatencyMs + 'ms' : ''))
+						}
+						return h('div', { key: row.id || idx, style: { borderTop: '1px dashed var(--dsw-alias-border-l2, rgba(127,127,127,.18))', padding: '6px 0', display: 'grid', gap: '4px' } },
+							h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
+								h('input', { type: 'checkbox', checked: row.enabled === true, disabled: !writable,
+									title: wt('linksEnabled'),
+									onChange: function (e) { writeLinks(updateRow(links, row.id, { enabled: e.target.checked })) } }),
+								h('span', { style: badgeStyle }, isCli ? 'CLI' : 'CDP'),
+								h(FamRowInput, { v: row.label || '', writable: writable, placeholder: wt('linksLabel'),
+									onCommit: function (v) { writeLinks(updateRow(links, row.id, { label: v })) } }),
+								probeBadge,
+								isActive
+									? h('span', { style: { fontSize: '11px', color: '#30d158', flex: '0 0 auto' } }, wt('linksActive'))
+									: h('button', { type: 'button', disabled: !writable || row.enabled === false,
+										title: row.enabled === false ? wt('linksDisabledHint') : undefined, style: btnStyle,
+										onClick: function () { void scope.set('activeTargetId', row.id) } },
+										wt('linksActivate'))),
+							h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
+								h(FamRowInput, { v: (isCli ? row.cliPath : row.endpoint) || '', writable: writable,
+									placeholder: isCli ? wt('linksCliPathHint') : wt('linksEndpointHint'),
+									onCommit: function (v) {
+										if (isCli) { writeLinks(updateRow(links, row.id, { cliPath: v })); return }
+										if (!isValidEndpoint(v)) { setErrText(wt('linksEndpointInvalid')); return }
+										writeLinks(updateRow(links, row.id, { endpoint: v }))
+									} }),
+								isCli ? h('label', { style: { display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: 'var(--dsw-alias-label-tertiary, rgba(127,127,127,.7))', flex: '0 0 auto' } },
+									h('input', { type: 'checkbox', checked: row.useSdkPath === true, disabled: !writable,
+										title: wt('linksCliSdk'),
+										onChange: function (e) { writeLinks(updateRow(links, row.id, { useSdkPath: e.target.checked })) } }),
+									wt('linksCliSdk')) : null,
+								!isCli ? h('button', { type: 'button', disabled: !writable || probingId === row.id, style: btnStyle,
+									onClick: function () { probeOne(row) } },
+									probingId === row.id ? wt('linksProbing') : wt('linksProbe')) : null,
+								h('button', { type: 'button', disabled: !writable || idx === 0, title: wt('linksMoveUp'), style: btnStyle,
+									onClick: function () { writeLinks(moveRow(links, row.id, -1)) } }, '↑'),
+								h('button', { type: 'button', disabled: !writable || idx === links.length - 1, title: wt('linksMoveDown'), style: btnStyle,
+									onClick: function () { writeLinks(moveRow(links, row.id, 1)) } }, '↓'),
+								h('button', { type: 'button', disabled: !writable, title: wt('linksRemove'), style: btnStyle,
+									onClick: function () { removeOne(row) } }, '✕'),
+								isCli && cdpMode === 'remote'
+									? h('span', { style: { fontSize: '11px', color: '#ff9f0a', flex: '1 1 100%' } }, wt('linksCliRemoteWarn'))
+									: null))
+					}),
+				h('div', { style: { display: 'grid', gap: '6px', paddingTop: '4px' } },
+					h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' } },
+						h('input', { type: 'text', value: addLabel, disabled: !writable || isFull(links), placeholder: wt('linksLabel'),
+							style: Object.assign({ width: '96px' }, inputStyle),
+							onChange: function (e) { setAddLabel(e.target.value) } }),
+						h('input', { type: 'text', value: addEndpoint, disabled: !writable || isFull(links), placeholder: wt('linksEndpointHint'),
+							style: Object.assign({ flex: '1 1 160px', minWidth: 0 }, inputStyle),
+							onChange: function (e) { setAddEndpoint(e.target.value) },
+							onKeyDown: function (e) { if (e.key === 'Enter') { addCdp() } } }),
+						h('button', { type: 'button', disabled: !writable || isFull(links),
+							title: isFull(links) ? limitText() : undefined, style: btnStyle, onClick: addCdp }, wt('linksAddCdp'))),
+					h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' } },
+						h('input', { type: 'text', value: addCliPath, disabled: !writable || isFull(links) || hasCliLink(links),
+							placeholder: wt('linksCliPathHint'),
+							style: Object.assign({ flex: '1 1 160px', minWidth: 0 }, inputStyle),
+							onChange: function (e) { setAddCliPath(e.target.value) },
+							onKeyDown: function (e) { if (e.key === 'Enter') { addCli() } } }),
+						h('button', { type: 'button', disabled: !writable || isFull(links) || hasCliLink(links),
+							title: hasCliLink(links) ? wt('linksAddCliExists') : (isFull(links) ? limitText() : undefined),
+							style: btnStyle, onClick: addCli }, wt('linksAddCli'))),
+					errText ? h('div', { style: { fontSize: '11px', color: '#ff453a' } }, errText) : null))
 		}
 
 		function apply(ctx) {
@@ -737,6 +891,7 @@ interface LocaleLike {
 		// floating watch panel immediately and upgrade to the sidebar tab if
 		// the service appears later (dynamic ctx.inject, same pattern as PR #45).
 		mountFamilySettingsCard(ctx)
+		mountPluginsPageCard(ctx)
 		var betterSidebarService
 		try { betterSidebarService = typeof ctx.get === 'function' ? ctx.get('betterSidebar') : undefined } catch (e) { betterSidebarService = undefined }
 		if (betterSidebarService !== undefined) {

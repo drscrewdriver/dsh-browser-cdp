@@ -19,9 +19,12 @@ describe("watch panel input and capture status", () => {
   it("0.1.7: settings gateway is gone; the panel reads live capture status instead", () => {
     // The old settings card's ffmpeg install UI rode the /bcdp/api gateway,
     // which 0.1.7's declarative settings replaced with the auto-generated form.
-    // The watch panel must keep reading its capture status from the watch route
-    // and must NOT reference the retired settings gateway.
-    expect(source).not.toMatch(/\/bcdp\/api\//);
+    // The watch panel must keep reading its capture status from the watch route,
+    // and the client must NOT reference the retired CONFIG pair (get/set —
+    // writes belong to the declarative settings form via configForms). Runtime
+    // capability routes on the same prefix stay legal: cdp-probe was restored
+    // by 67dabb8 precisely for the per-target probe button.
+    expect(source).not.toMatch(/\/bcdp\/api\/(get|set)\b/);
     expect(source).toMatch(/WATCH_STATUS_ROUTE/);
     expect(source).toMatch(/applyCaptureStatus/);
   });

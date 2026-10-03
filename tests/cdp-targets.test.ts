@@ -463,3 +463,20 @@ describe("R7 decideAttach", () => {
     expect(out).toMatchObject({ kind: "error", code: "no-active-target" });
   });
 });
+
+describe("lightpanda kind (managed serve singleton)", () => {
+  const lpRow = (id: string, servePath = "") => ({ kind: "lightpanda", id, label: "", servePath, enabled: true, note: "" });
+  it("coerceLink keeps the row and sanitizeLinks keeps only the FIRST lightpanda row", () => {
+    const r = sanitizeLinks([lpRow("a"), lpRow("b"), "junk", { kind: "cdp", id: "c", endpoint: "http://x:1", enabled: true, note: "" }]);
+    expect(r.links.map((l) => l.id)).toEqual(["a", "c"]); // a=singleton survivor, cdp row untouched
+    expect(r.links[0]!.kind).toBe("lightpanda");
+    expect(r.droppedLightpanda).toBe(1);
+    expect(r.droppedInvalid).toBe(1);
+  });
+  it("upsertLink refuses a second lightpanda row with a structured code", () => {
+    const links = sanitizeLinks([lpRow("only")]).links;
+    const added = upsertLink(links, { kind: "lightpanda", servePath: "" });
+    expect(added.ok).toBe(false);
+    if (!added.ok) expect(added.code).toBe("lightpanda-already-exists");
+  });
+});

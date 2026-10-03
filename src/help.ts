@@ -31,11 +31,11 @@ export const EGO_HELP_INDEX: Record<string, string> = {
   script: 'bcdp_cli / bcdp_script: 原样运行任意内置运行时 heredoc 脚本(page/browser/taskSpaces/site/fetch/cdp预载)。bcdp_script额外返回 duration/timedOut。',
   doctor: 'bcdp_doctor: 体检环境(浏览器候选、vendored runtime、状态目录、CDP端口、任务空间、引擎与降级清单)。',
   lightpanda:
-    'Lightpanda 作为后端（文本渲染引擎，beta）：设置面板以普通 CDP 端点接入（如 http://127.0.0.1:9222），probe 会自动识别 Browser=Lightpanda/ 并在 badge/doctor 显示 engine。' +
+    'Lightpanda 作为后端（无头文本渲染引擎，beta）：设置面板「添加 Lightpanda（受管）」——受管 serve 行（本机单例，插件负责拉起/复用/停止；win32 经 WSL2，linux/mac 本机直装），激活后 probe 自动识别 engine 并全链降级；也可用普通 CDP 端点接已自起的 serve（http://127.0.0.1:9222）。' +
+    '**有头/无头与顺序语义**：CDP 端点/本机 Chrome/ego CLI 是有头类型——可人工兜底（手动输账号、过验证码），是兜底主力；Lightpanda 是无头类型——无法人工介入，只适合快速试验。顺序即优先级：把 Lightpanda 排在前面 = 快速场景优先用它；排在有头类型后面 = 有头兜底优先，Lightpanda 实际不会被启用。' +
     '安装——linux/macOS：`curl -fsSL https://pkg.lightpanda.io/install.sh | bash`（装入 ~/.local/bin，确保 PATH 含它），`lightpanda serve --host 127.0.0.1 --port 9222`；' +
     'Windows：无原生版，用 WSL2（管理员 `wsl --install`，WSL 内同上；WSL2 自动把端口映射到宿主 localhost）或 Docker（`docker run -d -p 127.0.0.1:9222:9222 lightpanda/browser:nightly`）。' +
-    '可用：navigate/js/click/fill/key/snapshot(AX树)/http/login_import 等；降级：截图=PNG 文本渲染（视觉保真低于 Chrome，jev 输出带 engine/rendering 元数据）；' +
-    '关闭：观察窗实时画面（无 screencast）、面板点选（无 Overlay/bindingCalled）、bcdp_download（无 Page 下载事件，调用即结构化报错）、auth_flush（无 Storage.flushCookies，返回 degraded）。',
+    '可用：navigate/js/click/fill/key/snapshot(AX树)/http/login_import 等；降级：截图=PNG 文本渲染（jev 输出带 engine/rendering 元数据）；关闭：观察窗实时画面、面板点选、bcdp_download（调用即结构化报错）、auth_flush（返回 degraded）',
   judge:
     'JEV/Laya 判定（阶段 10）：机械采集「截图 + 编号 DOM + 意图 + 操作进度」→ 组装问题 → 取选择 → 执行 → 验证。' +
     '判定器只能回传编号，绝不给选择器（幻觉选择器在结构上不可能）。' +

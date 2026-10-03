@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { buildLaunchArgs, discoverChromeBinary, launchLocalBrowser, stopLocalBrowser } from '../src/cdp/launcher.ts'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
+import { buildLaunchArgs, buildServeArgs, discoverChromeBinary, discoverLightpandaBinary, launchLocalBrowser, stopLocalBrowser, WSL_LAUNCH } from '../src/cdp/launcher.ts'
 
 /** T2.12 — binary discovery is platform-table driven with explicit override. */
 describe('launcher binary discovery', () => {
@@ -110,5 +112,69 @@ describe('launcher lifecycle', () => {
     const stop = await stopLocalBrowser({ statePath: 'C:/fake/launcher.json' }, f.io)
     expect(stop).toMatchObject({ ok: true, code: 'stopped' })
     expect(f.io.exists('C:/fake/launcher.json')).toBe(false)
+  })
+})
+
+/** Lightpanda backend — serve engine: discovery / argv / launch / exclusivity. */
+describe('lightpanda managed serve', () => {
+  const existsFor = (present: readonly string[]) => (p: string) => present.includes(p)
+  function lpIo(options: { platform: string; onSpawn?: (bin: string, args: readonly string[], env?: Record<string, string>) => void; onKill?: () => void } ) {
+    const state: Record<string, string> = {}
+    const alive = new Set<number>()
+    let probes = 0
+    const io = {
+      exists: (p: string) => options.platform === 'win32' || p === 'C:/x/chrome.exe' || p.endsWith('.json'), // wsl.exe on win32 / chrome fixture / registry
+      readFile: (p: string) => state[p],
+      writeFile: (p: string, d: string) => { state[p] = d },
+      removeFile: (p: string) => { delete state[p] },
+      isAlive: (pid: number) => alive.has(pid),
+      killTree: (pid: number) => { alive.delete(pid); options.onKill?.() },
+      spawn: (bin: string, args: readonly string[], env?: Record<string, string>) => {
+        const pid = 4242
+        alive.add(pid)
+        options.onSpawn?.(bin, args, env)
+        return { pid }
+      },
+      fetchVersion: async () => {
+        probes += 1
+        return { ok: probes > 1 } // first read = stale-record check (miss), second = readiness (hit)
+      },
+      now: (() => { let t = 1000; return () => (t += 300) })(),
+      sleep: async () => undefined,
+      makePort: async () => 9222,
+    }
+    return { io, statePath: 'launcher.json', readState: () => state['launcher.json'] }
+  }
+
+  it('builds serve args with managed host/port and filters managed user flags', () => {
+    const args = buildServeArgs({ port: 9222, lightpandaArgs: '--server-timeout 30 --port 1 --host evil --address x' })
+    expect(args).toEqual(['serve', '--host', '127.0.0.1', '--port', '9222', '--server-timeout', '30'])
+  })
+  it('discovers via wsl sentinel on win32 and install roots on unix', () => {
+    expect(discoverLightpandaBinary('', 'win32', existsFor(['C:/Windows/System32/wsl.exe']))).toBe(WSL_LAUNCH)
+    expect(discoverLightpandaBinary('', 'win32', existsFor([]))).toBe('')
+    expect(discoverLightpandaBinary('/opt/lp', 'linux', existsFor([]))).toBe('/opt/lp')
+    expect(discoverLightpandaBinary('', 'linux', existsFor([join(homedir(), '.local', 'bin', 'lightpanda')]))).toBe(join(homedir(), '.local', 'bin', 'lightpanda'))
+    expect(discoverLightpandaBinary('', 'linux', existsFor([]))).toBe('lightpanda') // last resort: PATH
+  })
+  it('launches through wsl.exe on win32 with telemetry env and records the engine', async () => {
+    const spawned: Array<{ bin: string; args: readonly string[]; env?: Record<string, string> }> = []
+    const h = lpIo({ platform: 'win32', onSpawn: (bin, args, env) => { spawned.push({ bin, args, env }) } })
+    const out = await launchLocalBrowser({ engine: 'lightpanda', platform: 'win32', statePath: h.statePath }, h.io)
+    expect(out.ok).toBe(true)
+    expect(spawned[0]!.bin).toBe('wsl.exe')
+    expect(spawned[0]!.args).toEqual(['--', 'lightpanda', 'serve', '--host', '127.0.0.1', '--port', String(out.ok ? out.port : 0)])
+    expect(spawned[0]!.env!['LIGHTPANDA_DISABLE_TELEMETRY']).toBe('true')
+    expect(spawned[0]!.env!['WSLENV']).toBe('LIGHTPANDA_DISABLE_TELEMETRY/u')
+    expect(JSON.parse(h.readState()).engine).toBe('lightpanda')
+  })
+  it('keeps the engine singleton: a live chrome record is displaced by a lightpanda launch', async () => {
+    const calls: string[] = []
+    const h = lpIo({ platform: 'linux', onSpawn: () => { calls.push('spawn') }, onKill: () => { calls.push('kill') } })
+    await launchLocalBrowser({ engine: 'chrome', platform: 'linux', chromePath: 'C:/x/chrome.exe', statePath: h.statePath }, h.io)
+    const out = await launchLocalBrowser({ engine: 'lightpanda', platform: 'linux', statePath: h.statePath }, h.io)
+    expect(out.ok).toBe(true)
+    expect(calls).toEqual(['spawn', 'kill', 'spawn'])
+    expect(JSON.parse(h.readState()).engine).toBe('lightpanda')
   })
 })

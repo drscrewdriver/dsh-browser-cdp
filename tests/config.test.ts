@@ -9,7 +9,7 @@ describe("dual capture config", () => {
       ffmpegFps: 20, ffmpegMaxWidth: 1280, ffmpegBitrateKbps: 4000, ffmpegEncoder: "auto", ffmpegPath: "", githubMirror: "",
       runtimeArgs: "", chromeArgs: "", isolateSpaces: false, idleTimeoutMin: 0,
       links: [], activeTargetId: "", cdpMode: "auto", cdpProbeTimeoutMs: 3000,
-      cursorHud: true, cursorName: "DeepSeek", allowLocalFallback: false, localHeadless: false, localUserDataDir: "", legacyEgoToolNames: false, remoteEnabled: true,
+      cursorHud: true, cursorName: "DeepSeek", allowLocalFallback: false, localHeadless: false, localUserDataDir: "", lightpandaArgs: "", legacyEgoToolNames: false, remoteEnabled: true,
       // 阶段 10 judge defaults. layaUrl defaults to the REAL sidecar port:/n      // 7789 (JevLoop’s value) is a different tool and yields a confusing
       // connection error that reads like "laya is down".
       jevUrl: "", jevKey: "", jevModel: "jev",
@@ -29,7 +29,7 @@ describe("dual capture config", () => {
       ffmpegFps: 20, ffmpegMaxWidth: 1280, ffmpegBitrateKbps: 4000, ffmpegEncoder: "auto", ffmpegPath: "", githubMirror: "",
       runtimeArgs: "", chromeArgs: "", isolateSpaces: false, idleTimeoutMin: 0,
       links: [], activeTargetId: "", cdpMode: "auto", cdpProbeTimeoutMs: 3000,
-      cursorHud: true, cursorName: "DeepSeek", allowLocalFallback: false, localHeadless: false, localUserDataDir: "", legacyEgoToolNames: false, remoteEnabled: true,
+      cursorHud: true, cursorName: "DeepSeek", allowLocalFallback: false, localHeadless: false, localUserDataDir: "", lightpandaArgs: "", legacyEgoToolNames: false, remoteEnabled: true,
       // 阶段 10 judge defaults. layaUrl defaults to the REAL sidecar port:/n      // 7789 (JevLoop’s value) is a different tool and yields a confusing
       // connection error that reads like "laya is down".
       jevUrl: "", jevKey: "", jevModel: "jev",

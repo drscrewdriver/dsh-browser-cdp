@@ -1,7 +1,7 @@
 /** Injected by the DSH ModuleLoader factory wrapper (tsdown banner). */
 declare function require(id: string): any
 
-import { addRow, applyProbe, buildCdpRow, buildCliRow, hasCliLink, isFull, isValidEndpoint, MAX_LINKS, moveRow, removeRow, updateRow } from './fam-links'
+import { addRow, applyProbe, buildCdpRow, buildCliRow, buildLpRow, hasCliLink, hasLpLink, isFull, isValidEndpoint, MAX_LINKS, moveRow, removeRow, updateRow } from './fam-links'
 
 		// #region CDP browser bridge client: realtime watch-bubble
 		//
@@ -142,6 +142,11 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 			linksActive: 'active',
 			linksAddCdp: 'Add CDP endpoint',
 			linksAddCli: 'Add local ego CLI',
+			linksAddLp: 'Add Lightpanda (managed)',
+			linksAddLpExists: 'The Lightpanda link already exists — local-only, one per machine',
+			linksLpPathHint: 'Empty = auto (PATH → ~/.local/bin; Windows runs it inside WSL2)',
+			linksLpHeadlessHint: 'Headless quick-trial engine — no manual fallback (login/captcha). Early in the order = quick trials use it; after the headed kinds (CDP / local Chrome / ego CLI) = backstop first.',
+			linksLpRemoteWarn: 'Activating a Lightpanda link under cdpMode=remote fails with mode-kind-mismatch',
 			linksAddCliExists: 'The local ego CLI link already exists — local-only, one per machine',
 			linksEndpoint: 'Endpoint',
 			linksEndpointHint: 'http(s)://host:port or ws(s)://…',
@@ -231,6 +236,11 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 			linksActive: '已激活',
 			linksAddCdp: '添加 CDP 端点',
 			linksAddCli: '添加本机 ego CLI',
+			linksAddLp: '添加 Lightpanda（受管）',
+			linksAddLpExists: 'Lightpanda 连接已存在——仅限本机，一台机器只允许一条',
+			linksLpPathHint: '留空 = 自动检测（PATH → ~/.local/bin；Windows 经 WSL2）',
+			linksLpHeadlessHint: '无头快速试验引擎：无法人工兜底（登录/验证码）。排前面 = 快速场景优先用它；排在有头类型（CDP/本机 Chrome/ego CLI）后 = 兜底优先。',
+			linksLpRemoteWarn: 'cdpMode=remote 时激活 Lightpanda 行会报 mode-kind-mismatch',
 			linksAddCliExists: '本机 ego CLI 连接已存在——仅限本机，一台机器只允许一条',
 			linksEndpoint: '端点',
 			linksEndpointHint: 'http(s)://主机:端口 或 ws(s)://…',
@@ -909,6 +919,8 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 			var addEndpoint = addEndpointState[0], setAddEndpoint = addEndpointState[1]
 			var addCliPathState = React.useState('')
 			var addCliPath = addCliPathState[0], setAddCliPath = addCliPathState[1]
+			var addLpPathState = React.useState('')
+			var addLpPath = addLpPathState[0], setAddLpPath = addLpPathState[1]
 
 			var btnStyle = { font: 'inherit', fontSize: '12px', cursor: writable ? 'pointer' : 'not-allowed', border: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.35))', background: 'none', color: 'var(--dsw-alias-label-primary, inherit)', borderRadius: '8px', padding: '2px 8px', flex: '0 0 auto' }
 			var badgeStyle = { fontSize: '10px', fontWeight: 600, letterSpacing: '.04em', flex: '0 0 auto', color: 'var(--dsw-alias-label-tertiary, rgba(127,127,127,.7))', border: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.25))', borderRadius: '6px', padding: '0 5px', lineHeight: '16px' }
@@ -941,6 +953,16 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 				}
 				setAddCliPath(''); setErrText('')
 			}
+			function addLp() {
+				var res = addRow(links, buildLpRow({ label: '', servePath: addLpPath }))
+				if (res.code) { setErrText(res.code === 'link-limit-reached' ? limitText() : wt('linksAddLpExists')); return }
+				writeLinks(res.links)
+				if (activeId === '') {
+					// 空序列的第一个目标入列即激活（无歧义）；后续行保持不自动激活。
+					void scope.set('activeTargetId', res.links[res.links.length - 1].id)
+				}
+				setAddLpPath(''); setErrText('')
+			}
 			function removeOne(row: any) {
 				var res = removeRow(links, row.id)
 				writeLinks(res.links)
@@ -958,6 +980,8 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 						var outcome = data && data.value && data.value.outcome
 							? data.value.outcome
 							: { ok: false, code: 'probe-failed', message: 'no outcome' }
+						// Lightpanda backend — persist the recognized engine with the probe state.
+						if (outcome && outcome.engine === undefined && outcome.ok === true) outcome.engine = 'chrome'
 						writeLinks(applyProbe(links, row.id, outcome, Date.now()))
 					})
 					.catch(function (error: any) {
@@ -989,6 +1013,7 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 						wt('linksEmpty'))
 					: links.map(function (row: any, idx: any) {
 						var isCli = row.kind === 'ego-cli'
+						var isLp = row.kind === 'lightpanda'
 						var isActive = row.id !== undefined && row.id === activeId
 						var probeBadge: any = null
 						if (row.probeStatus === 'ok' || row.probeStatus === 'error') {
@@ -1002,7 +1027,7 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 								h('input', { type: 'checkbox', checked: row.enabled === true, disabled: !writable,
 									title: wt('linksEnabled'),
 									onChange: function (e: any) { writeLinks(updateRow(links, row.id, { enabled: e.target.checked })) } }),
-								h('span', { style: badgeStyle }, isCli ? 'CLI' : 'CDP'),
+								h('span', { style: badgeStyle }, isCli ? 'CLI' : isLp ? 'LP·无头' : 'CDP'),
 								h(FamRowInput, { v: row.label || '', writable: writable, placeholder: wt('linksLabel'),
 									onCommit: function (v: any) { writeLinks(updateRow(links, row.id, { label: v })) } }),
 								probeBadge,
@@ -1017,10 +1042,11 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 										} },
 										wt('linksActivate'))),
 							h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
-								h(FamRowInput, { v: (isCli ? row.cliPath : row.endpoint) || '', writable: writable,
-									placeholder: isCli ? wt('linksCliPathHint') : wt('linksEndpointHint'),
+								h(FamRowInput, { v: (isCli ? row.cliPath : isLp ? row.servePath : row.endpoint) || '', writable: writable,
+									placeholder: isCli ? wt('linksCliPathHint') : isLp ? wt('linksLpPathHint') : wt('linksEndpointHint'),
 									onCommit: function (v: any) {
 										if (isCli) { writeLinks(updateRow(links, row.id, { cliPath: v })); return }
+										if (isLp) { writeLinks(updateRow(links, row.id, { servePath: v })); return }
 										if (!isValidEndpoint(v)) { setErrText(wt('linksEndpointInvalid')); return }
 										writeLinks(updateRow(links, row.id, { endpoint: v }))
 									} }),
@@ -1029,7 +1055,7 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 										title: wt('linksCliSdk'),
 										onChange: function (e: any) { writeLinks(updateRow(links, row.id, { useSdkPath: e.target.checked })) } }),
 									wt('linksCliSdk')) : null,
-								!isCli ? h('button', { type: 'button', disabled: !writable || probingId === row.id, style: btnStyle,
+								!isCli && !isLp ? h('button', { type: 'button', disabled: !writable || probingId === row.id, style: btnStyle,
 									onClick: function () { probeOne(row) } },
 									probingId === row.id ? wt('linksProbing') : wt('linksProbe')) : null,
 								h('button', { type: 'button', disabled: !writable || idx === 0, title: wt('linksMoveUp'), style: btnStyle,
@@ -1038,8 +1064,10 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 									onClick: function () { writeLinks(moveRow(links, row.id, 1)) } }, '↓'),
 								h('button', { type: 'button', disabled: !writable, title: wt('linksRemove'), style: btnStyle,
 									onClick: function () { removeOne(row) } }, '✕'),
-								isCli && cdpMode === 'remote'
-									? h('span', { style: { fontSize: '11px', color: '#ff9f0a', flex: '1 1 100%' } }, wt('linksCliRemoteWarn'))
+								(isCli || isLp) && cdpMode === 'remote'
+									? h('span', { style: { fontSize: '11px', color: '#ff9f0a', flex: '1 1 100%' } }, wt(isCli ? 'linksCliRemoteWarn' : 'linksLpRemoteWarn'))
+									: null,
+								isLp ? h('span', { style: { fontSize: '11px', color: 'var(--dsw-alias-label-tertiary, rgba(127,127,127,.7))', flex: '1 1 100%' } }, wt('linksLpHeadlessHint'))
 									: null))
 					}),
 				localRow,
@@ -1060,9 +1088,18 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 							style: Object.assign({ flex: '1 1 160px', minWidth: 0 }, inputStyle),
 							onChange: function (e: any) { setAddCliPath(e.target.value) },
 							onKeyDown: function (e: any) { if (e.key === 'Enter') { addCli() } } }),
-						h('button', { type: 'button', disabled: !writable || isFull(links) || hasCliLink(links),
+h('button', { type: 'button', disabled: !writable || isFull(links) || hasCliLink(links),
 							title: hasCliLink(links) ? wt('linksAddCliExists') : (isFull(links) ? limitText() : undefined),
 							style: btnStyle, onClick: addCli }, wt('linksAddCli'))),
+						h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' } },
+							h('input', { type: 'text', value: addLpPath, disabled: !writable || isFull(links) || hasLpLink(links),
+								placeholder: wt('linksLpPathHint'),
+								style: Object.assign({ flex: '1 1 160px', minWidth: 0 }, inputStyle),
+								onChange: function (e: any) { setAddLpPath(e.target.value) },
+								onKeyDown: function (e: any) { if (e.key === 'Enter') { addLp() } } }),
+							h('button', { type: 'button', disabled: !writable || isFull(links) || hasLpLink(links),
+								title: hasLpLink(links) ? wt('linksAddLpExists') : (isFull(links) ? limitText() : undefined),
+								style: btnStyle, onClick: addLp }, wt('linksAddLp'))),
 					errText ? h('div', { style: { fontSize: '11px', color: '#ff453a' } }, errText) : null))
 		}
 

@@ -22,7 +22,7 @@
  *     and never touch a real clock or network.
  */
 
-import type { BrowserLink, BrowserLinkKind, CdpLink, CdpMode, EgoCliLink } from './types.ts'
+import type { BrowserLink, BrowserLinkKind, CdpLink, CdpMode, EgoCliLink, LightpandaLink } from './types.ts'
 import { discoverWebSocketUrl, normalizeEndpoint, type CdpErrorCode } from './cdp/endpoint.ts'
 import { engineOf, type EngineId } from './cdp/capabilities.ts'
 import { launchLocalBrowser, stopLocalBrowser } from './cdp/launcher.ts'
@@ -50,6 +50,16 @@ export const EGO_CLI_KIND = 'ego-cli'
 
 /** Default panel label for an ego-cli link (no endpoint to fall back to). */
 export const EGO_CLI_LABEL = '本机 ego CLI'
+
+/**
+ * Lightpanda backend — the managed-serve link kind (headless quick-trial
+ * engine; headed kinds are the manual-fallback backstop). Local-only
+ * singleton, same rules as `ego-cli`.
+ */
+export const LP_KIND = 'lightpanda'
+
+/** Default panel label for a lightpanda link. */
+export const LP_LABEL = 'Lightpanda（受管）'
 
 // Endpoint validation + `/json/version` discovery moved to src/cdp/endpoint.ts
 // (M0.1). Re-exported above; nothing is defined here any more.
@@ -88,6 +98,15 @@ export function coerceLink(raw: unknown): BrowserLink | null {
       ...(rec.useSdkPath === undefined ? {} : { useSdkPath: Boolean(rec.useSdkPath) }),
     }
   }
+  if (rec.kind === LP_KIND) {
+    const servePath = typeof rec.servePath === 'string' ? rec.servePath.trim() : ''
+    return {
+      ...base,
+      kind: LP_KIND,
+      label: label === '' ? LP_LABEL : label,
+      servePath,
+    }
+  }
 
   const endpoint = normalizeEndpoint(rec.endpoint)
   if (!endpoint.ok) return null
@@ -106,6 +125,8 @@ export interface SanitizeLinksResult {
   links: BrowserLink[]
   /** Extra `ego-cli` entries that were dropped to honour the local-only singleton. */
   droppedEgoCli: number
+  /** Lightpanda backend — extra `lightpanda` rows dropped to honour the local-only singleton. */
+  droppedLightpanda: number
   /** Entries dropped because they carried no usable identity at all. */
   droppedInvalid: number
 }
@@ -114,17 +135,19 @@ export interface SanitizeLinksResult {
  * Sanitize the persisted sequence. Dirty data is expected here (a hand-edited
  * profile config on the settings page, older schema, unknown keys) so the rule
  * is DROP, never throw: every surviving entry is usable, duplicate ids get
- * fresh ones so ordering/activation stay unambiguous, and the `ego-cli`
- * singleton keeps the FIRST entry (dropping the rest and counting them for the
- * doctor).
+ * fresh ones so ordering/activation stay unambiguous, and the `ego-cli` /
+ * `lightpanda` singletons keep the FIRST entry of their kind (dropping the
+ * rest and counting them for the doctor).
  */
 export function sanitizeLinks(raw: unknown, max: number = MAX_TARGETS): SanitizeLinksResult {
-  if (!Array.isArray(raw)) return { links: [], droppedEgoCli: 0, droppedInvalid: 0 }
+  if (!Array.isArray(raw)) return { links: [], droppedEgoCli: 0, droppedLightpanda: 0, droppedInvalid: 0 }
   const out: BrowserLink[] = []
   const seen = new Set<string>()
   let droppedEgoCli = 0
+  let droppedLightpanda = 0
   let droppedInvalid = 0
   let sawEgoCli = false
+  let sawLightpanda = false
   for (const entry of raw) {
     const link = coerceLink(entry)
     if (!link) { droppedInvalid += 1; continue }
@@ -134,12 +157,17 @@ export function sanitizeLinks(raw: unknown, max: number = MAX_TARGETS): Sanitize
       if (sawEgoCli) { droppedEgoCli += 1; continue }
       sawEgoCli = true
     }
+    if (link.kind === LP_KIND) {
+      // Same local-only singleton rule: one machine, one managed Lightpanda.
+      if (sawLightpanda) { droppedLightpanda += 1; continue }
+      sawLightpanda = true
+    }
     if (seen.has(link.id)) link.id = newTargetId()
     seen.add(link.id)
     out.push(link)
     if (out.length >= max) break
   }
-  return { links: out, droppedEgoCli, droppedInvalid }
+  return { links: out, droppedEgoCli, droppedLightpanda, droppedInvalid }
 }
 
 /**
@@ -173,7 +201,7 @@ export function activeLink(links: readonly BrowserLink[], activeTargetId: string
 export const activeTarget = activeLink
 
 /** Why an upsert was refused. Refusals are structured, never silent. */
-export type UpsertRefusalCode = 'ego-cli-already-exists' | 'link-limit-reached' | 'unusable-row'
+export type UpsertRefusalCode = 'ego-cli-already-exists' | 'lightpanda-already-exists' | 'link-limit-reached' | 'unusable-row'
 
 export type UpsertLinkResult =
   | { ok: true; links: BrowserLink[]; link: BrowserLink }
@@ -183,8 +211,8 @@ export type UpsertLinkResult =
  * Insert or replace one entry. Existing fields survive when the patch omits
  * them, so the UI can push a single-field edit without resending the row.
  *
- * Two refusals are structured rather than silent (R7):
- *  - adding a SECOND `ego-cli` entry (`ego-cli-already-exists`);
+ * Refusals are structured rather than silent (R7):
+ *  - adding a SECOND `ego-cli` / `lightpanda` entry (local-only singletons);
  *  - exceeding `MAX_TARGETS` (`link-limit-reached`).
  */
 export function upsertLink(
@@ -192,13 +220,13 @@ export function upsertLink(
   // `kind` is taken from the union explicitly: intersecting the two Partial
   // shapes collapses it to `never`, which would make it impossible to add a
   // link at all.
-  patch: Omit<Partial<CdpLink>, 'kind'> & Omit<Partial<EgoCliLink>, 'kind'> & { id?: string; kind?: BrowserLinkKind },
+  patch: Omit<Partial<CdpLink>, 'kind'> & Omit<Partial<EgoCliLink>, 'kind'> & Omit<Partial<LightpandaLink>, 'kind'> & { id?: string; kind?: BrowserLinkKind },
 ): UpsertLinkResult {
   const id = typeof patch.id === 'string' && patch.id !== '' ? patch.id : newTargetId()
   const existing = findLink(links, id)
   const merged = coerceLink({ ...(existing ?? {}), ...patch, id })
   if (!merged) {
-    return { ok: false, code: 'unusable-row', message: 'row carries neither a usable CDP endpoint nor an ego-cli kind' }
+    return { ok: false, code: 'unusable-row', message: 'row carries neither a usable CDP endpoint nor a singleton kind' }
   }
   if (!existing) {
     if (merged.kind === EGO_CLI_KIND && links.some((link) => link.kind === EGO_CLI_KIND)) {
@@ -206,6 +234,13 @@ export function upsertLink(
         ok: false,
         code: 'ego-cli-already-exists',
         message: 'the local ego CLI link already exists — at most one is allowed per machine',
+      }
+    }
+    if (merged.kind === LP_KIND && links.some((link) => link.kind === LP_KIND)) {
+      return {
+        ok: false,
+        code: 'lightpanda-already-exists',
+        message: 'the Lightpanda link already exists — at most one managed serve is allowed per machine',
       }
     }
     if (links.length >= MAX_TARGETS) {
@@ -219,6 +254,13 @@ export function upsertLink(
       ok: false,
       code: 'ego-cli-already-exists',
       message: 'the local ego CLI link already exists — at most one is allowed per machine',
+    }
+  }
+  if (merged.kind === LP_KIND && links.some((link) => link.kind === LP_KIND && link.id !== id)) {
+    return {
+      ok: false,
+      code: 'lightpanda-already-exists',
+      message: 'the Lightpanda link already exists — at most one managed serve is allowed per machine',
     }
   }
   return { ok: true, links: links.map((link) => (link.id === id ? merged : link)), link: merged }
@@ -299,7 +341,7 @@ export interface AttachState {
   latencyMs: number
   resolvedAt: number
   /** T2.16 — how the attach came to be, shown by the panel badge + doctor. */
-  endpointSource?: 'remote' | 'local' | 'local-fallback' | 'cli' | 'cli-launch'
+  endpointSource?: 'remote' | 'local' | 'local-launch' | 'local-fallback' | 'cli' | 'cli-launch'
   /** R7 — which kind the activated entry is, so the sync decision table knows. */
   linkKind?: BrowserLinkKind
   /** Lightpanda backend — engine of the attached endpoint (badge + doctor + worker env). Absent = unrecognized. */
@@ -367,12 +409,14 @@ export function decideAttach(input: DecideInput): AttachDecision {
   // R7 — `remote` names a CDP endpoint literally, so a local CLI link under
   // that mode is a configuration mismatch. Refusing is better than quietly
   // driving a different browser than the mode promises.
-  if (input.mode === 'remote' && input.linkKind === EGO_CLI_KIND) {
+  if (input.mode === 'remote' && (input.linkKind === EGO_CLI_KIND || input.linkKind === LP_KIND)) {
     return {
       kind: 'error',
       code: 'mode-kind-mismatch',
       message:
-        'cdpMode=remote requires a CDP endpoint link, but the activated link is the local ego CLI. Activate a CDP link, or switch cdpMode to auto.',
+        input.linkKind === LP_KIND
+          ? 'cdpMode=remote requires a CDP endpoint link, but the activated link is the local Lightpanda serve. Activate a CDP link, or switch cdpMode to auto.'
+          : 'cdpMode=remote requires a CDP endpoint link, but the activated link is the local ego CLI. Activate a CDP link, or switch cdpMode to auto.',
     }
   }
   // R7 — an activated CLI link bypasses the endpoint table entirely: the CLI
@@ -391,6 +435,26 @@ export function decideAttach(input: DecideInput): AttachDecision {
       kind: 'error',
       code: input.code === '' ? 'cli-probe-failed' : input.code,
       message: input.message === '' ? 'the local ego CLI is not available' : input.message,
+    }
+  }
+  // Lightpanda backend — an activated managed-serve row owns its local
+  // endpoint just like the CLI: the launcher ensures the serve, the runtime
+  // attaches via injection, and remoteEnabled (a REMOTE switch) does not apply.
+  if (input.hasActive && input.linkKind === LP_KIND) {
+    if (input.status === 'ready' && input.wsUrl !== '') {
+      return { kind: 'inject', wsUrl: input.wsUrl, targetId: '', source: 'remote' }
+    }
+    if (input.status === 'idle' || input.status === 'probing') {
+      return {
+        kind: 'error',
+        code: 'endpoint-unresolved',
+        message: 'The Lightpanda serve has not been probed yet. Wait for the probe to finish and retry the call.',
+      }
+    }
+    return {
+      kind: 'error',
+      code: input.code === '' ? 'lightpanda-not-ready' : input.code,
+      message: input.message === '' ? 'the managed Lightpanda serve is not available' : input.message,
     }
   }
   if (input.remoteDisabled) {
@@ -488,6 +552,8 @@ export interface RefreshInput {
   sdkPath?: string
   /** R7 — bundled port used as the last-resort CLI ('' disables the fallback). */
   bundledCli?: string
+  /** Lightpanda backend — extra `lightpanda serve` args (config knob), filtered by the launcher. */
+  lightpandaArgs?: string
 }
 
 /**
@@ -558,6 +624,60 @@ async function refreshCliAttach(
     cliShape: probe.shape,
     latencyMs: probe.latencyMs,
     resolvedAt: now(),
+  })
+}
+
+/**
+ * Lightpanda backend — ensure the managed serve for an activated `lightpanda`
+ * row, then probe its endpoint. The launcher owns launch/reuse/exclusivity
+ * (a live managed Chrome loses the singleton slot to the serve and vice
+ * versa); `engine` is stamped from the ROW — the source the user picked — and
+ * `/json/version`'s `Browser: Lightpanda/…` merely re-confirms it.
+ */
+async function refreshLightpandaAttach(
+  input: RefreshInput,
+  cache: AttachCache,
+  suggested: AttachState,
+  link: LightpandaLink,
+  now: () => number,
+): Promise<AttachState> {
+  const base: AttachState = {
+    ...suggested,
+    targetId: link.id,
+    endpoint: '',
+    wsUrl: '',
+    linkKind: LP_KIND,
+  }
+  const launch = await launchLocalBrowser({
+    engine: 'lightpanda',
+    lightpandaPath: link.servePath ?? '',
+    lightpandaArgs: input.lightpandaArgs,
+  }, input.launcherIo as never)
+  if (!launch.ok) {
+    return cache.patch({
+      ...base,
+      status: 'unreachable',
+      code: launch.code,
+      message: launch.message,
+      resolvedAt: now(),
+    })
+  }
+  const probe = await probeEndpoint(launch.endpoint, { timeoutMs: input.timeoutMs, now })
+  return cache.patch({
+    ...base,
+    status: probe.ok && probe.wsUrl ? 'ready' : 'unreachable',
+    endpoint: launch.endpoint,
+    wsUrl: probe.wsUrl ?? '',
+    engine: 'lightpanda',
+    code: probe.ok ? '' : probe.code,
+    message: probe.ok
+      ? launch.reused
+        ? 'lightpanda serve reused'
+        : 'lightpanda serve launched'
+      : `lightpanda serve is up but its endpoint did not answer: ${probe.message}`,
+    latencyMs: probe.latencyMs,
+    resolvedAt: now(),
+    endpointSource: launch.reused ? 'local' : 'local-launch',
   })
 }
 
@@ -647,7 +767,7 @@ export async function refreshAttach(input: RefreshInput): Promise<AttachState> {
   // T2.18 — the remote switch is off: the sequence is INERT but preserved.
   // R7 — it gates REMOTE attach only, so a local `ego-cli` link is unaffected:
   // it is not a remote connection and has nothing to probe over the network.
-  if (input.remoteEnabled === false && target.kind !== EGO_CLI_KIND) {
+  if (input.remoteEnabled === false && target.kind !== EGO_CLI_KIND && target.kind !== LP_KIND) {
     return cache.patch({
       ...suggested,
       status: 'no-active',
@@ -666,6 +786,13 @@ export async function refreshAttach(input: RefreshInput): Promise<AttachState> {
   // a probe branch.
   if (target.kind === EGO_CLI_KIND) {
     return refreshCliAttach(input, cache, suggested, target, now)
+  }
+  // ── Lightpanda backend: the managed serve owns its endpoint ─────────────
+  // The launcher ensures the serve is up (launch/reuse), then the probe reads
+  // `/json/version` — `Browser: Lightpanda/…` there re-confirms the engine the
+  // row already declares.
+  if (target.kind === LP_KIND) {
+    return refreshLightpandaAttach(input, cache, suggested, target, now)
   }
 
   const sameTarget = previous.targetId === target.id && previous.endpoint === target.endpoint

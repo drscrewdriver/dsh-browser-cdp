@@ -118,7 +118,7 @@ export interface EgoContext {
  * (enforced in `sanitizeLinks` / `upsertLink` / the panel). Array order is the
  * priority order and is unchanged by this widening.
  */
-export type BrowserLinkKind = 'cdp' | 'ego-cli'
+export type BrowserLinkKind = 'cdp' | 'ego-cli' | 'lightpanda'
 
 /** Fields every sequence entry shares. */
 export interface LinkBase {
@@ -163,8 +163,23 @@ export interface EgoCliLink extends LinkBase {
   useSdkPath?: boolean
 }
 
+/**
+ * `kind: 'lightpanda'` — a MANAGED Lightpanda serve the plugin launches and
+ * owns (one per machine, like `ego-cli`). Headless text-render engine: fast,
+ * good for quick trials placed EARLY in the sequence; it can never backstop
+ * manual flows (no window → no human login/captcha), which is what the
+ * headed kinds (CDP / local Chrome / ego CLI) are for. Order is priority:
+ * Lightpanda first = quick-trial first; after the headed kinds = it simply
+ * never wins, which is the intended fallback ordering.
+ */
+export interface LightpandaLink extends LinkBase {
+  kind: 'lightpanda'
+  /** '' = auto-resolve (PATH → ~/.local/bin; win32 runs inside WSL2 via wsl.exe). */
+  servePath: string
+}
+
 /** One slot of the user's ordered connection sequence. */
-export type BrowserLink = CdpLink | EgoCliLink
+export type BrowserLink = CdpLink | EgoCliLink | LightpandaLink
 
 /** @deprecated R7 renamed this to `CdpLink`; kept so R1-era imports still resolve. */
 export type CdpTarget = CdpLink
@@ -241,6 +256,8 @@ export interface ResolvedConfig {
   allowLocalFallback: boolean
   localHeadless: boolean
   localUserDataDir: string
+  /** Lightpanda backend — extra `lightpanda serve` args (managed flags filtered by the launcher). */
+  lightpandaArgs: string
   // ── 阶段 10: JEV/Laya judge (see design-jev-pipeline.md) ────────────────
   //
   // These are first-class config, not "integration prerequisites in a footnote".

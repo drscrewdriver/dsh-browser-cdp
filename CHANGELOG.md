@@ -44,6 +44,18 @@
 ### 修复
 - `makeWhich` 的路径分隔符与 PATH 分隔符改为跟随**被模拟的平台**（原用 `node:path` 的宿主值，darwin/linux 查找在 Windows 上会拼成 `dir\file` 而永远找不到）。
 
+## [0.17.18] - 2026-10-03 — 🌐 引用徽标：composer 卡内浮动标识（overlay 席位）
+
+### 新增
+- **引用徽标**：草稿含我们的引用行时，composer 卡内（`conversation.input.overlay` 席位，order 110 排在 paste-dock 徽标之后）浮出 🌐 徽标——悬停显示页面标题/连接/元素数；与 paste-dock 的 📄 文档徽标同位共存。
+- 组件按会话探测（`props.sessionId` + 工厂下发的 `getDraft` 闭包），解析不了渲染 null；不触碰 ctx。
+
+## [0.17.17] - 2026-10-03 — 包装卡样式重写：不透明实底 + input-traffic 同款限宽
+
+### 修复
+- **透明度太高无底面**：卡片样式从主题变量内联改为**幂等 `<style>` 类样式表**——不透明实底（亮色 `#f7f7f9` / 暗色 `#1c1c1e`，`prefers-color-scheme` 自适应）；chip/次级文字/关闭钮配色亮暗各一套。
+- **太长顶满整窗**：采纳 input-traffic 同款限宽公式——`min(100% - 侧间隙×2 - dock 内距×2, 内容列宽 - 内距×2)`，卡宽限制在内容列（拖动范围）内。
+
 ## [0.17.16] - 2026-10-03 — 投递模型变更：块体归档为文件，输入框只留一行引用（dsh-paste-dock 同款）
 
 ### 变更

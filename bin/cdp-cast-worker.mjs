@@ -5475,6 +5475,45 @@ async function describeNode(call, sessionId, ref, timeoutMs) {
 		};
 	}
 }
+/**
+* Read an element's OWN visible text — the piece `DOM.describeNode` cannot see
+* at depth 0. Anchor/button text lives in the subtree, so a pure-text link
+* (<a>News</a>) carries no name attribute and describes as `name=""`; the
+* visible text IS the feature users (and slugs) recognize. Best-effort by
+* contract: any failure resolves to a LayerFailure, never throws — a text
+* read must not break a pick that already resolved.
+*/
+async function readNodeText(call, sessionId, backendNodeId, timeoutMs) {
+	try {
+		const objectId = (await call("DOM.resolveNode", { backendNodeId }, {
+			...sessionId === void 0 ? {} : { sessionId },
+			...timeoutMs === void 0 ? {} : { timeoutMs }
+		}))?.object?.objectId;
+		if (typeof objectId !== "string") return {
+			ok: false,
+			code: "node-not-resolved",
+			message: "DOM.resolveNode returned no objectId"
+		};
+		const result = await call("Runtime.callFunctionOn", {
+			objectId,
+			functionDeclaration: "function () { const cap = (s) => String(s).replace(/\\s+/g, \" \").trim().slice(0, 60);\nif (this instanceof HTMLInputElement) return cap(this.value || this.placeholder || \"\");\nif (this instanceof HTMLImageElement) return cap(this.alt || \"\");\nif (this instanceof HTMLSelectElement) return cap(this.selectedOptions && this.selectedOptions[0] ? this.selectedOptions[0].text : \"\");\nreturn cap(this.getAttribute(\"aria-label\") || this.getAttribute(\"title\") || (this.innerText ?? this.textContent) || \"\"); }",
+			returnByValue: true
+		}, {
+			...sessionId === void 0 ? {} : { sessionId },
+			...timeoutMs === void 0 ? {} : { timeoutMs }
+		});
+		return {
+			ok: true,
+			text: typeof result?.result?.value === "string" ? result.result.value : ""
+		};
+	} catch (error) {
+		return {
+			ok: false,
+			code: "text-read-failed",
+			message: error instanceof Error ? error.message : String(error)
+		};
+	}
+}
 /** A CDP quad is 8 numbers: x1,y1 .. x4,y4. */
 function quadToRect(quad) {
 	if (!Array.isArray(quad) || quad.length < 8) return null;
@@ -5959,6 +5998,11 @@ var PickChannel = class {
 			this.#fail(semantics.code, semantics.message);
 			return;
 		}
+		let displayName = semantics.name;
+		if (displayName === "") {
+			const text = await readNodeText(call, sessionId, backendNodeId);
+			if (text.ok && text.text !== "") displayName = text.text;
+		}
 		const box = await boxModel(call, sessionId, { backendNodeId }, { scroll: scrollOffset });
 		let pageUrl = "";
 		let pageTitle = "";
@@ -5974,11 +6018,14 @@ var PickChannel = class {
 			tag: semantics.tag,
 			id: semantics.id,
 			role: semantics.role,
-			name: semantics.name,
+			name: displayName,
 			keyboardFocusable: semantics.keyboardFocusable,
 			rect: box.ok ? box.rect : null,
 			documentRect: box.ok ? box.documentRect : null,
-			describe: describeElement(semantics),
+			describe: describeElement({
+				...semantics,
+				name: displayName
+			}),
 			source: {
 				endpoint: this.#getEndpoint ? this.#getEndpoint() : "",
 				targetId,

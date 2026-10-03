@@ -1,5 +1,15 @@
 > ⚠️ **0.18.10 已被 registry 烧号**：npmjs 受理后长期停留在 staged 状态从未提交（读路径 404、重发 `EPUBLISHCONFLICT: previously staged`），版本号永久不可安装——**安装请用 0.18.11**（内容 = 0.18.10 全部 + dock 注册诊断 `__dshBrowserCdpDeco` + locale 补齐 + 点选卡片正则放宽）。0.18.5 同前例。
 
+## [0.18.19] - 2026-10-03 — 真机反馈⑩：点选特征采集换轨——纯文本链接读元素自身可见文本（同 0.17.23 反向同源）
+
+### 修复（真机：News 这类链接全采成 `a name="" focusable`）
+- **根因**：`describeNode` 的 name 只从属性取，`<a>News</a>` 的可见文本在 textContent 里，深度 0 不可见——纯文本链接全部 `name=""`。
+- **修复**：新增 `readNodeText`（resolveNode + callFunctionOn 读元素自身文本，压空白截 60 字符）；pick 链路 name 为空时回退——描述/slug/归档 name 三处同步可辨。
+- best-effort：读失败不推翻 pick；有属性名的元素不多读。
+
+### 验证
+- 全测 693 passed / 11 skipped（含 2 条新测试）；两套 `tsc` 通过。
+
 ## [0.18.18] - 2026-10-03 — 真机反馈⑨：归档文件名带元素特征 slug（同 0.17.21 反向同源）
 
 ### 变更

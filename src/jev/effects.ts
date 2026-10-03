@@ -36,6 +36,7 @@ import { doneQuestion } from './prompt.ts'
 import type { JudgeRuntime } from './client.ts'
 import { sendJudge } from './client.ts'
 import { runRenderCall } from './render.ts'
+import { capabilitiesFor, type EngineId } from '../cdp/capabilities.ts'
 
 /** The worker's `capture` reply, in the fields this module reads. */
 interface CaptureReply {
@@ -72,6 +73,8 @@ export interface EffectsDeps {
   wsUrl: string
   /** Which page to serve; '' lets the worker prefer an http(s) page. */
   targetId?: string
+  /** Lightpanda backend — engine of the attached endpoint; default 'unknown' = full capabilities (jpeg). */
+  engine?: EngineId
   judge: JudgeRuntime
   /** Frame byte budget. 0 = unbounded. */
   maxImageBytes: number
@@ -107,6 +110,11 @@ export interface JudgeEffects extends LoopEffects {
 export function makeJudgeEffects(deps: EffectsDeps): JudgeEffects {
   const frames: Frame[] = []
   let sequence = 0
+  // Lightpanda backend — the wire format is the projection's decision, made
+  // HERE rather than per-call: a jpeg literal sent to Lightpanda fails the
+  // whole capture step with -32000, so this projection is what keeps the jev
+  // visual chain alive on that engine (unknown/chrome keep jpeg = unchanged).
+  const caps = capabilitiesFor(deps.engine ?? 'unknown')
   // The numbering the judge is answering about. Rebuilt on every capture
   // because the worker renumbers from 1 each time, and a stale map here would
   // resolve a judge's `n` to the WRONG backendNodeId — silently, and only on a
@@ -123,8 +131,8 @@ export function makeJudgeEffects(deps: EffectsDeps): JudgeEffects {
         {
           method: 'capture',
           params: {
-            format: 'jpeg',
-            quality: 72,
+            format: caps.imageFormat,
+            ...(caps.imageFormat === 'jpeg' ? { quality: 72 } : {}),
             maxBytes: deps.maxImageBytes,
             limit: deps.candidateLimit,
             marks: true,
@@ -174,7 +182,7 @@ export function makeJudgeEffects(deps: EffectsDeps): JudgeEffects {
       target,
       viewport: reply.viewport,
       image: {
-        format: 'jpeg',
+        format: caps.imageFormat,
         bytes: reply.bytes,
         dataBase64: reply.data,
         quality: reply.quality,

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { resolveConfig, judgeSettingsOf, tokenizeArgs, filterArgs, EGO_CLI_BLOCKED, CHROME_BLOCKED } from "../src/config.ts";
+import { resolveConfig, judgeSettingsOf, tokenizeArgs, filterArgs, normalizeProbeState, EGO_CLI_BLOCKED, CHROME_BLOCKED } from "../src/config.ts";
 
 describe("dual capture config", () => {
   it("returns canonical defaults", () => {
@@ -199,6 +199,20 @@ describe("R7 connection sequence", () => {
       links: [{ kind: "ego-cli", id: "c", label: "", cliPath: "" }],
     } as never);
     expect(config.links[0]).toMatchObject({ probeStatus: "unknown", probeLatencyMs: 0, probeError: "", probeCode: "", probeAt: 0 });
+  });
+
+  it("converges probeEngine to 'unknown' on rows missing it — same lifecycle as probeStatus", () => {
+    const config = resolveConfig({
+      links: [{ kind: "cdp", id: "legacy", label: "", endpoint: "http://legacy:1", enabled: true, note: "" }],
+    } as never);
+    expect(config.links[0]!.probeEngine).toBe("unknown");
+  });
+
+  it("normalizeProbeState keeps a recognized probeEngine and drops forged values", () => {
+    const engineOf = (link: unknown) => (normalizeProbeState(link as never) as { probeEngine?: string }).probeEngine;
+    expect(engineOf({ id: "lp", probeEngine: "lightpanda" })).toBe("lightpanda");
+    expect(engineOf({ id: "x", probeEngine: "espresso" })).toBe("unknown");
+    expect(engineOf({ id: "y" })).toBe("unknown");
   });
 });
 

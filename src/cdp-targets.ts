@@ -24,6 +24,7 @@
 
 import type { BrowserLink, BrowserLinkKind, CdpLink, CdpMode, EgoCliLink } from './types.ts'
 import { discoverWebSocketUrl, normalizeEndpoint, type CdpErrorCode } from './cdp/endpoint.ts'
+import { engineOf, type EngineId } from './cdp/capabilities.ts'
 import { launchLocalBrowser, stopLocalBrowser } from './cdp/launcher.ts'
 import { probeCliLink, type CliLinkIo } from './cdp/cli-link.ts'
 
@@ -251,6 +252,8 @@ export interface ProbeOutcome {
   message: string
   /** Resolved browser websocket, present only on success. Never persisted. */
   wsUrl?: string
+  /** Lightpanda backend — engine recognized from the discovery `Browser` field, success only. */
+  engine?: EngineId
   latencyMs: number
 }
 
@@ -278,7 +281,7 @@ export async function probeEndpoint(endpoint: string, options: ProbeOptions = {}
   if (!result.ok) {
     return { ok: false, code: result.code, message: result.message, latencyMs: result.latencyMs }
   }
-  return { ok: true, code: 'ok', message: '', wsUrl: result.wsUrl, latencyMs: result.latencyMs }
+  return { ok: true, code: 'ok', message: '', wsUrl: result.wsUrl, engine: engineOf(result.browser), latencyMs: result.latencyMs }
 }
 
 // ── attach decision + cache ────────────────────────────────────────────────
@@ -299,6 +302,8 @@ export interface AttachState {
   endpointSource?: 'remote' | 'local' | 'local-fallback' | 'cli' | 'cli-launch'
   /** R7 — which kind the activated entry is, so the sync decision table knows. */
   linkKind?: BrowserLinkKind
+  /** Lightpanda backend — engine of the attached endpoint (badge + doctor + worker env). Absent = unrecognized. */
+  engine?: EngineId
   /** R7 — `ego-cli` only: the resolved CLI path / spawn shape, for the doctor. */
   cliPath?: string
   cliShape?: string
@@ -596,6 +601,7 @@ export async function refreshAttach(input: RefreshInput): Promise<AttachState> {
             status: 'ready',
             endpoint: launch.endpoint,
             wsUrl: localProbe.wsUrl,
+            engine: localProbe.engine,
             code: '',
             message: launch.reused ? 'local mode: reused managed browser' : 'local mode: managed browser launched',
             latencyMs: localProbe.latencyMs,
@@ -605,6 +611,7 @@ export async function refreshAttach(input: RefreshInput): Promise<AttachState> {
         return cache.patch({
           ...suggested,
           status: 'unreachable',
+          engine: undefined,
           code: 'local-launch-not-ready',
           message: `managed local browser launched but its endpoint did not answer: ${localProbe.message}`,
         })
@@ -612,6 +619,7 @@ export async function refreshAttach(input: RefreshInput): Promise<AttachState> {
       return cache.patch({
         ...suggested,
         status: 'unreachable',
+        engine: undefined,
         code: `local-${launch.code}`,
         message: launch.message,
       })
@@ -681,6 +689,7 @@ export async function refreshAttach(input: RefreshInput): Promise<AttachState> {
     return cache.patch({
       status: 'ready',
       wsUrl: outcome.wsUrl,
+      engine: outcome.engine,
       code: '',
       message: '',
       latencyMs: outcome.latencyMs,
@@ -704,6 +713,7 @@ export async function refreshAttach(input: RefreshInput): Promise<AttachState> {
         return cache.patch({
           status: 'ready',
           wsUrl: localProbe.wsUrl,
+          engine: localProbe.engine,
           endpoint: launch.endpoint,
           code: '',
           message: 'local fallback launched (activated endpoint unreachable)',
@@ -716,6 +726,7 @@ export async function refreshAttach(input: RefreshInput): Promise<AttachState> {
       return cache.patch({
         status: 'unreachable',
         wsUrl: '',
+        engine: undefined,
         code: 'local-launch-not-ready',
         message: `local fallback browser launched but its endpoint did not answer: ${localProbe.message}`,
         latencyMs: outcome.latencyMs,
@@ -734,6 +745,7 @@ export async function refreshAttach(input: RefreshInput): Promise<AttachState> {
   return cache.patch({
     status: 'unreachable',
     wsUrl: '',
+    engine: outcome.ok ? outcome.engine : undefined,
     code: outcome.code,
     message: outcome.message,
     latencyMs: outcome.latencyMs,

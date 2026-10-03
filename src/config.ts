@@ -73,6 +73,7 @@ export const Config = z.object({
       probeError: z.string(),
       probeCode: z.string(),
       probeAt: z.number(),
+      probeEngine: z.union(['chrome', 'lightpanda', 'unknown']),
     }),
     z.object({
       kind: z.string(),
@@ -87,6 +88,7 @@ export const Config = z.object({
       probeError: z.string(),
       probeCode: z.string(),
       probeAt: z.number(),
+      probeEngine: z.union(['chrome', 'lightpanda', 'unknown']),
     }),
   ])).description('Ordered connection sequence: CDP endpoints and (at most one) local ego CLI link. Only the ACTIVATED and enabled entry receives every bcdp_* call. Order IS the priority order.').volatile(),
   activeTargetId: z.string().description('Id of the activated entry in links. Empty = nothing activated.').volatile(),
@@ -428,5 +430,8 @@ export function normalizeProbeState<T extends LinkBase>(link: T): T {
     probeError: typeof link.probeError === 'string' ? link.probeError : '',
     probeCode: typeof link.probeCode === 'string' ? link.probeCode : '',
     probeAt: typeof link.probeAt === 'number' && Number.isFinite(link.probeAt) ? link.probeAt : 0,
+    // Lightpanda backend: rows written before recognition carry no engine —
+    // converge to 'unknown' (= full capabilities) instead of null-check ladders.
+    probeEngine: link.probeEngine === 'chrome' || link.probeEngine === 'lightpanda' ? link.probeEngine : 'unknown',
   }
 }

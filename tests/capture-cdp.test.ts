@@ -47,4 +47,18 @@ describe("CDP capture backend", () => {
     expect(cdp.calls.filter((call) => call.method.includes("Screencast")).map((call) => [call.method, call.sessionId])).toEqual([["Page.startScreencast", "session-a"], ["Page.stopScreencast", "session-a"], ["Page.startScreencast", "session-b"]]);
     await backend.stop();
   });
+
+  it("projects the wire format: png (Lightpanda) drops quality, jpeg (default) keeps it", async () => {
+    const cdp = new FakeCdp();
+    const sessions = { ensure: async () => ({ targetId: "t", sessionId: "s" }), get: () => null, updateViewport: async () => ({}) } as unknown as TargetSessions;
+    const make = (imageFormat?: "jpeg" | "png") => new CdpCaptureBackend({ cdp: cdp as unknown as CdpClient, sessions, getConfig: () => ({ cdpFps: 20, cdpQuality: 55, cdpMaxWidth: 960, cdpBackstopIntervalMs: 10000 }), onStatus: () => {}, onJpegFrame: () => {}, ...(imageFormat === undefined ? {} : { imageFormat }) });
+    await make("png").start({ targetId: "t" });
+    const pngParams = cdp.calls.find((call) => call.method === "Page.startScreencast")!.params;
+    expect(pngParams.format).toBe("png");
+    expect(pngParams).not.toHaveProperty("quality");
+    await make().start({ targetId: "t" });
+    const jpegParams = cdp.calls.filter((call) => call.method === "Page.startScreencast").at(-1)!.params;
+    expect(jpegParams.format).toBe("jpeg");
+    expect(jpegParams.quality).toBe(55);
+  });
 });

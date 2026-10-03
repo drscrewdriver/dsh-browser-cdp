@@ -7,9 +7,9 @@
 export const EGO_HELP_INDEX: Record<string, string> = {
   overview:
     'CDP 浏览器代理：结构化浏览器工具。导航/交互/观察/表单/网络/等待/键鼠皆有专项工具，另提供 bcdp_help(本索引)、bcdp_doctor(体检)、bcdp_cli/bcdp_script(自由脚本逃生舱)。连接与激活见 topic=links。' +
-    '分类见: tools / navigate / observe / input / keyboard-mouse / form / wait / network / login / script / doctor。用 `topic` 查询，或直接给工具名。',
+    '分类见: tools / navigate / observe / input / keyboard-mouse / form / wait / network / login / script / doctor / lightpanda。用 `topic` 查询，或直接给工具名。',
   tools:
-    '工具清单: bcdp_status, bcdp_space_open, bcdp_space_close, bcdp_snapshot, bcdp_navigate, bcdp_click(+double), bcdp_fill, bcdp_js, bcdp_cdp, bcdp_screenshot(+selector), bcdp_page_info, bcdp_wait, bcdp_wait_for_selector, bcdp_wait_for_url, bcdp_wait_for_response, bcdp_key(+text/type), bcdp_hover, bcdp_read_element, bcdp_select, bcdp_drag, bcdp_scroll, bcdp_upload, bcdp_check, bcdp_dialog, bcdp_download, bcdp_http, bcdp_captcha, bcdp_auth_flush, bcdp_login_import, bcdp_help, bcdp_doctor, bcdp_cli, bcdp_script, bcdp_jev_status, bcdp_jev_frame, bcdp_jev_ask, bcdp_jev_run。',
+    '工具清单: bcdp_status, bcdp_space_open, bcdp_space_close, bcdp_snapshot, bcdp_navigate, bcdp_click(+double), bcdp_fill, bcdp_js, bcdp_cdp, bcdp_screenshot(+selector), bcdp_page_info, bcdp_wait, bcdp_wait_for_selector, bcdp_wait_for_url, bcdp_wait_for_response, bcdp_key(+text/type), bcdp_hover, bcdp_read_element, bcdp_select, bcdp_drag, bcdp_scroll, bcdp_upload, bcdp_check, bcdp_dialog, bcdp_download, bcdp_http, bcdp_captcha, bcdp_auth_flush, bcdp_login_import, bcdp_help, bcdp_doctor, bcdp_cli, bcdp_script, bcdp_jev_status, bcdp_jev_frame, bcdp_jev_attempt, bcdp_jev_ask, bcdp_jev_run。',
   links:
     '连接序列（设置面板）：有序列表，顺序即优先级，被激活的一项驱动每一次 bcdp_* 调用。两种类型——' +
     'CDP 端点（注入 EGO_LINUX_CDP_URL，指向已开调试端口的浏览器）与 本机 ego CLI（不注入端点，由本机 ego CLI 直接驱动 ego-lite 浏览器；' +
@@ -29,7 +29,13 @@ export const EGO_HELP_INDEX: Record<string, string> = {
   captcha: 'bcdp_captcha: 检测页面人机验证(CAPTCHA)并返回{detected,kind}; 检测到请让用户去 ego 浏览器完成; bcdp_page_info 也附带 humanCheck。',
   login: 'bcdp_auth_flush: 把登录cookie落盘到ego profile; 观察窗登录引导条+『已登录,保存』按钮触发同一动作。bcdp_login_import: 从系统浏览器(Chrome/Edge/Brave)按域名导入登录cookie(source/domains/dryRun; 先dryRun看可导入项; ego浏览器须已在运行)。',
   script: 'bcdp_cli / bcdp_script: 原样运行任意内置运行时 heredoc 脚本(page/browser/taskSpaces/site/fetch/cdp预载)。bcdp_script额外返回 duration/timedOut。',
-  doctor: 'bcdp_doctor: 体检环境(浏览器候选、vendored runtime、状态目录、CDP端口、任务空间)。',
+  doctor: 'bcdp_doctor: 体检环境(浏览器候选、vendored runtime、状态目录、CDP端口、任务空间、引擎与降级清单)。',
+  lightpanda:
+    'Lightpanda 作为后端（文本渲染引擎，beta）：设置面板以普通 CDP 端点接入（如 http://127.0.0.1:9222），probe 会自动识别 Browser=Lightpanda/ 并在 badge/doctor 显示 engine。' +
+    '安装——linux/macOS：`curl -fsSL https://pkg.lightpanda.io/install.sh | bash`（装入 ~/.local/bin，确保 PATH 含它），`lightpanda serve --host 127.0.0.1 --port 9222`；' +
+    'Windows：无原生版，用 WSL2（管理员 `wsl --install`，WSL 内同上；WSL2 自动把端口映射到宿主 localhost）或 Docker（`docker run -d -p 127.0.0.1:9222:9222 lightpanda/browser:nightly`）。' +
+    '可用：navigate/js/click/fill/key/snapshot(AX树)/http/login_import 等；降级：截图=PNG 文本渲染（视觉保真低于 Chrome，jev 输出带 engine/rendering 元数据）；' +
+    '关闭：观察窗实时画面（无 screencast）、面板点选（无 Overlay/bindingCalled）、bcdp_download（无 Page 下载事件，调用即结构化报错）、auth_flush（无 Storage.flushCookies，返回 degraded）。',
   judge:
     'JEV/Laya 判定（阶段 10）：机械采集「截图 + 编号 DOM + 意图 + 操作进度」→ 组装问题 → 取选择 → 执行 → 验证。' +
     '判定器只能回传编号，绝不给选择器（幻觉选择器在结构上不可能）。' +

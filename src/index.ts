@@ -816,6 +816,8 @@ interface EgoToolOptions {
   parameters: Record<string, unknown>
   buildScript: (args: Record<string, unknown>) => string
   afterExecute?: (args: Record<string, unknown>, value: unknown) => void
+  /** Lightpanda backend — return a blocking reason (or null to allow) checked BEFORE any runtime spawn. */
+  gate?: (args: Record<string, unknown>) => string | null
 }
 
 function defineEgoTool(ctx: EgoContext, cfg: EgoRuntimeConfig, opts: EgoToolOptions): ToolHandle {
@@ -836,6 +838,13 @@ function defineEgoTool(ctx: EgoContext, cfg: EgoRuntimeConfig, opts: EgoToolOpti
         // calls betterSidebar.openTab(). Idempotent: the client's transition
         // guard means only the first call per session opens the Tab.
         markEgoToolCall(callingSessionId(exec))
+        // Capability gate: a tool whose dependency face the attached engine
+        // cannot satisfy fails HERE — structured and immediate — instead of
+        // hanging inside the runtime until a timeout.
+        if (typeof opts.gate === 'function') {
+          const blocked = opts.gate(args)
+          if (blocked !== null && blocked !== '') return { ok: false, text: blocked }
+        }
         // Stale-space recovery (browser restart wiped the space table) is
         // handled inside runWithStaleSpaceRetry; the cold-start retry is one
         // level deeper.
@@ -1017,7 +1026,7 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
           bundledCli: VENDORED_EGO_BIN,
         })
         const ws = attach.status === 'ready' && attach.wsUrl !== '' ? attach.wsUrl : null
-        if (setAttachEndpoint(ws)) {
+        if (setAttachEndpoint(ws, attach.status === 'ready' ? attach.engine ?? 'unknown' : null)) {
           void recycleWorker('cdp activation change').catch(() => null)
         }
       } catch {
@@ -1288,6 +1297,8 @@ function registerAuthFlush(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool: T
             ok: { type: 'boolean', required: true },
             total: { type: 'integer' },
             flushed: { type: 'integer' },
+            /** Lightpanda backend — set when the engine has no Storage.flushCookies (nothing was persisted). */
+            degraded: { type: 'boolean' },
             error: { type: 'string' },
           },
         },
@@ -1333,11 +1344,17 @@ function registerAuthFlush(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool: T
               signal: AbortSignal.timeout(8000),
             })
             const jbody = await r.json() as { ok?: boolean; total?: number; flushed?: number; error?: string }
+            // Lightpanda backend — the worker's Storage.flushCookies call is
+            // already best-effort (errors swallowed inside the worker), so on
+            // that engine this tool would return a fake `ok: true` while having
+            // persisted nothing. Report the degraded truth instead.
+            const degraded = defaultAttachCache.get().engine === 'lightpanda'
             return {
-              ok: !!jbody.ok,
+              ok: !!jbody.ok && !degraded,
               total: jbody.total ?? 0,
               flushed: jbody.flushed ?? 0,
-              error: jbody.error,
+              ...(degraded ? { degraded: true, error: 'engine-unsupported: Lightpanda has no Storage.flushCookies — cookies persist only while the engine process is alive' } : {}),
+              ...(!degraded && jbody.error !== undefined ? { error: jbody.error } : {}),
             }
           } catch (err) {
             return { ok: false, error: String((err as Error)?.message || err) }
@@ -2198,6 +2215,13 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
         },
         space: spaceParam,
       },
+      // Lightpanda backend — the engine never fires Page.downloadWillBegin/
+      // downloadProgress, so `page.waitForEvent('download')` would just hang
+      // until the timeout. Fail fast with the engine-aware reason instead.
+      gate: () =>
+        defaultAttachCache.get().engine === 'lightpanda'
+          ? 'engine-unsupported: the attached browser is Lightpanda, which has no Page download events — bcdp_download cannot capture files on this engine. Trigger the download another way (e.g. fetch() the URL in-page and return the bytes).'
+          : null,
       buildScript: (args) => {
         const sel = str(args.triggerSelector, '')
         const script = str(args.triggerScript, '')
@@ -2383,6 +2407,9 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
             ok: { type: 'boolean', required: true },
             detected: { type: 'boolean', required: true },
             kind: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+            /** Lightpanda backend —知情元数据: the probe is DOM-based, so detection works unchanged. */
+            engine: { type: 'string' },
+            rendering: { type: 'string' },
           },
         },
         render: renderText,
@@ -2405,6 +2432,7 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
             ok: true,
             detected: !!hc?.detected,
             kind: hc?.kind ?? null,
+            ...(defaultAttachCache.get().engine === 'lightpanda' ? { engine: 'lightpanda', rendering: 'text' } : {}),
           }
         }),
       presentCall: () => ({ card: 'generic', title: 'bcdp_captcha', kind: 'other', rawInput: null }),
@@ -2492,6 +2520,20 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
         const attachNow = defaultAttachCache.get()
         lines.push(`remote CDP: ${cfg.remoteEnabled === false ? 'DISABLED by switch (sequence preserved)' : 'enabled'}`)
         lines.push(`attach: ${attachNow.status}${attachNow.endpointSource ? ` (source: ${attachNow.endpointSource})` : ''}${attachNow.endpoint ? ` @ ${attachNow.endpoint}` : ''}`)
+        // ── Lightpanda backend: engine, degradation list, per-OS install hint ──
+        if (attachNow.engine !== undefined) {
+          lines.push(`engine: ${attachNow.engine}`)
+        }
+        if (attachNow.engine === 'lightpanda') {
+          lines.push('degraded on this engine: live view (no screencast) · panel pick (no Overlay/bindingCalled) · bcdp_download (no Page download events) · screenshots are PNG text-renders · auth_flush is a no-op')
+        }
+        if (attachNow.engine === 'lightpanda' || process.platform === 'win32') {
+          lines.push(
+            process.platform === 'win32'
+              ? 'lightpanda on win32: no native build — use WSL2: `wsl --install` (admin), then inside WSL: `curl -fsSL https://pkg.lightpanda.io/install.sh | bash` + `lightpanda serve --host 127.0.0.1 --port 9222`; WSL2 maps the port to Windows localhost, then add http://127.0.0.1:9222 as a CDP endpoint. Docker alternative: `docker run -d -p 127.0.0.1:9222:9222 lightpanda/browser:nightly`.'
+              : 'lightpanda (linux/macOS): `curl -fsSL https://pkg.lightpanda.io/install.sh | bash` (installs to ~/.local/bin) then `lightpanda serve --host 127.0.0.1 --port 9222`.',
+          )
+        }
         // ── R7: connection kinds, the local CLI, and the conflict guard ────
         const kindCount = (kind: string): number => cfg.links.filter((link) => link.kind === kind).length
         const dropped = cfg.droppedEgoCli
@@ -2697,6 +2739,7 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
       workerPath: RENDER_WORKER_BIN,
       wsUrl: attach.wsUrl,
       targetId: attach.targetId,
+      ...(attach.engine === undefined ? {} : { engine: attach.engine }),
       judge,
       maxImageBytes: cfg.jevMaxImageBytes,
       candidateLimit: cfg.jevChunkSize,
@@ -2947,6 +2990,7 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
           workerPath: RENDER_WORKER_BIN,
           wsUrl: defaultAttachCache.get().wsUrl,
           targetId: defaultAttachCache.get().targetId,
+          engine: defaultAttachCache.get().engine,
           judge: judgeRuntimeOf(),
           maxImageBytes: num(args.maxBytes, judge.maxImageBytes),
           candidateLimit: num(args.limit, judge.chunkSize),
@@ -2968,6 +3012,11 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
           `budget     : ${frame.image === null || frame.image.maxBytes === 0 ? 'unbounded' : frame.image.maxBytes + ' B'}${frame.image?.overBudget === true ? '  *** OVER BUDGET ***' : ''}`,
           `candidates : ${frame.dom.nodes.length} of ${frame.dom.total}${frame.dom.truncated ? ' (TRUNCATED)' : ''}`,
         ]
+        if (defaultAttachCache.get().engine === 'lightpanda') {
+          // Lightpanda backend —知情元数据: the PNG is a TEXT-level layout
+          // render (no pixel engine), so visual fidelity differs from Chrome.
+          lines.push(`engine     : lightpanda (rendering: text — screenshot fidelity differs from Chrome)`)
+        }
         if (frame.image?.overBudget === true) {
           // Reported rather than hidden: a caller that set a budget must be able
           // to tell "I got what I asked for" from "I got the closest thing".

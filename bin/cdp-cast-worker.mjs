@@ -3832,6 +3832,7 @@ var CdpCaptureBackend = class {
 	getConfig;
 	onStatus;
 	onJpegFrame;
+	imageFormat;
 	now;
 	setTimer;
 	clearTimer;
@@ -3843,12 +3844,13 @@ var CdpCaptureBackend = class {
 	metrics;
 	offFrame;
 	offDestroyed;
-	constructor({ cdp, sessions, getConfig, onStatus, onJpegFrame, now = Date.now, setTimer = setTimeout, clearTimer = clearTimeout }) {
+	constructor({ cdp, sessions, getConfig, onStatus, onJpegFrame, imageFormat = "jpeg", now = Date.now, setTimer = setTimeout, clearTimer = clearTimeout }) {
 		this.cdp = cdp;
 		this.sessions = sessions;
 		this.getConfig = getConfig;
 		this.onStatus = onStatus;
 		this.onJpegFrame = onJpegFrame;
+		this.imageFormat = imageFormat;
 		this.now = now;
 		this.setTimer = setTimer;
 		this.clearTimer = clearTimer;
@@ -3892,8 +3894,8 @@ var CdpCaptureBackend = class {
 		});
 		try {
 			await this.cdp.call("Page.startScreencast", {
-				format: "jpeg",
-				quality: config.cdpQuality,
+				format: this.imageFormat,
+				...this.imageFormat === "jpeg" ? { quality: config.cdpQuality } : {},
 				maxWidth: config.cdpMaxWidth,
 				everyNthFrame: 1
 			}, session.sessionId);
@@ -4016,8 +4018,8 @@ var CdpCaptureBackend = class {
 				const session = await this.sessions.updateViewport(current.targetId);
 				const scale = session.viewportW > this.getConfig().cdpMaxWidth ? this.getConfig().cdpMaxWidth / session.viewportW : 1;
 				const result = await this.cdp.call("Page.captureScreenshot", {
-					format: "jpeg",
-					quality: this.getConfig().cdpQuality,
+					format: this.imageFormat,
+					...this.imageFormat === "jpeg" ? { quality: this.getConfig().cdpQuality } : {},
 					captureBeyondViewport: false,
 					...session.viewportW && session.viewportH ? { clip: {
 						x: 0,
@@ -4047,6 +4049,7 @@ var CaptureManager = class {
 	backendFactories;
 	getConfig;
 	onStatus;
+	screencastSupported;
 	now;
 	setTimer;
 	clearTimer;
@@ -4061,10 +4064,11 @@ var CaptureManager = class {
 	transition;
 	stopTimer;
 	sweepTimer;
-	constructor({ backendFactories, getConfig, onStatus, now = Date.now, setTimer = setTimeout, clearTimer = clearTimeout, leaseTtlMs = 12e4, idleGraceMs = 1500 }) {
+	constructor({ backendFactories, getConfig, onStatus, screencastSupported = true, now = Date.now, setTimer = setTimeout, clearTimer = clearTimeout, leaseTtlMs = 12e4, idleGraceMs = 1500 }) {
 		this.backendFactories = backendFactories;
 		this.getConfig = getConfig;
 		this.onStatus = onStatus;
+		this.screencastSupported = screencastSupported;
 		this.now = now;
 		this.setTimer = setTimer;
 		this.clearTimer = clearTimer;
@@ -4084,7 +4088,8 @@ var CaptureManager = class {
 			...fallbackReason ? {
 				code: "ffmpeg-fallback-cdp",
 				message: fallbackReason
-			} : {}
+			} : {},
+			...screencastSupported ? {} : { engineUnsupported: true }
 		};
 		this.transition = Promise.resolve();
 		this.stopTimer = null;
@@ -4169,6 +4174,18 @@ var CaptureManager = class {
 	}
 	async #activate(backendName, targetId, force = false) {
 		if (!force && this.backend && this.backendName === backendName && this.targetId === targetId) return;
+		if (!this.screencastSupported) {
+			await this.#stopBackend("engine-unsupported");
+			this.#setStatus({
+				backend: backendName,
+				state: "unsupported",
+				targetId,
+				code: "engine-unsupported",
+				message: "the attached engine cannot capture frames (no screencast, no window)",
+				engineUnsupported: true
+			});
+			return;
+		}
 		await this.#stopBackend("backend-change");
 		const factory = this.backendFactories[backendName];
 		if (!factory) {
@@ -6258,8 +6275,63 @@ async function captureMarked(call, sessionId, options = {}) {
 }
 
 //#endregion
+//#region src/cdp/capabilities.ts
+const FULL = {
+	engine: "chrome",
+	screencast: true,
+	overlay: true,
+	bindingCalled: true,
+	imageFormat: "jpeg",
+	loadEvent: true,
+	downloadEvents: true,
+	browserClose: true
+};
+/**
+* The capability projection per engine. `chrome` / `unknown` → full
+* capabilities (bit-for-bit today's behavior); `lightpanda` → the analysis
+* (docs/plans/2026-10-04-lightpanda-backend-analysis.md §7) projection.
+*/
+function capabilitiesFor(engine) {
+	if (engine === "lightpanda") return {
+		engine: "lightpanda",
+		screencast: false,
+		overlay: false,
+		bindingCalled: false,
+		imageFormat: "png",
+		loadEvent: false,
+		downloadEvents: false,
+		browserClose: false
+	};
+	return {
+		...FULL,
+		engine
+	};
+}
+/**
+* Env key the host half sets when spawning the cast / render workers
+* (mirrors `EGO_LINUX_CDP_URL`'s injection pattern in cast-server). The child
+* processes cannot see the host's attach cache, so the projected engine id
+* travels as data — the host decides once, children only read.
+*/
+const BCDP_CDP_ENGINE = "BCDP_CDP_ENGINE";
+/**
+* Project capabilities from the spawn-env value. Anything absent or
+* unrecognized means FULL capabilities — an unknown engine must never
+* conservatively break a Chrome endpoint.
+*/
+function capabilitiesFromEnvValue(value) {
+	return capabilitiesFor(value !== void 0 && value.trim() === "lightpanda" ? "lightpanda" : "unknown");
+}
+
+//#endregion
 //#region src/worker/cdp-cast-worker.ts
 const SENTINEL = "@@DSH_RESULT@@";
+/**
+* Lightpanda backend — capability projection for THIS connection. The host
+* decides once (probe → attach cache → spawn env); the worker only reads.
+* Absent env = full capabilities = pre-Lightpanda behavior.
+*/
+const CAPS = capabilitiesFromEnvValue(process.env[BCDP_CDP_ENGINE]);
 const HOME = homedir() || process.env.HOME || process.env.USERPROFILE || "/root";
 const IS_WIN = platform() === "win32";
 const STATE_HOME = IS_WIN ? process.env.LOCALAPPDATA || join(HOME, "AppData", "Local") : process.env.XDG_STATE_HOME || join(HOME, ".local", "state");
@@ -6442,7 +6514,10 @@ function publishJpeg(frame) {
 		viewportH: frame.vh
 	});
 	while (frameCache.size > 30) frameCache.delete(frameCache.keys().next().value);
-	broadcast("frame", frame);
+	broadcast("frame", frame.data !== void 0 && CAPS.imageFormat === "png" ? {
+		...frame,
+		fmt: "png"
+	} : frame);
 }
 function publishVideoInit(event) {
 	videoInit = {
@@ -6490,6 +6565,7 @@ function endVideo({ generation } = {}) {
 const manager = new CaptureManager({
 	getConfig: () => castConfig,
 	onStatus: publishStatus,
+	screencastSupported: CAPS.screencast,
 	backendFactories: {
 		cdp: ({ onStatus }) => {
 			if (!active) throw new Error("no live browser");
@@ -6498,7 +6574,8 @@ const manager = new CaptureManager({
 				sessions: active.sessions,
 				getConfig: () => castConfig,
 				onStatus,
-				onJpegFrame: publishJpeg
+				onJpegFrame: publishJpeg,
+				imageFormat: CAPS.imageFormat
 			});
 		},
 		ffmpeg: ({ generation, onStatus }) => {
@@ -6777,6 +6854,11 @@ async function main() {
 					code: "browser-disconnected",
 					error: "no live browser"
 				});
+				if (body.enabled === true && (!CAPS.overlay || !CAPS.bindingCalled)) return sendJson(res, 503, {
+					ok: false,
+					code: "engine-unsupported",
+					error: "this engine does not support Overlay-based picking"
+				});
 				const channel = ensurePickChannel();
 				if (channel === null) return sendJson(res, 409, {
 					ok: false,
@@ -6875,8 +6957,8 @@ async function main() {
 						limit: typeof body.limit === "number" ? body.limit : 20,
 						highlightIndex: typeof body.highlightIndex === "number" ? body.highlightIndex : void 0,
 						measureRects: body.measureRects !== false,
-						format: body.format === "jpeg" ? "jpeg" : "png",
-						quality: typeof body.quality === "number" ? body.quality : void 0,
+						format: CAPS.imageFormat === "png" ? "png" : body.format === "jpeg" ? "jpeg" : "png",
+						quality: CAPS.imageFormat === "png" ? void 0 : typeof body.quality === "number" ? body.quality : void 0,
 						timeoutMs: 15e3
 					});
 					return sendJson(res, result.ok ? 200 : 502, result);

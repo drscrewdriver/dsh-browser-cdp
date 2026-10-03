@@ -37,6 +37,19 @@ Additional local modifications on top of upstream (see `runtime/ego-linux/src/ch
   launched Chrome, so the agent browser can reach the network through a local proxy
   without hijacking the CLI's own loopback CDP traffic.
 
+## Lightpanda notice (optional backend)
+
+[Lightpanda](https://lightpanda.io) (https://github.com/lightpanda-io/browser) is an
+**optional** third-party browser engine the user may run themselves (native Linux/macOS
+binary, WSL2, or Docker). This plugin uses it strictly over its CDP network protocol as
+a CLIENT — no Lightpanda code is vendored, linked, aggregated, or distributed with this
+plugin, and the user installs the binary independently. Under AGPL-3.0 this client-over-
+network use does not create a combined work; this plugin remains MIT. Users and
+distributors of Lightpanda itself must comply with its AGPL-3.0 license
+(https://www.gnu.org/licenses/agpl-3.0.html). Telemetry of the Lightpanda binary is
+opt-out via `LIGHTPANDA_DISABLE_TELEMETRY=true` (set automatically for plugin-managed
+launches).
+
 MIT License (as provided by the upstream project):
 
     MIT License

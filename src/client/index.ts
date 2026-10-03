@@ -2428,7 +2428,7 @@ clearTimeout((panel as any)._dshHideT)
 		function pickSlugOf(entry) {
 			var raw = String((entry && entry.describe) || (entry && entry.name) || (entry && entry.tag) || '')
 			raw = raw.replace(/["'`]/g, '').trim()
-			return raw.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+/, '').slice(0, 24).replace(/-+$/, '')
+			return raw.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+/, '').slice(0, 12).replace(/-+$/, '')
 		}
 		function pickArchiveFileName(entry) {
 			var slug = pickSlugOf(entry)

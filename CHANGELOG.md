@@ -1,5 +1,15 @@
 > ⚠️ **0.18.10 已被 registry 烧号**：npmjs 受理后长期停留在 staged 状态从未提交（读路径 404、重发 `EPUBLISHCONFLICT: previously staged`），版本号永久不可安装——**安装请用 0.18.11**（内容 = 0.18.10 全部 + dock 注册诊断 `__dshBrowserCdpDeco` + locale 补齐 + 点选卡片正则放宽）。0.18.5 同前例。
 
+## [0.18.17] - 2026-10-03 — 真机反馈⑧：原子引用片插入（宿主附件同款）+ 归档加载失败显码（同 0.17.20 反向同源）
+
+### 修复（真机：计数 0 + 无片替换）
+- **显示替换换轨**：纯文本 `@"picks/…"` 只会被宿主 `FOLDER_REF_RE` 染色（宿主从不做文本→片的自动替换，paste-dock 的文档片是它主动插入的原子节点）——deliver 首次投递改为**优先插原子引用片**（`ReferenceChipNode`：`inputActions.captureInsertion()` 取 TokenSpan + `inputTriggers.serializeReference` 能力证明 + `insertReference` CAS；边界空格同 paste-dock），插不进回退文本 token。
+- **计数 0 根治**：卡片加载失败原来被吞成"已选 0 个元素"——改三态：加载中 `…`、失败亮错误码（`⚠ no-workspace / not-found / load-failed`）、成功显真实元素数；错误码同时进 `__dshBrowserCdpDeco`。
+- **会话来源加固**：卡片 picks-load 的 session 以 inject 下发字符串优先、宿主标准 props（`sessionId`）兜底。
+
+### 验证
+- 全测 691 passed / 11 skipped；两套 `tsc` 通过；bundle 实测含 `tryInsertPickChip`/`captureInsertion`/`serializeReference`。
+
 ## [0.18.16] - 2026-10-03 — @mention 引用模型：token 以 @ 开头（`@"picks/<file>.json"`）+ 归档会话级解析（同 0.17.19 反向同源）
 
 ### 变更

@@ -1,5 +1,16 @@
 > ⚠️ **0.18.10 已被 registry 烧号**：npmjs 受理后长期停留在 staged 状态从未提交（读路径 404、重发 `EPUBLISHCONFLICT: previously staged`），版本号永久不可安装——**安装请用 0.18.11**（内容 = 0.18.10 全部 + dock 注册诊断 `__dshBrowserCdpDeco` + locale 补齐 + 点选卡片正则放宽）。0.18.5 同前例。
 
+## [0.18.13] - 2026-10-03 — 包装卡挂官方 dock 缝（todo 同级 order 0）+ 投递模型变更：块体归档为文件（同 0.17.15/0.17.16 反向同源）
+
+### 新增/变更
+- **包装卡挂官方 dock 缝**：注册为 `conversation.input.dock` 贡献者（`id: 'dsh-browser-cdp.picks'`，**order 0 与 todo 同级**——带区上沿、浮在对话区一侧；无 priority 字段）。✕ 从草稿移除对应引用（空输入框不留原文）。0.18.9 的 body-fixed/rect/重定位逻辑全部删除。
+- **投递模型变更（dsh-paste-dock 同款）**：点选块体经网关新路由 `picks-save` 归档为 `<stateDir>/picks/<file>.json`，composer 只留一行短引用——原文展开不再挤占输入；模型按引用内路径用文件工具读取（backendNodeId 可直接喂 `bcdp_cdp`）。同页合并 = 读回归档追加、原文件重写、引用行原位更新（序号续号）。
+- **草稿读取修复**：草稿活值在 `input.draft` 门面字段；`input.state.getSnapshot()`（InputState 组合快照）没有 draft 键——0.18.4 起的读取恒得空串（投递"输入框无变化"的根因之一）。`readDraftText(input)` 兼容读三处接线。
+- **strict resolver**：客户端 inject 声明补 `'sessions'`/`'conversation'`（0.18.8，本条随同源移植一并保留）。
+
+### 验证
+- `typecheck` 过；691 passed / 11 skipped（+1 dock 注册契约：order 0、无 priority）。
+
 ## [0.18.11] - 2026-10-03 — 包装卡定位诊断补丁（同 0.17.14 反向同源）
 
 ### 变更

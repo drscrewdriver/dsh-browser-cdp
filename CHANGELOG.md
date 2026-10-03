@@ -1,5 +1,27 @@
 > ⚠️ **0.18.10 已被 registry 烧号**：npmjs 受理后长期停留在 staged 状态从未提交（读路径 404、重发 `EPUBLISHCONFLICT: previously staged`），版本号永久不可安装——**安装请用 0.18.11**（内容 = 0.18.10 全部 + dock 注册诊断 `__dshBrowserCdpDeco` + locale 补齐 + 点选卡片正则放宽）。0.18.5 同前例。
 
+## [0.18.20] - 2026-10-04 — Lightpanda 作为可选后端（P0）：识别投影 + 全链降级（同 0.17.24 同源）
+
+### 新增
+- **引擎识别与能力投影**：`src/cdp/capabilities.ts` 单点权威（`engineOf` 认 `/json/version` 的 `Browser: Lightpanda/…` 前缀，`capabilitiesFor` 出投影；unknown/chrome 恒=全能力）。probe/attach 双时机识别：link 新增 `probeEngine` 探针字段 + `AttachState.engine`，面板 badge / `cdp-status` / `cdp-probe` / `bcdp_doctor` 可见，旧行收敛 `'unknown'`。
+- **engine 跨进程传递**：spawn env `BCDP_CDP_ENGINE`（循 `EGO_LINUX_CDP_URL` 先例）——host 侧投影一次，worker/render 子进程只读不重算。
+- **真机探针** `tests/cdp-probe/lightpanda.probe.test.ts`（`LP_PROBE_URL` 自跳过；8 断言：识别 / navigate+lifecycleEvent / evaluate+AXTree / png 出图 + jpeg 结构化 -32000 / cookies 往返 / Overlay UnknownMethod 且 session 不受污染 / Input 注入 / Network 事件五件套）。
+
+### 变更（识别 lightpanda 后自动降级，无需配置）
+- **format 四处收口**：worker screencast + backstop、**jev capture（不修则 LP 上 jev 视觉链 -32000 全链硬失败）**、worker `/api/marks`——LP 下 wire 全 `format:'png'` 且无 `quality`；`bcdp_captcha`/jev 输出带 `engine`/`rendering:'text'` 元数据。
+- **观察窗**：无 screencast 时拒绝启动采集循环，status/SSE 带 `engineUnsupported`，两面板降级提示条；SSE 帧按 `fmt` 选用 png/jpeg data URL。
+- **pick**：`/api/pick` engine-gate 返回 `engine-unsupported`（i18n）；坐标回退 `/api/pick/click` 经依赖验证**保留可用**。
+- **`bcdp_download`**：注册处 gate，结构化报错不挂起；**`bcdp_auth_flush`** LP 下返回 `degraded: true`。
+- **doctor/help**：engine + 降级清单 + 分系统安装指引（win32→WSL2 内置方案，linux/mac→一键脚本 + `~/.local/bin` PATH）；`bcdp_help` 新增 `topic=lightpanda`；工具清单补漏的 `bcdp_jev_attempt`（38 个）。
+- **README/HANDOVER/THIRD_PARTY_NOTICES**：Lightpanda 小节 + AGPL 客户端使用声明。
+- **0.2.0 线适配**：client i18n 已内联（locales.ts 本线已删），`engineUnsupportedBanner`/`engineUnsupportedPick` 并入 `watchEn`/`watchZh` 内联字典。
+
+### 不变量
+- **`Browser.close` 永不发目标端点**：唯一合法调用点 = login-import 本地临时 Chrome；`tests/browser-close-invariant.test.ts` 源码扫描钉死。`runtime/` 零改动；unknown/chrome 行为逐位不变。
+
+### 验证
+- 全测 706 passed / 12 skipped；两套 `tsc` 通过；`tsdown` build 过。
+
 ## [0.18.19] - 2026-10-03 — 真机反馈⑩：点选特征采集换轨——纯文本链接读元素自身可见文本（同 0.17.23 反向同源）
 
 ### 修复（真机：News 这类链接全采成 `a name="" focusable`）

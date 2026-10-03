@@ -2422,11 +2422,12 @@ clearTimeout((panel as any)._dshHideT)
 		// 两处都看不见（paste-dock 2026-10-02 实测）。从 composer DOM 读 caret
 		// 前文本；拿不准就给空格——多余空格无害，缺边界误整个特性。
 		// 归档文件名 slug：时间戳名对识别没用（真机反馈），用首元素特征的开头
-		// 几个字符（describe → name → tag 兜底页标题）——清成网关文件名白名单
-		// [A-Za-z0-9._-]，中文等清空时回退时间戳。后缀保留 5 位 base36 时间：
-		// 不同页面的同特征元素各归各档，防同名归档互相覆盖。
+		// 几个字符（name 优先——worker 侧 name 空时已回退读元素可见文本——再
+		// describe/tag）——清成网关文件名白名单 [A-Za-z0-9._-]，中文等清空时
+		// 回退时间戳。后缀保留 5 位 base36 时间：不同页面的同特征元素各归各档，
+		// 防同名归档互相覆盖。
 		function pickSlugOf(entry) {
-			var raw = String((entry && entry.describe) || (entry && entry.name) || (entry && entry.tag) || '')
+			var raw = String((entry && entry.name) || (entry && entry.describe) || (entry && entry.tag) || '')
 			raw = raw.replace(/["'`]/g, '').trim()
 			return raw.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+/, '').slice(0, 12).replace(/-+$/, '')
 		}

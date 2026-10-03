@@ -15,7 +15,7 @@ const flush = (): Promise<void> => new Promise((resolve) => setImmediate(resolve
 
 type Handler = (params: unknown, sessionId?: string) => void
 
-function harness(overrides: { enableFails?: boolean; describeFails?: boolean; hitBackendNodeId?: number | null } = {}) {
+function harness(overrides: { enableFails?: boolean; describeFails?: boolean; hitBackendNodeId?: number | null; emptyName?: boolean; nodeText?: string } = {}) {
   const calls: Array<{ method: string; params: Record<string, unknown>; sessionId?: string }> = []
   const listeners = new Map<string, Set<Handler>>()
 
@@ -29,8 +29,11 @@ function harness(overrides: { enableFails?: boolean; describeFails?: boolean; hi
     }
     if (method === 'DOM.describeNode') {
       if (overrides.describeFails) throw new Error('Node is detached from the document')
+      if (overrides.emptyName) return { node: { nodeName: 'A', attributes: ['id', 'nav-news', 'href', '/news'] } }
       return { node: { nodeName: 'BUTTON', attributes: ['id', 'go', 'aria-label', 'Search'] } }
     }
+    if (method === 'DOM.resolveNode') return { object: { objectId: 'O-1' } }
+    if (method === 'Runtime.callFunctionOn') return { result: { value: overrides.nodeText ?? 'News' } }
     if (method === 'DOM.getBoxModel') return { model: { content: [10, 20, 110, 20, 110, 70, 10, 70] } }
     return {}
   }
@@ -318,6 +321,24 @@ describe('T5.1b coordinate fallback (pickAt)', () => {
     expect(state.lastPick).toBeNull()
     // Nothing was described, nothing injected.
     expect(h.callsFor('DOM.describeNode')).toHaveLength(0)
+  })
+
+  it('falls back to the element own visible text when no attribute names it (pure-text links)', async () => {
+    // <a id="nav-news" href="/news">News</a> — no aria-label/name/title, so
+    // describeNode alone yields name="" and every text link looks the same.
+    const h = harness({ emptyName: true, nodeText: 'News' })
+    const state = await h.channel.pickAt('T1', 40, 25)
+    expect(state.lastPick).toMatchObject({ name: 'News', describe: 'a #nav-news name="News" focusable' })
+    // Exactly one text read, scoped to the target's page session.
+    expect(h.callsFor('DOM.resolveNode')).toHaveLength(1)
+    expect(h.callsFor('Runtime.callFunctionOn')[0]!.params).toMatchObject({ objectId: 'O-1', returnByValue: true })
+  })
+
+  it('does not read text when an attribute already names the element', async () => {
+    const h = harness()
+    const state = await h.channel.pickAt('T1', 40, 25)
+    expect(state.lastPick).toMatchObject({ name: 'Search' })
+    expect(h.callsFor('DOM.resolveNode')).toHaveLength(0)
   })
 
   it('refuses without a target before touching the browser', async () => {

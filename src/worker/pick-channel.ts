@@ -30,7 +30,7 @@ import {
   setInspectMode,
   type PageCall,
 } from '../cdp/page.ts'
-import { boxModel, describeNode, flattenAxTree, accessibilityTree, nodeAtPoint } from '../cdp/dom.ts'
+import { boxModel, describeNode, flattenAxTree, accessibilityTree, nodeAtPoint, readNodeText } from '../cdp/dom.ts'
 import { classifyPickError } from './pick-contract.ts'
 import { PICK_BINDING, confirmPickUi, parsePickAction, removePickUi, showPickUi, type PickAction } from './pick-ui.ts'
 
@@ -252,6 +252,14 @@ export class PickChannel {
       this.#fail(semantics.code, semantics.message)
       return
     }
+    // 纯文本链接（<a>News</a>）的可访问名不在属性里——describeNode 深度 0 只见
+    // 属性，textContent 里的可见文本才是用户认的特征。name 空时读元素自身文
+    // 本兜底（best-effort：读失败不影响已成立的 pick）。
+    let displayName = semantics.name
+    if (displayName === '') {
+      const text = await readNodeText(call, sessionId, backendNodeId)
+      if (text.ok && text.text !== '') displayName = text.text
+    }
     const box = await boxModel(call, sessionId, { backendNodeId }, { scroll: scrollOffset })
 
     // Pick provenance: which CDP connection + which page this element lives
@@ -271,11 +279,11 @@ export class PickChannel {
       tag: semantics.tag,
       id: semantics.id,
       role: semantics.role,
-      name: semantics.name,
+      name: displayName,
       keyboardFocusable: semantics.keyboardFocusable,
       rect: box.ok ? box.rect : null,
       documentRect: box.ok ? box.documentRect : null,
-      describe: describeElement(semantics),
+      describe: describeElement({ ...semantics, name: displayName }),
       source: {
         endpoint: this.#getEndpoint ? this.#getEndpoint() : '',
         targetId,

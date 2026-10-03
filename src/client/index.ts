@@ -2191,22 +2191,24 @@ clearTimeout((panel as any)._dshHideT)
 		 * attachments are — the block carries its source CDP connection
 		 * (endpoint + targetId) so the agent can find the element's DOM again
 		 * (backendNodeId is directly addressable via bcdp_cdp DOM.describeNode).
-		 * Format inside the draft:
-		 *   [CDP-PICKS page="..." targetId="..." endpoint="..."]
-		 *   {"cdpEndpoint":..., "targetId":..., "pageUrl":..., "elements":[{n,backendNodeId,tag,id,name,focusable,describe}]}
-		 *   [/CDP-PICKS]
+		 * Format inside the draft（@mention 精髓：被替换字段以 @ 开头）:
+		 *   @"picks/<file>.json"
+		 * — 显示层把该 token 替换成文件片；归档 JSON
+		 *   {"cdpEndpoint":..., "targetId":..., "pageUrl":..., "elements":[...]}
+		 *   存 <workspace>/picks/<file>.json，dock 卡按引用取回渲染。
 		 */
-		// ── 点选包装卡（conversation.input.dock 贡献者，order 0 = todo 同级）──
-		// 内容模型（dsh-paste-dock 同款）：块体归档为宿主文件，composer 只留
-		// 一行短引用——卡片按引用异步取回归档内容渲染 chip；✕ 只摘引用行（归
-		// 档文件保留）。样式走幂等 <style>（不透明实底 + input-traffic 同款
-		// 限宽公式：卡宽限制在内容列/拖动范围内，亮暗双态）。
+		// ── 点选引用卡（conversation.input.dock 贡献者，order 0 = todo 同级）──
+		// @mention 模型：composer 只留 @"picks/<file>.json" 短引用（宿主显示层
+		// 把它替换成文件片），卡片按引用异步取回归档内容渲染 chip；同页合并
+		// 改写归档后每 5s 重读刷新；✕ 只摘引用 token（归档文件保留）。样式走
+		// 幂等 <style>（不透明实底 + input-traffic 同款限宽公式 + auto margins
+		// 居中，亮暗双态）。
 		// 诊断：(window as any).__dshBrowserCdpDeco { stage, refs, draftLen }。
 		function injectPickCardStyles() {
 			if (document.getElementById('dsh-cdp-picks-styles') !== null) return
 			var style = document.createElement('style')
 			style.id = 'dsh-cdp-picks-styles'
-			style.textContent = "[data-dsh-cdp-picks-card] {\n  box-sizing: border-box; flex: none;\n  display: grid; gap: 4px; padding: 8px 10px;\n  font: inherit; font-size: 12px;\n  color: #1d1d1f; background: #f7f7f9;\n  border: 1px solid rgba(0, 0, 0, 0.16); border-radius: 12px;\n  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);\n  /* input-traffic 同款限宽：卡宽被限制在内容列（拖动范围）内，两侧留出\n     clearance，永不顶满整窗 */\n  width: min(\n    calc(100% - var(--dsh-composer-side-clearance, 16px) - var(--dsh-composer-side-clearance, 16px) - var(--dsh-composer-dock-inset, 8px) - var(--dsh-composer-dock-inset, 8px)),\n    calc(var(--dsh-chat-content-width, 100%) - var(--dsh-composer-dock-inset, 8px) - var(--dsh-composer-dock-inset, 8px))\n  );\n  overflow-y: auto; max-height: 40vh;\n}\n@media (prefers-color-scheme: dark) {\n  [data-dsh-cdp-picks-card] { color: #f2f2f7; background: #1c1c1e; border-color: rgba(255, 255, 255, 0.18); }\n}\n[data-dsh-cdp-picks-card] .dsh-cdp-picks-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }\n[data-dsh-cdp-picks-card] .dsh-cdp-picks-sub { font-size: 11px; color: rgba(60, 60, 67, 0.62); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }\n[data-dsh-cdp-picks-card] .dsh-cdp-picks-chip { display: flex; align-items: baseline; gap: 6px; padding: 3px 8px; background: rgba(120, 120, 128, 0.12); border: 1px solid rgba(0, 0, 0, 0.1); border-radius: 8px; min-width: 0; }\n[data-dsh-cdp-picks-card] .dsh-cdp-picks-num { font-weight: 700; flex: none; color: rgba(60, 60, 67, 0.62); }\n[data-dsh-cdp-picks-card] .dsh-cdp-picks-tag { font-weight: 600; flex: none; }\n[data-dsh-cdp-picks-card] .dsh-cdp-picks-desc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }\n[data-dsh-cdp-picks-card] .dsh-cdp-picks-close { margin-left: auto; flex: none; font: inherit; font-size: 12px; cursor: pointer; border: none; background: none; color: rgba(60, 60, 67, 0.62); padding: 0 2px; border-radius: 6px; }\n[data-dsh-cdp-picks-card] .dsh-cdp-picks-close:hover { background: rgba(120, 120, 128, 0.18); }\n@media (prefers-color-scheme: dark) {\n  [data-dsh-cdp-picks-card] .dsh-cdp-picks-sub { color: rgba(235, 235, 245, 0.62); }\n  [data-dsh-cdp-picks-card] .dsh-cdp-picks-chip { background: rgba(120, 120, 128, 0.24); border-color: rgba(255, 255, 255, 0.12); }\n  [data-dsh-cdp-picks-card] .dsh-cdp-picks-num { color: rgba(235, 235, 245, 0.62); }\n  [data-dsh-cdp-picks-card] .dsh-cdp-picks-close { color: rgba(235, 235, 245, 0.62); }\n  [data-dsh-cdp-picks-card] .dsh-cdp-picks-close:hover { background: rgba(120, 120, 128, 0.3); }\n}"
+			style.textContent = "[data-dsh-cdp-picks-card] {\n  box-sizing: border-box; flex: none;\n  display: grid; gap: 4px; padding: 8px 10px;\n  font: inherit; font-size: 12px;\n  color: #1d1d1f; background: #f7f7f9;\n  border: 1px solid rgba(0, 0, 0, 0.16); border-radius: 12px;\n  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);\n  /* input-traffic 同款限宽 + 居中：卡宽限制在内容列（拖动范围）内，两侧留出\n     clearance，auto margins 在 dock 带内居中，永不顶满整窗 */\n  margin-left: auto;\n  margin-right: auto;\n  width: min(\n    calc(100% - var(--dsh-composer-side-clearance, 16px) - var(--dsh-composer-side-clearance, 16px) - var(--dsh-composer-dock-inset, 8px) - var(--dsh-composer-dock-inset, 8px)),\n    calc(var(--dsh-chat-content-width, 100%) - var(--dsh-composer-dock-inset, 8px) - var(--dsh-composer-dock-inset, 8px))\n  );\n  overflow-y: auto; max-height: 40vh;\n}\n@media (prefers-color-scheme: dark) {\n  [data-dsh-cdp-picks-card] { color: #f2f2f7; background: #1c1c1e; border-color: rgba(255, 255, 255, 0.18); }\n}\n[data-dsh-cdp-picks-card] .dsh-cdp-picks-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }\n[data-dsh-cdp-picks-card] .dsh-cdp-picks-sub { font-size: 11px; color: rgba(60, 60, 67, 0.62); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }\n[data-dsh-cdp-picks-card] .dsh-cdp-picks-chip { display: flex; align-items: baseline; gap: 6px; padding: 3px 8px; background: rgba(120, 120, 128, 0.12); border: 1px solid rgba(0, 0, 0, 0.1); border-radius: 8px; min-width: 0; }\n[data-dsh-cdp-picks-card] .dsh-cdp-picks-num { font-weight: 700; flex: none; color: rgba(60, 60, 67, 0.62); }\n[data-dsh-cdp-picks-card] .dsh-cdp-picks-tag { font-weight: 600; flex: none; }\n[data-dsh-cdp-picks-card] .dsh-cdp-picks-desc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }\n[data-dsh-cdp-picks-card] .dsh-cdp-picks-close { margin-left: auto; flex: none; font: inherit; font-size: 12px; cursor: pointer; border: none; background: none; color: rgba(60, 60, 67, 0.62); padding: 0 2px; border-radius: 6px; }\n[data-dsh-cdp-picks-card] .dsh-cdp-picks-close:hover { background: rgba(120, 120, 128, 0.18); }\n@media (prefers-color-scheme: dark) {\n  [data-dsh-cdp-picks-card] .dsh-cdp-picks-sub { color: rgba(235, 235, 245, 0.62); }\n  [data-dsh-cdp-picks-card] .dsh-cdp-picks-chip { background: rgba(120, 120, 128, 0.24); border-color: rgba(255, 255, 255, 0.12); }\n  [data-dsh-cdp-picks-card] .dsh-cdp-picks-num { color: rgba(235, 235, 245, 0.62); }\n  [data-dsh-cdp-picks-card] .dsh-cdp-picks-close { color: rgba(235, 235, 245, 0.62); }\n  [data-dsh-cdp-picks-card] .dsh-cdp-picks-close:hover { background: rgba(120, 120, 128, 0.3); }\n}"
 			document.head.appendChild(style)
 		}
 		function CdpPicksDockCard(props) {
@@ -2219,25 +2221,27 @@ clearTimeout((panel as any)._dshHideT)
 				return function () { window.clearInterval(timer) }
 			}, [])
 			var snap = readDraftText(input)
-			var refRe = /\[🌐 CDP-PICKS → ([^\s|]+) \| ([^|]*) \| ([^|]*) \| elements:(\d+)[^\]]*\]/g
+			var refRe = /@"(picks\/[^"\s]+\.json)"/g
 			var refs = [], mm
-			while ((mm = refRe.exec(snap)) !== null) refs.push({ file: mm[1], endpoint: mm[2], title: mm[3], count: Number(mm[4]), line: mm[0] })
+			while ((mm = refRe.exec(snap)) !== null) refs.push({ file: mm[1], line: mm[0] })
 			try { (window as any).__dshBrowserCdpDeco = { stage: refs.length ? 'rendered' : 'no-refs', refs: refs.length, draftLen: snap.length } } catch (e) {}
 			var loadedState = React.useState({})
 			var contents = loadedState[0], setContents = loadedState[1]
 			var filesKey = refs.map(function (r) { return r.file }).join('|')
+			// 归档文件可能被同页合并改写（deliver 原文件重写），快照里看不出——
+			// 每 5s 重读一次引用的归档（本地文件读，开销可忽略），token→归档名
+			// 去掉 picks/ 前缀（网关文件名校验只收 basename）。
 			React.useEffect(function () {
 				var cancelled = false
 				refs.forEach(function (r) {
-					if (contents[r.file] !== undefined) return
-					postJson('/bcdp/api/picks-load', { file: r.file }).then(function (res) {
+					postJson('/bcdp/api/picks-load', { file: r.file.slice('picks/'.length), session: props.session }).then(function (res) {
 						if (cancelled) return
 						var content = res && res.ok !== false && res.value ? String(res.value.content || '') : ''
 						setContents(function (prev) { var n = Object.assign({}, prev); n[r.file] = content; return n })
 					}).catch(function () {})
 				})
 				return function () { cancelled = true }
-			}, [filesKey])
+			}, [filesKey, Math.floor(tick[0] / 5)])
 			if (refs.length === 0) return null
 			function removeRef(line) {
 				var cur = readDraftText(input)
@@ -2250,13 +2254,15 @@ clearTimeout((panel as any)._dshHideT)
 			return h('div', { style: { display: 'grid', gap: '6px' } }, refs.map(function (r) {
 				var content = contents[r.file]
 				var elements = []
+				var pageTitle = ''
 				if (typeof content === 'string' && content !== '') {
-					try { var obj = JSON.parse(content); elements = (obj && obj.elements) || [] } catch (e) {}
+					try { var obj = JSON.parse(content); elements = (obj && obj.elements) || []; pageTitle = (obj && obj.pageTitle) || '' } catch (e) {}
 				}
 				var head = h('div', { className: 'dsh-cdp-picks-head' },
 					h('span', { style: { fontWeight: 700 } }, '🌐 ' + wt('pickCardTitle')),
-					h('span', { className: 'dsh-cdp-picks-sub' }, (r.endpoint || '') + ' · ' + (r.title || '')),
-					h('span', { className: 'dsh-cdp-picks-sub' }, wt('pickCardElements', { n: r.count })),
+					h('span', { className: 'dsh-cdp-picks-sub' }, '@' + r.file),
+					h('span', { className: 'dsh-cdp-picks-sub' }, pageTitle),
+					h('span', { className: 'dsh-cdp-picks-sub' }, typeof content === 'string' ? wt('pickCardElements', { n: elements.length }) : '…'),
 					h('button', { type: 'button', title: wt('pickCardRemove'), className: 'dsh-cdp-picks-close', onClick: function () { removeRef(r.line) } }, '✕'))
 				var chips = []
 				if (typeof content !== 'string') chips.push(h('div', { key: 'loading', className: 'dsh-cdp-picks-sub' }, '…'))
@@ -2289,15 +2295,15 @@ clearTimeout((panel as any)._dshHideT)
 				var sid = sessionId
 				if (sid) {
 					var draft = typeof props.getDraft === 'function' ? String(props.getDraft() || '') : ''
-					var refRe = /\[🌐 CDP-PICKS → ([^\s|]+) \| ([^|]*) \| ([^|]*) \| elements:(\d+)[^\]]*\]/g
+					var refRe = /@"(picks\/[^"\s]+\.json)"/g
 					var mm
-					while ((mm = refRe.exec(draft)) !== null) refs.push({ file: mm[1], endpoint: mm[2], title: mm[3], count: Number(mm[4]) })
+					while ((mm = refRe.exec(draft)) !== null) refs.push({ file: mm[1] })
 				}
 			} catch (e) {}
 			try { (window as any).__dshBrowserCdpDeco = Object.assign({}, (window as any).__dshBrowserCdpDeco, { badgeRefs: refs.length }) } catch (e) {}
 			if (refs.length === 0) return null
 			return h('div', { className: 'dsh-cdp-picks-badges' }, refs.map(function (r, i) {
-				return h('span', { key: r.file, className: 'dsh-cdp-picks-badge', title: '🌐 ' + (r.title || '') + ' · ' + (r.endpoint || '') + ' · elements:' + r.count }, '🌐' + (refs.length > 1 ? ' ' + (i + 1) : ''))
+				return h('span', { key: r.file, className: 'dsh-cdp-picks-badge', title: '🌐 @' + r.file }, '🌐' + (refs.length > 1 ? ' ' + (i + 1) : ''))
 			}))
 		}
 
@@ -2324,18 +2330,20 @@ clearTimeout((panel as any)._dshHideT)
 					id: 'dsh-browser-cdp.picks',
 					locale: 'dsh-browser-cdp',
 					order: 0,
-					inject: function (sessionId) {
-						var input = null
-						try {
-							var actx = ctx.sessions.scope(sessionId)
-							var conversation = actx.get('conversation')
-							input = conversation.input.for(actx)
-						} catch (e) { input = null }
-						return {
-							input: input,
-							getDraft: function () { return readDraftText(input) }
-						}
-					},
+				inject: function (sessionId) {
+					var input = null, session = null
+					try {
+						var actx = ctx.sessions.scope(sessionId)
+						var conversation = actx.get('conversation')
+						input = conversation.input.for(actx)
+						session = String(sessionId)
+					} catch (e) { input = null; session = null }
+					return {
+						input: input,
+						session: session,
+						getDraft: function () { return readDraftText(input) }
+					}
+				},
 				}, CdpPicksDockCard)
 			}, 'dsh-browser-cdp: picks dock card')
 		}
@@ -2388,46 +2396,45 @@ clearTimeout((panel as any)._dshHideT)
 				var draft = readDraftText(input)
 				var src = element.source || { endpoint: '', targetId: '', pageUrl: '', pageTitle: '' }
 				var entry = { n: 1, backendNodeId: element.backendNodeId, tag: element.tag, id: element.id, name: element.name, focusable: !!element.keyboardFocusable, describe: describe }
-				// dsh-paste-dock 同款内容模型：块体归档为宿主文件（<stateDir>/picks/），
-				// composer 只留一行短引用——模型按路径读取归档即得全部元素定位，
-				// 输入框不被长 JSON 淹没。同页合并 = 原文件重写 + 引用行原位更新。
-				var reRef = /\[🌐 CDP-PICKS → ([^\s|]+) \| ([^|]*) \| ([^|]*) \| elements:(\d+)[^\]]*\]/g
-				var file = null, endpointHit = null, oldLine = null, count = 0, mm
-				while ((mm = reRef.exec(draft)) !== null) {
-					if (mm[2] === src.endpoint) { file = mm[1]; endpointHit = mm[2]; oldLine = mm[0]; count = Number(mm[4]); break }
-				}
-				if (file !== null) {
-					// 同页合并：读回归档 → 追加本元素 → 原文件重写 → 引用行原位更新
-					postJson('/bcdp/api/picks-load', { file: file }).then(function (lres) {
-						try {
-							if (!lres || lres.ok === false || !lres.value) return
-							var obj = JSON.parse(lres.value.content)
-							var list = obj && obj.elements ? obj.elements : []
+				// @mention 模型（dsh-paste-dock 的 @"…" 同精髓）：块体归档进会话工作区
+				// 的 picks/ 目录（网关按 session 经 workspaceRegistry 解析），composer
+				// 只留 @"picks/<file>.json" 短引用——被替换字段以 @ 开头，显示层替换
+				// 成文件片，本插件的 dock 卡按引用取回归档渲染 chip。同页合并 = 扫
+				// 草稿各引用 → 逐个读归档比对 cdpEndpoint → 命中者原文件重写（token
+				// 不含元素数，草稿无需改动）。
+				var reRef = /@"(picks\/([^"\s]+\.json))"/g
+				var mentions = [], mm
+				while ((mm = reRef.exec(draft)) !== null) mentions.push({ token: mm[0], file: mm[2] })
+				void (async function () {
+					try {
+						var found = null, hit = null, obj = null
+						for (var i = 0; i < mentions.length; i++) {
+							var lres = await postJson('/bcdp/api/picks-load', { file: mentions[i].file, session: sessionId })
+							if (!lres || lres.ok === false || !lres.value) continue
+							obj = JSON.parse(lres.value.content)
+							if (obj && obj.cdpEndpoint === src.endpoint) { found = mentions[i]; hit = obj.elements || []; break }
+						}
+						if (found) {
+							// 同页合并：追加本元素 → 原文件重写（token 不变）
 							var maxN = 0
-							for (var k = 0; k < list.length; k++) if (list[k].n > maxN) maxN = list[k].n
+							for (var k = 0; k < hit.length; k++) if (hit[k].n > maxN) maxN = hit[k].n
 							entry.n = maxN + 1
-							list.push(Object.assign({}, entry))
-							var page = { cdpEndpoint: obj.cdpEndpoint || src.endpoint, targetId: obj.targetId || src.targetId, pageUrl: obj.pageUrl || src.pageUrl, pageTitle: obj.pageTitle || src.pageTitle, elements: list }
-							postJson('/bcdp/api/picks-save', { block: JSON.stringify(page, null, 2), file: file })
-							var cur = readDraftText(input)
-							var newLine = '[🌐 CDP-PICKS → ' + file + ' | ' + src.endpoint + ' | ' + (page.pageTitle || '') + ' | elements:' + list.length + ']'
-							var idx = cur.indexOf(oldLine)
-							if (idx >= 0) input.setDraft(cur.slice(0, idx) + newLine + cur.slice(idx + oldLine.length))
-						} catch (e) {}
-					}).catch(function () {})
-					return { ok: true, code: 'archiving' }
-				}
-				// 首次投递：新归档文件 + 引用行入草稿（空框不加换行）
-				var pageNew = { cdpEndpoint: src.endpoint, targetId: src.targetId, pageUrl: src.pageUrl, pageTitle: src.pageTitle, elements: [Object.assign({ n: 1 }, entry)] }
-				var newFile = 'picks-' + Date.now() + '.json'
-				postJson('/bcdp/api/picks-save', { block: JSON.stringify(pageNew, null, 2), file: newFile }).then(function (res) {
-					if (!res || res.ok === false || !res.value) return
-					var cur = readDraftText(input)
-					var line = '[🌐 CDP-PICKS → ' + res.value.file + ' | ' + src.endpoint + ' | ' + (src.pageTitle || src.pageUrl || '') + ' | elements:1]'
-					cur = cur ? cur + (cur.charAt(cur.length - 1) === '\n' ? '' : '\n') + line : line
-					input.setDraft(cur)
-				}).catch(function () {})
-				return { ok: true, code: 'archiving' }
+							hit.push(Object.assign({}, entry))
+							var page = { cdpEndpoint: obj.cdpEndpoint || src.endpoint, targetId: obj.targetId || src.targetId, pageUrl: obj.pageUrl || src.pageUrl, pageTitle: obj.pageTitle || src.pageTitle, elements: hit }
+							await postJson('/bcdp/api/picks-save', { block: JSON.stringify(page, null, 2), file: found.file, session: sessionId })
+							return
+						}
+						// 首次投递：新归档文件 + @"picks/…" token 入草稿（空框不加换行）
+						var pageNew = { cdpEndpoint: src.endpoint, targetId: src.targetId, pageUrl: src.pageUrl, pageTitle: src.pageTitle, elements: [Object.assign({ n: 1 }, entry)] }
+						var sres = await postJson('/bcdp/api/picks-save', { block: JSON.stringify(pageNew, null, 2), session: sessionId })
+						if (!sres || sres.ok === false || !sres.value) return
+						var token = '@"picks/' + sres.value.file + '"'
+						var cur = readDraftText(input)
+						cur = cur ? cur + (cur.charAt(cur.length - 1) === '\n' ? '' : '\n') + token : token
+						input.setDraft(cur)
+					} catch (e) {}
+				})()
+				return { ok: true, code: 'archiving', count: 1 }
 			} catch (err) {
 				return { ok: false, code: 'deliver-failed', message: String((err && err.message) || err) }
 			}

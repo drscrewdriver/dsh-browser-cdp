@@ -31,6 +31,11 @@ import {
 import { createSubprocessCliIo } from './cdp/cli-link.ts'
 import { setAttachEndpoint, recycleWorker } from './cast-server.ts'
 
+export interface PicksStoreDeps {
+  /** Workspace picks dir for one session (undefined = none registered). */
+  resolveDir(sessionId: string | undefined): string | undefined
+}
+
 export interface SettingsBridge {
   source(): Record<string, unknown>
   onChange(cb: () => void): () => void
@@ -107,6 +112,7 @@ export function registerEgoBrowserGateway(
   ctx: EgoContext,
   bridge: SettingsBridge,
   ffmpegManager: FfmpegInstallationManager | null,
+  picks?: PicksStoreDeps,
 ): void {
   ctx.effect?.(() => {
     const webServer = (ctx as EgoContext).get?.('webServer') as WebServerLike | undefined
@@ -207,6 +213,12 @@ export function registerEgoBrowserGateway(
             const outcome = await probeEndpoint(endpoint, { timeoutMs })
             writeJson(res, 200, envelopeOk({ outcome }))
           } else if (method === 'picks-save') {
+            const picksSession = typeof (body as { session?: unknown }).session === 'string' ? (body as { session: string }).session : undefined
+            const picksDir0 = picks ? picks.resolveDir(picksSession) : undefined
+            if (!picksDir0) {
+              writeJson(res, 409, envelopeError('no-workspace', 'no registered workspace resolves for this session'))
+              return
+            }
             // Archive one CDP-PICKS block under <picksDir>; the composer holds
             // only the one-line reference. A client-supplied file name is
             // honored ONLY when it passes the strict name check (overwrite =
@@ -220,7 +232,7 @@ export function registerEgoBrowserGateway(
             const file = typeof saveBody.file === 'string' && /^[A-Za-z0-9._-]+\.json$/.test(saveBody.file)
               ? saveBody.file
               : `picks-${Date.now()}.json`
-            const dir = picksDir()
+            const dir = picksDir0
             await mkdir(dir, { recursive: true })
             const target = resolve(dir, file)
             if (!target.startsWith(resolve(dir))) {
@@ -230,6 +242,12 @@ export function registerEgoBrowserGateway(
             await writeFile(target, block, 'utf8')
             writeJson(res, 200, envelopeOk({ path: target, file }))
           } else if (method === 'picks-load') {
+            const loadSession = typeof (body as { session?: unknown }).session === 'string' ? (body as { session: string }).session : undefined
+            const loadDir0 = picks ? picks.resolveDir(loadSession) : undefined
+            if (!loadDir0) {
+              writeJson(res, 409, envelopeError('no-workspace', 'no registered workspace resolves for this session'))
+              return
+            }
             // Read one archived CDP-PICKS block back (dock card rendering).
             const loadBody = body as { file?: unknown }
             const file = typeof loadBody.file === 'string' && /^[A-Za-z0-9._-]+\.json$/.test(loadBody.file)
@@ -240,7 +258,7 @@ export function registerEgoBrowserGateway(
               return
             }
             try {
-              const content = await readFile(resolve(picksDir(), file), 'utf8')
+              const content = await readFile(resolve(loadDir0, file), 'utf8')
               writeJson(res, 200, envelopeOk({ content }))
             } catch (error) {
               writeJson(res, 404, envelopeError('not-found', error instanceof Error ? error.message : String(error)))

@@ -1078,7 +1078,28 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
     // Same webServer the cast server uses; guarded so a headless host without
     // webServer is a no-op.
     try {
-      registerEgoBrowserGateway(wctx as EgoContext, bridge, ffmpegManager)
+      registerEgoBrowserGateway(wctx as EgoContext, bridge, ffmpegManager, {
+        // 会话 → 工作区 picks 目录（workspaceRegistry 按会话解析；无注册
+        // 工作区或多个候选时返回 undefined，网关给 409 不猜）。同
+        // dsh-paste-dock 的 resolveWorkspaceDir 语义。
+        resolveDir: (sessionId: string | undefined) => {
+          try {
+            const registry = (typeof ctx.get === 'function' ? ctx.get('workspaceRegistry') : undefined) as
+              | { list(): { path: string; sessionIds: readonly string[] }[] }
+              | undefined
+            const workspaces = (registry ? registry.list() : []) ?? []
+            if (workspaces.length === 0) return undefined
+            if (sessionId) {
+              const owned = workspaces.find((w) => w.sessionIds.includes(sessionId))
+              if (owned) return owned.path + '/picks'
+            }
+            if (workspaces.length === 1) return workspaces[0].path + '/picks'
+            return undefined
+          } catch {
+            return undefined
+          }
+        },
+      })
     } catch (err) {
       ctx.logger?.warn?.(
         `dsh-browser-cdp: capability gateway init failed: ${(err as Error)?.message ?? err}`,

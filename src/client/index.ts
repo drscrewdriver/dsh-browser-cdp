@@ -1141,6 +1141,7 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 				const watchClientId = 'floating-' + Math.random().toString(36).slice(2)
 				let watchStarted = false, watchTargetId = null, watchRenewTimer = null, watchStopTimer = null, watchRequest = null
 				let captureBackend = 'cdp', streamGeneration = 0, streamState = 'idle', streamMessage = '', streamMime = 'video/mp4; codecs="avc1.42E01E"', videoCleanup = null
+				let streamEngineUnsupported = false
 				const effectiveVisible = () => !panel.hidden
 				const stopVideo = () => { if (videoCleanup) try { videoCleanup() } catch {}; videoCleanup = null }
 				const applyCaptureStatus = (status) => {
@@ -1151,8 +1152,9 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 					const nextGeneration = status.generation ?? streamGeneration
 					const nextState = status.state || streamState
 					const nextMime = status.mime || streamMime
-					const changed = captureBackend !== nextBackend || streamGeneration !== nextGeneration || streamState !== nextState || streamMime !== nextMime
-					captureBackend = nextBackend; streamGeneration = nextGeneration; streamState = nextState; streamMessage = status.message || status.code || ''; streamMime = nextMime
+					const nextUnsupported = status.engineUnsupported === true
+					const changed = captureBackend !== nextBackend || streamGeneration !== nextGeneration || streamState !== nextState || streamMime !== nextMime || streamEngineUnsupported !== nextUnsupported
+					captureBackend = nextBackend; streamGeneration = nextGeneration; streamState = nextState; streamMessage = status.message || status.code || ''; streamMime = nextMime; streamEngineUnsupported = nextUnsupported
 					if (changed) { stopVideo(); const current = lastList.find((s) => s.targetId === (selectedTabId || currentActiveId)); if (current) renderLiveMain(current, selectedTabId !== null) }
 				}
 				const requestWatch = (route, body) => {
@@ -1453,20 +1455,20 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 					// latest cached JPEG from the SSE frame pipeline. attachLiveImg
 					// wires up the live <img> so future SSE frame events for this
 					// target swap its src in place.
-					const cached = frameCache.get(s.targetId)
-					if (captureBackend === 'ffmpeg' || cached) {
-						const img = makeZoomImage(u, captureBackend === 'ffmpeg' ? 'video' : 'img')
-						if (captureBackend === 'ffmpeg' && streamState === 'streaming') { stopVideo(); videoCleanup = createMsePlayer(img, streamGeneration, streamMime, (message) => { streamMessage = message }) }
-						else img.src = cached
-						img.alt = 'live'
-						attachLiveImg(s.targetId, img)
-						view.appendChild(img)
-					} else {
-						const n = document.createElement('div')
-						n.className = 'dsh-ego-liveurl'
-						n.textContent = wt('noScreenshot')
-						view.appendChild(n)
-					}
+						const cached = frameCache.get(s.targetId)
+						if (captureBackend === 'ffmpeg' || cached) {
+							const img = makeZoomImage(u, captureBackend === 'ffmpeg' ? 'video' : 'img')
+							if (captureBackend === 'ffmpeg' && streamState === 'streaming') { stopVideo(); videoCleanup = createMsePlayer(img, streamGeneration, streamMime, (message) => { streamMessage = message }) }
+							else img.src = cached
+							img.alt = 'live'
+							attachLiveImg(s.targetId, img)
+							view.appendChild(img)
+						} else {
+							const n = document.createElement('div')
+							n.className = 'dsh-ego-liveurl'
+							n.textContent = streamEngineUnsupported ? wt('engineUnsupportedBanner') : wt('noScreenshot')
+							view.appendChild(n)
+						}
 					view.appendChild(t)
 					view.appendChild(u)
 					body.appendChild(view)
@@ -1622,7 +1624,7 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 					} else {
 						const n = document.createElement('div')
 						n.className = 'dsh-ego-liveurl'
-						n.textContent = wt('noScreenshot')
+						n.textContent = streamEngineUnsupported ? wt('engineUnsupportedBanner') : wt('noScreenshot')
 						view.appendChild(n)
 					}
 					view.appendChild(t)
@@ -1753,7 +1755,7 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 								const cur = pageMeta.get(m.targetId) || { targetId: m.targetId }
 								pageMeta.set(m.targetId, { ...cur, vw: m.vw, vh: m.vh })
 							}
-							applyFrame(m.targetId, `data:image/jpeg;base64,${m.data}`, m.vw, m.vh)
+							applyFrame(m.targetId, `data:image/${m.fmt === 'png' ? 'png' : 'jpeg'};base64,${m.data}`, m.vw, m.vh)
 						} catch {}
 					})
 				// The worker also sends the live list on open (and on tab
@@ -2611,6 +2613,9 @@ clearTimeout((panel as any)._dshHideT)
 				post(true, targetId).then(function (res) {
 					var state = res && res.ok !== false ? res.state : null
 					if (!state || state.enabled !== true) {
+						// Lightpanda backend — the worker returns the engine-aware code;
+						// map it so the panel shows a localized reason, not raw text.
+						if (res && res.code === 'engine-unsupported') { emit('failed', wt('engineUnsupportedPick')); return }
 						emit('failed', (state && state.message) || (res && res.error) || wt('pickFailed'))
 						return
 					}
@@ -2677,6 +2682,7 @@ clearTimeout((panel as any)._dshHideT)
 			this.streamGeneration = 0
 			this.streamState = 'idle'
 			this.streamMessage = ''
+			this.engineUnsupported = false
 			this.streamMime = 'video/mp4; codecs="avc1.42E01E"'
 			this.liveVideo = null
 			this.videoCleanup = null
@@ -2720,7 +2726,7 @@ clearTimeout((panel as any)._dshHideT)
 				historyOpen: false,
 				zoomHint: null,
 				wiringStale: false,
-				backend: 'cdp', streamState: 'idle', streamMessage: '', streamGeneration: 0, streamMime: 'video/mp4; codecs="avc1.42E01E"',
+				backend: 'cdp', streamState: 'idle', streamMessage: '', streamGeneration: 0, streamMime: 'video/mp4; codecs="avc1.42E01E"', engineUnsupported: false,
 				pick: 'off', pickMessage: '',
 			}
 		}
@@ -2804,6 +2810,7 @@ clearTimeout((panel as any)._dshHideT)
 				s.streamMessage = self.streamMessage
 				s.streamGeneration = self.streamGeneration
 				s.streamMime = self.streamMime
+				s.engineUnsupported = self.engineUnsupported
 				s.pick = self._pick
 				s.pickMessage = self._pickMessage
 			})
@@ -2879,6 +2886,7 @@ clearTimeout((panel as any)._dshHideT)
 			var nextState = status.state || this.streamState
 			var generationChanged = this.streamGeneration !== nextGeneration
 			this.backend = nextBackend; this.streamState = nextState; this.streamMessage = status.message || status.code || ''; this.streamGeneration = nextGeneration; this.streamMime = status.mime || this.streamMime
+			this.engineUnsupported = status.engineUnsupported === true
 			if (generationChanged || this.backend !== 'ffmpeg') this._destroyVideo()
 			this._recompute()
 		}
@@ -3007,7 +3015,7 @@ clearTimeout((panel as any)._dshHideT)
 						var cur = self.pageMeta.get(m.targetId) || { targetId: m.targetId }
 						self.pageMeta.set(m.targetId, Object.assign({}, cur, { vw: m.vw, vh: m.vh }))
 					}
-					self.applyFrame(m.targetId, 'data:image/jpeg;base64,' + m.data, m.vw, m.vh)
+					self.applyFrame(m.targetId, 'data:image/' + (m.fmt === 'png' ? 'png' : 'jpeg') + ';base64,' + m.data, m.vw, m.vh)
 				} catch (e) {}
 			})
 			this.sse.addEventListener('spaces', function (ev) {
@@ -3519,13 +3527,13 @@ clearTimeout((panel as any)._dshHideT)
 						onPointerCancel: function (e) { controller.handlePointerUp(e) },
 						onDoubleClick: function (e) { controller.handleDoubleClick(e) },
 					})
-					: h('div', { className: 'dsh-ego-side-liveurl' }, state.streamMessage || wt('noScreenshot'))
+					: h('div', { className: 'dsh-ego-side-liveurl' }, state.engineUnsupported ? wt('engineUnsupportedBanner') : (state.streamMessage || wt('noScreenshot')))
 
 				body = h('div', { className: 'dsh-ego-side-body' },
 					h('div', { className: 'dsh-ego-side-liveview' },
 						h('div', { className: 'dsh-ego-side-livebadge' },
 							h('span', { className: 'dsh-ego-side-state-dot' + (state.pinned ? ' pin' : state.busy ? ' busy' : '') }),
-							h('span', { style: { flex: 1 } }, (state.backend === 'ffmpeg' ? 'FFmpeg · H.264' : 'CDP') + ' · ' + (state.streamState === 'failed' ? (state.streamMessage || wt('failed')) : state.streamState) + (state.currentTargetId ? (state.wiringStale ? ' · ' + wt('stale') : ' · ' + wt('captured')) : '')),
+							h('span', { style: { flex: 1 } }, (state.backend === 'ffmpeg' ? 'FFmpeg · H.264' : 'CDP') + ' · ' + (state.streamState === 'failed' ? (state.streamMessage || wt('failed')) : state.streamState === 'unsupported' ? wt('engineUnsupportedBanner') : state.streamState) + (state.currentTargetId ? (state.wiringStale ? ' · ' + wt('stale') : ' · ' + wt('captured')) : '')),
 							state.pinned
 								? h('button', {
 									className: 'dsh-ego-side-back', type: 'button',

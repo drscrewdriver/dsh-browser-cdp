@@ -31,6 +31,8 @@ export interface CaptureManagerOptions {
   backendFactories: Record<string, CaptureBackendFactory>
   getConfig: () => { captureBackend: string; ffmpegFallbackReason?: string }
   onStatus: (status: Record<string, unknown>) => void
+  /** Lightpanda backend — false when the attached engine cannot produce pixels (no screencast, no window). No capture loop is started and the status carries `engineUnsupported`. */
+  screencastSupported?: boolean
   now?: () => number
   setTimer?: (fn: () => void, ms: number) => NodeJS.Timeout
   clearTimer?: (timer: NodeJS.Timeout) => void
@@ -42,6 +44,7 @@ export class CaptureManager {
   backendFactories: Record<string, CaptureBackendFactory>
   getConfig: () => { captureBackend: string; ffmpegFallbackReason?: string }
   onStatus: (status: Record<string, unknown>) => void
+  screencastSupported: boolean
   now: () => number
   setTimer: (fn: () => void, ms: number) => NodeJS.Timeout
   clearTimer: (timer: NodeJS.Timeout) => void
@@ -57,10 +60,11 @@ export class CaptureManager {
   stopTimer: NodeJS.Timeout | null
   sweepTimer: NodeJS.Timeout
 
-  constructor({ backendFactories, getConfig, onStatus, now = Date.now, setTimer = setTimeout, clearTimer = clearTimeout, leaseTtlMs = 120000, idleGraceMs = 1500 }: CaptureManagerOptions) {
+  constructor({ backendFactories, getConfig, onStatus, screencastSupported = true, now = Date.now, setTimer = setTimeout, clearTimer = clearTimeout, leaseTtlMs = 120000, idleGraceMs = 1500 }: CaptureManagerOptions) {
     this.backendFactories = backendFactories
     this.getConfig = getConfig
     this.onStatus = onStatus
+    this.screencastSupported = screencastSupported
     this.now = now
     this.setTimer = setTimer
     this.clearTimer = clearTimer
@@ -72,7 +76,7 @@ export class CaptureManager {
     this.targetId = null
     this.generation = 0
     const fallbackReason = this.getConfig().ffmpegFallbackReason
-    this.statusValue = { backend: this.#resolvedBackend(), state: 'idle', targetId: null, generation: 0, ...(fallbackReason ? { code: 'ffmpeg-fallback-cdp', message: fallbackReason } : {}) }
+    this.statusValue = { backend: this.#resolvedBackend(), state: 'idle', targetId: null, generation: 0, ...(fallbackReason ? { code: 'ffmpeg-fallback-cdp', message: fallbackReason } : {}), ...(screencastSupported ? {} : { engineUnsupported: true }) }
     this.transition = Promise.resolve()
     this.stopTimer = null
     this.sweepTimer = this.setTimer(() => this.#sweep(), Math.min(5000, this.leaseTtlMs))
@@ -145,6 +149,15 @@ export class CaptureManager {
 
   async #activate(backendName: string, targetId: string, force = false): Promise<void> {
     if (!force && this.backend && this.backendName === backendName && this.targetId === targetId) return
+    // Lightpanda backend gate: no screencast methods AND no window means NEITHER
+    // backend can produce pixels. Refuse before touching the browser so the
+    // observation window never hammers UnknownMethod every N seconds; the
+    // status carries `engineUnsupported` for the panel's degraded-view banner.
+    if (!this.screencastSupported) {
+      await this.#stopBackend('engine-unsupported')
+      this.#setStatus({ backend: backendName, state: 'unsupported', targetId, code: 'engine-unsupported', message: 'the attached engine cannot capture frames (no screencast, no window)', engineUnsupported: true })
+      return
+    }
     await this.#stopBackend('backend-change')
     const factory = this.backendFactories[backendName]
     if (!factory) {

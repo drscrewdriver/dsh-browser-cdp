@@ -160,6 +160,22 @@ describe("probeEndpoint (injectable fetch)", () => {
     if (out.ok) expect(out.wsUrl).toBe("ws://127.0.0.1:9222/devtools/browser/zzz");
   });
 
+  it("recognizes the engine from the Browser field (Lightpanda backend)", async () => {
+    const lp = await probeEndpoint("http://127.0.0.1:9222", {
+      fetchVersion: fakeFetch({ webSocketDebuggerUrl: "ws://x/", Browser: "Lightpanda/0.4.1" }),
+    });
+    expect(lp.ok).toBe(true);
+    if (lp.ok) expect(lp.engine).toBe("lightpanda");
+    const chrome = await probeEndpoint("http://127.0.0.1:9222", {
+      fetchVersion: fakeFetch({ webSocketDebuggerUrl: "ws://x/", Browser: "Chrome/153.0.0.0" }),
+    });
+    if (chrome.ok) expect(chrome.engine).toBe("chrome");
+    const anonymous = await probeEndpoint("http://127.0.0.1:9222", {
+      fetchVersion: fakeFetch({ webSocketDebuggerUrl: "ws://x/" }),
+    });
+    if (anonymous.ok) expect(anonymous.engine).toBe("unknown");
+  });
+
   it("reports http-status on a non-200 response", async () => {
     const out = await probeEndpoint("http://127.0.0.1:9222", { fetchVersion: fakeFetch({}, 404) });
     expect(out.ok).toBe(false);

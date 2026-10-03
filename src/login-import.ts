@@ -596,6 +596,12 @@ export async function importLoginCookies(opts: LoginImportOptions, deps: { subpr
     // the real profile is never touched by cleanup.
     try { tempCdp?.close() } catch { /* ignore */ }
     try { egoCdp?.close() } catch { /* ignore */ }
+    // REGRESSION GUARD (Lightpanda backend): this is the ONLY `Browser.close`
+    // in the codebase, and it targets the LOCALLY spawned temp Chrome used to
+    // read the source profile — never the attached/remote browser. Do not gate
+    // it on the target engine: skipping it leaks a headless Chrome. The plugin
+    // never closes the TARGET browser over CDP (managed stop = killTree, remote
+    // stop = WS close); tests/browser-close-invariant.test.ts pins this.
     if (tempCdp) { try { await tempCdp.client.call('Browser.close', {}, undefined, 2000) } catch { /* ignore */ } }
     // Browser.close flushes the cookie store before the process exits — this
     // can take 10s+ on a warm profile, and the singleton is keyed on the

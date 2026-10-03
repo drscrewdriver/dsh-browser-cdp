@@ -135,6 +135,8 @@ export interface LinkBase {
   probeError?: string
   probeCode?: string
   probeAt?: number
+  /** Lightpanda backend — engine recognized from the last successful probe (`/json/version` `Browser` field). Absent on pre-Lightpanda rows → read as `'unknown'`. */
+  probeEngine?: 'chrome' | 'lightpanda' | 'unknown'
 }
 
 /** `kind: 'cdp'` — exactly what R1 shipped. */

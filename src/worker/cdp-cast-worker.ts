@@ -12,8 +12,15 @@ import { CaptureManager } from './capture-manager.ts'
 import { FfmpegCaptureBackend } from './capture-ffmpeg.ts'
 import { PickChannel } from './pick-channel.ts'
 import { captureMarked } from '../cdp/marks.ts'
+import { BCDP_CDP_ENGINE, capabilitiesFromEnvValue } from '../cdp/capabilities.ts'
 
 const SENTINEL = '@@DSH_RESULT@@'
+/**
+ * Lightpanda backend — capability projection for THIS connection. The host
+ * decides once (probe → attach cache → spawn env); the worker only reads.
+ * Absent env = full capabilities = pre-Lightpanda behavior.
+ */
+const CAPS = capabilitiesFromEnvValue(process.env[BCDP_CDP_ENGINE])
 const HOME = homedir() || process.env.HOME || process.env.USERPROFILE || '/root'
 const IS_WIN = platform() === 'win32'
 const STATE_HOME = IS_WIN ? process.env.LOCALAPPDATA || join(HOME, 'AppData', 'Local') : process.env.XDG_STATE_HOME || join(HOME, '.local', 'state')
@@ -89,6 +96,8 @@ interface JpegFrame {
   vh: number | null
   ts: number
   backstop?: boolean
+  /** Lightpanda backend — actual wire format of `data`, so the panel builds the right data URL. Absent = jpeg (pre-Lightpanda). */
+  fmt?: 'jpeg' | 'png'
 }
 
 const sseClients = new Set<SseClient>()
@@ -205,7 +214,9 @@ function publishJpeg(frame: JpegFrame): void {
   frameCache.delete(frame.targetId)
   frameCache.set(frame.targetId, { frame: frame.data, lastActive: frame.ts, viewportW: frame.vw, viewportH: frame.vh })
   while (frameCache.size > 30) frameCache.delete(frameCache.keys().next().value as string)
-  broadcast('frame', frame)
+  // Lightpanda backend — label the wire format so the panel builds the right
+  // data URL (a png frame prefixed image/jpeg renders as a broken image).
+  broadcast('frame', frame.data !== undefined && CAPS.imageFormat === 'png' ? { ...frame, fmt: 'png' } : frame)
 }
 
 function publishVideoInit(event: { generation: number; buffer: Buffer }): void {
@@ -254,10 +265,13 @@ function endVideo({ generation }: { generation?: number } = {}): void {
 const manager = new CaptureManager({
   getConfig: () => castConfig,
   onStatus: publishStatus,
+  // Lightpanda backend — no screencast methods and no window: neither backend
+  // can produce pixels, so the manager refuses to start a capture loop.
+  screencastSupported: CAPS.screencast,
   backendFactories: {
     cdp: ({ onStatus }) => {
       if (!active) throw new Error('no live browser')
-      return new CdpCaptureBackend({ cdp: active.cdp, sessions: active.sessions, getConfig: () => castConfig, onStatus, onJpegFrame: publishJpeg })
+      return new CdpCaptureBackend({ cdp: active.cdp, sessions: active.sessions, getConfig: () => castConfig, onStatus, onJpegFrame: publishJpeg, imageFormat: CAPS.imageFormat })
     },
     ffmpeg: ({ generation, onStatus }) => {
       if (!active) throw new Error('no live browser')
@@ -425,6 +439,13 @@ async function main(): Promise<void> {
       if (req.method === 'POST' && url.pathname === '/api/pick') {
         const body = await readJson(req)
         if (!active) return sendJson(res, 409, { ok: false, code: 'browser-disconnected', error: 'no live browser' })
+        // Lightpanda backend — the Overlay domain and Runtime.bindingCalled do
+        // not exist on this engine, so the inspect-mode pick path cannot work.
+        // Gated HERE with an engine-aware code (the panel maps it to i18n);
+        // `/api/pick/click` stays available: its hit-test path needs neither.
+        if (body.enabled === true && (!CAPS.overlay || !CAPS.bindingCalled)) {
+          return sendJson(res, 503, { ok: false, code: 'engine-unsupported', error: 'this engine does not support Overlay-based picking' })
+        }
         const channel = ensurePickChannel()
         if (channel === null) return sendJson(res, 409, { ok: false, code: 'browser-disconnected', error: 'no live browser' })
         const targetId = typeof body.targetId === 'string' ? body.targetId : ''
@@ -488,8 +509,10 @@ async function main(): Promise<void> {
               limit: typeof body.limit === 'number' ? body.limit : 20,
               highlightIndex: typeof body.highlightIndex === 'number' ? body.highlightIndex : undefined,
               measureRects: body.measureRects !== false,
-              format: body.format === 'jpeg' ? 'jpeg' : 'png',
-              quality: typeof body.quality === 'number' ? body.quality : undefined,
+              // Lightpanda backend — the engine only accepts png; a jpeg request
+              // is rewritten by the projection instead of failing with -32000.
+              format: CAPS.imageFormat === 'png' ? 'png' : body.format === 'jpeg' ? 'jpeg' : 'png',
+              quality: CAPS.imageFormat === 'png' ? undefined : typeof body.quality === 'number' ? body.quality : undefined,
               timeoutMs: 15000,
             },
           )

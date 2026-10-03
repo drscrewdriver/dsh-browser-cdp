@@ -170,6 +170,35 @@ dshx list                                                # 应显示：[on] dsh-
 
 `bcdp_doctor` 会报告当前序列类型计数、CLI 实际解析到的路径与形态，以及（若同机装了上游 `dsh-ego-browser`）一条共存提示。
 
+## Lightpanda 后端（可选引擎，beta）
+
+[Lightpanda](https://lightpanda.io) 是面向 AI 的无头文本渲染浏览器（AGPL-3.0，本插件仅作 CDP 客户端使用）。它对插件来说就是一个**普通 CDP 端点**：设置面板添加并激活后，probe 会从 `/json/version` 的 `Browser: Lightpanda/…` **自动识别引擎**，badge 与 `bcdp_doctor` 显示 engine，能力降级自动生效（无需任何配置）。
+
+### 分系统安装
+
+| 系统 | 方式 |
+|---|---|
+| **Linux**（建议本机直装测试） | `curl -fsSL https://pkg.lightpanda.io/install.sh \| bash`（装入 `~/.local/bin`，确保 PATH 含它）→ `lightpanda serve --host 127.0.0.1 --port 9222` |
+| **macOS**（建议本机直装测试） | 同上一键脚本（aarch64）→ 同 serve 命令 |
+| **Windows**（内置方案 = WSL2，无原生版） | 管理员 PowerShell `wsl --install` → 重启 → `wsl --install -d Ubuntu` → WSL 内同 Linux 一键脚本 → WSL 内 `lightpanda serve …`；WSL2 自动把端口映射到 Windows localhost（**二进制只存在于 WSL 内，宿主侧没有文件，属预期**） |
+| **Docker（备选）** | `docker run -d --name lightpanda -p 127.0.0.1:9222:9222 lightpanda/browser:nightly` |
+
+装好后在本插件设置面板添加 CDP 端点 `http://127.0.0.1:9222` 并激活即可。可选：`export LIGHTPANDA_DISABLE_TELEMETRY=true` 关遥测。
+
+### 能力降级矩阵（识别后自动生效）
+
+| 能力 | Lightpanda 上的行为 |
+|---|---|
+| 导航 / JS / 点击 / 填表 / 键鼠 / 快照（AX 树）/ HTTP / 登录导入 / 等待族 | **无损可用** |
+| `bcdp_screenshot` | PNG **文本级渲染**（无像素引擎，视觉保真低于 Chrome；runtime 本就发 png，零改动兼容） |
+| jev 视觉链（`bcdp_jev_frame` 等） | 投影自动改发 PNG；输出带 `engine` / `rendering: text` 元数据 |
+| 观察窗实时画面 | **关闭**——无 screencast 且无窗口，worker 不启动采集循环，面板显示降级提示 |
+| 面板点选（inspect 路径） | **关闭**——无 Overlay 域 / bindingCalled 事件，返回 `engine-unsupported`（i18n）；坐标回退路径保留 |
+| `bcdp_download` | **关闭**——无 Page 下载事件，调用即返回结构化错误（不会挂起超时） |
+| `bcdp_auth_flush` | 返回 `degraded: true`——引擎无 `Storage.flushCookies`，cookie 仅随引擎进程存活 |
+
+识别失败的端点（`engine: unknown`）保持**全能力**——误判只应"少给"，不应"错给"。
+
 ## 工具清单（38 个，前缀 `bcdp_`，完整索引见 `bcdp_help`）
 
 | 类别 | 工具 |

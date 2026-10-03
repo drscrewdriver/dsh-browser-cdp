@@ -122,4 +122,17 @@ describe("CaptureManager", () => {
     expect(manager.status().message).not.toBe("late");
     await manager.dispose();
   });
+
+  it("refuses to start a capture loop on an engine without pixels (Lightpanda)", async () => {
+    const events: string[] = [];
+    const factory = () => ({ start: async () => { events.push("start"); }, stop: async () => { events.push("stop"); }, updateConfig: async () => {} });
+    const manager = new CaptureManager({ backendFactories: { cdp: factory, ffmpeg: factory }, getConfig: () => ({ captureBackend: "cdp" }), onStatus: () => {}, screencastSupported: false, leaseTtlMs: 60000 });
+    const status = await manager.startWatch({ clientId: "one", targetId: "a" });
+    expect(events).toEqual([]); // no loop, not even one start attempt
+    expect(status.state).toBe("unsupported");
+    expect(status.code).toBe("engine-unsupported");
+    expect(status.engineUnsupported).toBe(true);
+    expect(manager.status().engineUnsupported).toBe(true); // visible on /api/health too
+    await manager.dispose();
+  });
 });

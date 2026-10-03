@@ -11,7 +11,7 @@
 | 设置 namespace（`SETTINGS_NAMESPACE`） | `dsh-browser-cdp` |
 | 侧栏 Tab id | `dsh-browser-cdp:watch` |
 | 工具命名 | **`bcdp_*` 前缀（33 个）**（v0.12.0 去ego化）；`legacyEgoToolNames: true` 可选注册旧 `ego_*` 别名（与上游插件互斥） |
-| 环境变量 | `EGO_LINUX_CDP_URL`（激活端点注入）、`EGO_LINUX_CURSOR`/`EGO_LINUX_CURSOR_NAME`（光标 HUD）——内部 wire 格式，刻意不改 |
+| 环境变量 | `EGO_LINUX_CDP_URL`（激活端点注入）、`BCDP_CDP_ENGINE`（激活引擎投影注入：lightpanda 时 worker/子进程按投影降级；缺省=全能力）、`EGO_LINUX_CURSOR`/`EGO_LINUX_CURSOR_NAME`（光标 HUD）——内部 wire 格式，刻意不改 |
 
 ## 2. 回退到旧插件（dsh-ego-browser）
 
@@ -32,6 +32,7 @@
 - `src/worker/`：`ego-cast-worker`（常驻 worker：观察窗流 + per-target 会话）· `pick-channel`（点选模式，跑在 worker 常驻连接上）· `pick-ui`（注入式选中框 + 浮条，`Runtime.addBinding('__dshPickAction')` 回传）。
 - host：`cast-server.ts`（worker 生命周期 + `/api/bcdp/*` 路由族）；`gateway.ts`（`/bcdp/api/*` 设置网关 + cdp-status/refresh/probe）。
 - 真机探针：`CDP_PROBE_URL=http://host:port node node_modules/vitest/vitest.mjs run tests/cdp-probe/remote.probe.test.ts`（默认自跳过）。
+- **Lightpanda 后端（v0.17.24+）**：`src/cdp/capabilities.ts` 是引擎识别与能力投影的唯一权威（`engineOf`/`capabilitiesFor`；`BCDP_CDP_ENGINE` env 把投影传给 worker/render 子进程）。probe/attach 从 `/json/version` 的 `Browser` 字段识别，`probeEngine`（link 探针字段）与 `AttachState.engine`（badge/doctor）双可见。格式收口四处：`capture-cdp.ts` screencast+backstop、`jev/effects.ts` capture、worker `/api/marks`。gate 三处：worker `/api/pick`（Overlay/bindingCalled 缺失→`engine-unsupported`，坐标回退 `/api/pick/click` 保留）、`bcdp_download`（注册处 gate）、观察窗（capture-manager `screencastSupported:false` 不启动循环）。`Browser.close` 不变量由 `tests/browser-close-invariant.test.ts` 钉住（唯一合法调用点=login-import 本地临时 Chrome）。Lightpanda 探针：`LP_PROBE_URL=http://127.0.0.1:9222 node node_modules/vitest/vitest.mjs run tests/cdp-probe/lightpanda.probe.test.ts`（8 项断言，默认自跳过）。
 
 ## 5. 已知边界
 

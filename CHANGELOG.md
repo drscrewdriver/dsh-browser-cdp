@@ -1,5 +1,18 @@
 > ⚠️ **0.18.10 已被 registry 烧号**：npmjs 受理后长期停留在 staged 状态从未提交（读路径 404、重发 `EPUBLISHCONFLICT: previously staged`），版本号永久不可安装——**安装请用 0.18.11**（内容 = 0.18.10 全部 + dock 注册诊断 `__dshBrowserCdpDeco` + locale 补齐 + 点选卡片正则放宽）。0.18.5 同前例。
 
+## [0.18.16] - 2026-10-03 — @mention 引用模型：token 以 @ 开头（`@"picks/<file>.json"`）+ 归档会话级解析（同 0.17.19 反向同源）
+
+### 变更
+- **投递/引用格式换轨（0.18.13 模型的修正）**：composer 里的引用从 `[🌐 CDP-PICKS → … | … | … | elements:N]` 长行改为 **`@"picks/<file>.json"` 短 token**——被替换字段以 @ 开头（dsh-paste-dock 文件引用同精髓），显示层把它替换成文件片；dock 卡/🌐 徽标同步按 @ 引用解析，✕ 摘除整个 token。
+- **同页合并简化**：扫草稿各 @ 引用 → 逐个读归档比对 `cdpEndpoint` → 命中者原文件重写；token 不含元素数，合并时草稿零改动（引用卡每 5s 重读归档自动刷新元素数）。
+- **归档目录会话级解析**：`picks-save`/`picks-load` 请求携带 `session`，网关经 `workspaceRegistry` 把会话解析到其注册工作区的 `picks/` 目录（无注册工作区或多个候选 → 409 `no-workspace`，不猜）；同 dsh-paste-dock 的 `resolveWorkspaceDir` 语义。
+
+### 修复
+- **引用卡居中**：样式补 `margin-left/right: auto`——卡在 dock 带内居中（限宽公式不变），不再偏一侧。
+
+### 验证
+- 全测 691 passed / 11 skipped；两套 `tsc` 通过；`lib/client.js` 161.93 kB（构建含 `@"picks/` token 写入与 session 参数）。
+
 ## [0.18.14] - 2026-10-03 — 包装卡样式重写：不透明实底 + input-traffic 同款限宽（同 0.17.17 反向同源）
 
 ### 修复

@@ -2343,12 +2343,10 @@ clearTimeout((panel as any)._dshHideT)
 		 *   {"cdpEndpoint":..., "targetId":..., "pageUrl":..., "elements":[{n,backendNodeId,tag,id,name,focusable,describe}]}
 		 *   [/CDP-PICKS]
 		 */
-		// ── 点选包装卡（conversation.input.dock 贡献者）────────────────────
-		// 宿主把该带区渲染在 composer 卡正上方（随文档流滚动，无 fixed/rect/重
-		// 定位逻辑）。order 1000 = 带区最底部、紧贴输入框（显示位次由 order 升序
-		// 决定）；priority 0 = 独立 cell id，不参与任何同 id 竞争。卡片只在草稿
-		// 含 CDP-PICKS 块时渲染；✕ 从草稿移除对应块（空输入框不留原文）。
-		// 诊断：window.__dshBrowserCdpDeco { stage, blocks, draftLen }。
+		// ── 点选包装卡（conversation.input.dock 贡献者，order 0 = todo 同级）──
+		// 内容模型（dsh-paste-dock 同款）：块体归档为宿主文件，composer 只留
+		// 一行短引用——卡片按引用异步取回归档内容渲染 chip；✕ 只摘引用行（归
+		// 档文件保留）。诊断：window.__dshBrowserCdpDeco。
 		function CdpPicksDockCard(props: any) {
 			var input = props.input
 			var h = React.createElement
@@ -2358,22 +2356,32 @@ clearTimeout((panel as any)._dshHideT)
 				var timer = window.setInterval(function () { setTick(function (n: any) { return n + 1 }) }, 1000)
 				return function () { window.clearInterval(timer) }
 			}, [])
-			var draft = readDraftText(input)
-			var re = /\[(?:🌐 )?CDP-PICKS\s+page="([^"]*)"\s+targetId="([^"]*)"\s+endpoint="([^"]*)"\]\n([\s\S]*?)\n\[\/CDP-PICKS\]/g
-			var found = [], mm
-			while ((mm = re.exec(draft)) !== null) {
-				var elements: any = []
-				try { var obj = JSON.parse(mm[4]); elements = (obj && obj.elements) || [] } catch (e) {}
-				found.push({ title: mm[1], endpoint: mm[3], elements: elements, block: mm[0] })
-			}
-			try { (window as any).__dshBrowserCdpDeco = { stage: found.length ? 'rendered' : 'no-blocks', blocks: found.length, draftLen: draft.length } } catch (e) {}
-			function removeBlock(block: any) {
-				if (!input || typeof input.setDraft !== 'function') return
+			var snap = readDraftText(input)
+			var refRe = /\[🌐 CDP-PICKS → ([^\s|]+) \| ([^|]*) \| ([^|]*) \| elements:(\d+)[^\]]*\]/g
+			var refs: any[] = [], mm
+			while ((mm = refRe.exec(snap)) !== null) refs.push({ file: mm[1], endpoint: mm[2], title: mm[3], count: Number(mm[4]), line: mm[0] })
+			try { (window as any).__dshBrowserCdpDeco = { stage: refs.length ? 'rendered' : 'no-refs', refs: refs.length, draftLen: snap.length } } catch (e) {}
+			var loadedState = React.useState({})
+			var contents = loadedState[0], setContents = loadedState[1]
+			var filesKey = refs.map(function (r: any) { return r.file }).join('|')
+			React.useEffect(function () {
+				var cancelled = false
+				refs.forEach(function (r: any) {
+					if (contents[r.file] !== undefined) return
+					postJson('/bcdp/api/picks-load', { file: r.file }).then(function (res: any) {
+						if (cancelled) return
+						var content = res && res.ok !== false && res.value ? String(res.value.content || '') : ''
+						setContents(function (prev: any) { var n = Object.assign({}, prev); n[r.file] = content; return n })
+					}).catch(function () {})
+				})
+				return function () { cancelled = true }
+			}, [filesKey])
+			if (refs.length === 0) return null
+			function removeRef(line: any) {
 				var cur = readDraftText(input)
-				var idx = cur.indexOf(block)
+				var idx = cur.indexOf(line)
 				if (idx < 0) return
-				var next = cur.slice(0, idx) + cur.slice(idx + block.length)
-				// 空输入框不留原文：整块移除后把残余空白行一并清掉。
+				var next = cur.slice(0, idx) + cur.slice(idx + line.length)
 				next = next.replace(/^\s*\n+/, '').replace(/\n+\s*$/, '')
 				input.setDraft(next)
 			}
@@ -2385,38 +2393,40 @@ clearTimeout((panel as any)._dshHideT)
 			var tagStyle: any = { fontWeight: 600, flex: '0 0 auto' }
 			var descStyle: any = { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }
 			var closeStyle: any = { marginLeft: 'auto', flex: '0 0 auto', font: 'inherit', fontSize: '12px', cursor: 'pointer', border: 'none', background: 'none', color: 'var(--dsw-alias-label-tertiary, rgba(127,127,127,.75))', padding: '0 2px' }
-			return h('div', { style: { display: 'grid', gap: '6px' } }, found.map(function (f: any) {
+			return h('div', { style: { display: 'grid', gap: '6px' } }, refs.map(function (r: any) {
+				var content = contents[r.file]
+				var elements: any[] = []
+				if (typeof content === 'string' && content !== '') {
+					try { var obj = JSON.parse(content); elements = (obj && obj.elements) || [] } catch (e) {}
+				}
 				var head = h('div', { style: headStyle },
 					h('span', { style: { fontWeight: 700 } }, '🌐 ' + wt('pickCardTitle')),
-					h('span', { style: subStyle }, (f.endpoint || '') + ' · ' + (f.title || '')),
-					h('span', { style: subStyle }, wt('pickCardElements', { n: f.elements.length })),
-					h('button', { type: 'button', title: wt('pickCardRemove'), style: closeStyle, onClick: function () { removeBlock(f.block) } }, '✕'))
-				var chips = f.elements.slice(0, 6).map(function (el: any) {
-					return h('div', { key: el.n, style: chipStyle },
-						h('span', { style: numStyle }, '#' + (el.n || '')),
+					h('span', { style: subStyle }, (r.endpoint || '') + ' · ' + (r.title || '')),
+					h('span', { style: subStyle }, wt('pickCardElements', { n: r.count })),
+					h('button', { type: 'button', title: wt('pickCardRemove'), style: closeStyle, onClick: function () { removeRef(r.line) } }, '✕'))
+				var chips: any = []
+				if (typeof content !== 'string') chips.push(h('div', { key: 'loading', style: subStyle }, '…'))
+				for (var i = 0; i < elements.length && i < 6; i++) {
+					var el = elements[i] || {}
+					chips.push(h('div', { key: el.n || i, style: chipStyle },
+						h('span', { style: numStyle }, '#' + (el.n || (i + 1))),
 						h('span', { style: tagStyle }, el.tag || '?'),
-						h('span', { style: descStyle }, el.describe || el.name || ''))
-				})
-				if (f.elements.length > 6) chips.push(h('div', { style: subStyle }, '… +' + (f.elements.length - 6)))
-				return h('div', { key: f.targetId + ':' + f.endpoint, style: cardStyle }, head, chips)
+						h('span', { style: descStyle }, el.describe || el.name || '')))
+				}
+				if (elements.length > 6) chips.push(h('div', { key: 'more', style: subStyle }, '… +' + (elements.length - 6)))
+				return h('div', { key: r.file, style: cardStyle }, head, chips)
 			 }))
 		}
 		
-		// 注册：order 1000 = dock 带区最底部、紧贴 composer 卡（该带区显示位次由
-		// order 升序决定，1000 高于全部已知贡献者：todo 0 / queue 20 / perm-gate
-		// 30）；priority 0 = 独立 cell id。dsh-input-traffic 同款缝，0.1.5-rc.1 →
-		// 0.2.0-rc.2 全宿主 tarball 验证。inject 工厂按会话拿到 input 门面。
+		// 注册：order 0 = 与 todo 同级（带区上沿、浮在对话区一侧）；无 priority
+		// 字段（独立 cell id）。dsh-input-traffic/paste-dock 同缝。
 		function mountPicksDockCard(ctx: any) {
-			try {
-				(window as any).__dshBrowserCdpDeco = Object.assign({}, (window as any).__dshBrowserCdpDeco, { stage: 'registered' })
-			} catch (e) {}
+			try { (window as any).__dshBrowserCdpDeco = Object.assign({}, (window as any).__dshBrowserCdpDeco, { stage: 'registered' }) } catch (e) {}
 			ctx.slots.inject('conversation.input.dock', function () {
 				return ctx.slots.register({
 					name: 'conversation.input.dock',
 					id: 'dsh-browser-cdp.picks',
 					locale: 'dsh-browser-cdp',
-					// 与 todo 同级（order 0）：dock 带区按 order 升序排、0 最远离 composer
-					// 卡——包装卡要的就是这个"浮起来"的位置；独立 cell id，无 priority。
 					order: 0,
 					inject: function (sessionId: any) {
 						var input: any = null
@@ -2424,21 +2434,22 @@ clearTimeout((panel as any)._dshHideT)
 							var actx = ctx.sessions.scope(sessionId)
 							var conversation = actx.get('conversation')
 							input = conversation.input.for(actx)
-						} catch (e) {
-							input = null
-							try { (window as any).__dshBrowserCdpDeco = Object.assign({}, (window as any).__dshBrowserCdpDeco, { stage: 'inject-failed', error: String((e && e.message) || e), sessionId: String(sessionId) }) } catch (e2) {}
-						}
+						} catch (e) { input = null }
 						return { input: input }
 					},
 				}, CdpPicksDockCard)
 			}, 'dsh-browser-cdp: picks dock card')
 		}
+		// 草稿活值读取：0.1.7-rc.1+ 的 input 门面把 Lexical 编辑器的文本真值暴露为
+		// `input.draft`（facade.ts `readonly draft: string`）；`input.state.getSnapshot()`
+		// 是 InputState 组合快照（phase/queue/notices/projections），没有 draft 字段——
+		// 读它恒得空串。门面字段优先，state 快照兜底。
 		function readDraftText(input: any) {
 			if (!input) return ''
 			try { if (typeof input.draft === 'string') return input.draft } catch (e) {}
 			try {
 				var snap = input.state && input.state.getSnapshot ? input.state.getSnapshot() : null
-				if (snap && typeof snap.draft === 'string') return snap.draft
+			if (snap && typeof snap.draft === 'string') return snap.draft
 			} catch (e) {}
 			return ''
 		}
@@ -2476,49 +2487,52 @@ clearTimeout((panel as any)._dshHideT)
 				var input = conversation.input.for(actx)
 				if (!input || typeof input.setDraft !== 'function') return { ok: false, code: 'no-input-facade' }
 				var draft = readDraftText(input)
-
 				var src = element.source || { endpoint: '', targetId: '', pageUrl: '', pageTitle: '' }
-				var entry: any = {
-					backendNodeId: element.backendNodeId,
-					tag: element.tag, id: element.id, name: element.name,
-					focusable: !!element.keyboardFocusable,
-					describe: describe,
+				var entry = { n: 1, backendNodeId: element.backendNodeId, tag: element.tag, id: element.id, name: element.name, focusable: !!element.keyboardFocusable, describe: describe }
+				// dsh-paste-dock 同款内容模型：块体归档为宿主文件（<stateDir>/picks/），
+				// composer 只留一行短引用——模型按路径读取归档即得全部元素定位，
+				// 输入框不被长 JSON 淹没。同页合并 = 原文件重写 + 引用行原位更新。
+				var reRef = /\[🌐 CDP-PICKS → ([^\s|]+) \| ([^|]*) \| ([^|]*) \| elements:(\d+)[^\]]*\]/g
+				var file: any = null, endpointHit: any = null, oldLine: any = null, count = 0, mm
+				while ((mm = reRef.exec(draft)) !== null) {
+					if (mm[2] === src.endpoint) { file = mm[1]; endpointHit = mm[2]; oldLine = mm[0]; count = Number(mm[4]); break }
 				}
-				// Find the block for THIS page (same targetId + endpoint) and
-				// merge into it; one page = one block, several pages = several.
-				var re = /\[(?:🌐 )?CDP-PICKS[^\]]*\]\n([\s\S]*?)\n\[\/CDP-PICKS\]/g
-				var found = null, mm, header = ''
-				while ((mm = re.exec(draft)) !== null) {
-					try {
-						var obj = JSON.parse(mm[1])
-						if (obj && obj.targetId === src.targetId && obj.cdpEndpoint === src.endpoint) { found = mm; header = mm[0].split('\n')[0]; break }
-					} catch (e) { /* user-edited or truncated block: rebuild below */ }
+				if (file !== null) {
+					// 同页合并：读回归档 → 追加本元素 → 原文件重写 → 引用行原位更新
+					postJson('/bcdp/api/picks-load', { file: file }).then(function (lres: any) {
+						try {
+							if (!lres || lres.ok === false || !lres.value) return
+							var obj = JSON.parse(lres.value.content)
+							var list = obj && obj.elements ? obj.elements : []
+							var maxN = 0
+							for (var k = 0; k < list.length; k++) if (list[k].n > maxN) maxN = list[k].n
+							entry.n = maxN + 1
+							list.push(Object.assign({}, entry))
+							var page = { cdpEndpoint: obj.cdpEndpoint || src.endpoint, targetId: obj.targetId || src.targetId, pageUrl: obj.pageUrl || src.pageUrl, pageTitle: obj.pageTitle || src.pageTitle, elements: list }
+							postJson('/bcdp/api/picks-save', { block: JSON.stringify(page, null, 2), file: file })
+							var cur = readDraftText(input)
+							var newLine = '[🌐 CDP-PICKS → ' + file + ' | ' + src.endpoint + ' | ' + (page.pageTitle || '') + ' | elements:' + list.length + ']'
+							var idx = cur.indexOf(oldLine)
+							if (idx >= 0) input.setDraft(cur.slice(0, idx) + newLine + cur.slice(idx + oldLine.length))
+						} catch (e) {}
+					}).catch(function () {})
+					return { ok: true, code: 'archiving' }
 				}
-				var elements = [Object.assign({ n: 1 }, entry)]
-				var page: any = { cdpEndpoint: src.endpoint, targetId: src.targetId, pageUrl: src.pageUrl, pageTitle: src.pageTitle }
-				if (found) {
-					try {
-						var prev = JSON.parse(found[1])
-						var list = prev && prev.elements ? prev.elements : []
-						var maxN = 0
-						for (var k = 0; k < list.length; k++) if (list[k].n > maxN) maxN = list[k].n
-						entry.n = maxN + 1
-						list.push(entry)
-						page.elements = list
-						draft = draft.slice(0, found.index) + draft.slice(found.index + found[0].length)
-					} catch (e) { /* rebuild fresh */ }
-				}
-				if (!page.elements) page.elements = elements
-				var headerLine = '[🌐 CDP-PICKS page="' + String(src.pageTitle || src.pageUrl || '').replace(/"/g, "'") + '" targetId="' + src.targetId + '" endpoint="' + src.endpoint + '"]'
-				var block = headerLine + '\n' + JSON.stringify(page, null, 2) + '\n[/CDP-PICKS]'
-				draft = draft ? draft + (draft.charAt(draft.length - 1) === '\n' ? '' : '\n') + block : block
-				input.setDraft(draft)
-				return { ok: true, code: 'drafted', count: page.elements.length }
+				// 首次投递：新归档文件 + 引用行入草稿（空框不加换行）
+				var pageNew = { cdpEndpoint: src.endpoint, targetId: src.targetId, pageUrl: src.pageUrl, pageTitle: src.pageTitle, elements: [Object.assign({ n: 1 }, entry)] }
+				var newFile = 'picks-' + Date.now() + '.json'
+				postJson('/bcdp/api/picks-save', { block: JSON.stringify(pageNew, null, 2), file: newFile }).then(function (res: any) {
+					if (!res || res.ok === false || !res.value) return
+					var cur = readDraftText(input)
+					var line = '[🌐 CDP-PICKS → ' + res.value.file + ' | ' + src.endpoint + ' | ' + (src.pageTitle || src.pageUrl || '') + ' | elements:1]'
+					cur = cur ? cur + (cur.charAt(cur.length - 1) === '\n' ? '' : '\n') + line : line
+					input.setDraft(cur)
+				}).catch(function () {})
+				return { ok: true, code: 'archiving' }
 			} catch (err) {
 				return { ok: false, code: 'deliver-failed', message: String((err && err.message) || err) }
 			}
 		}
-
 		// T5.3 — the panel pick state machine. Both observation windows share
 		// this control: POST toggles the worker's resident-connection picker,
 		// GET polls the state to observe (`lastPick`/`lastAction` arrive via

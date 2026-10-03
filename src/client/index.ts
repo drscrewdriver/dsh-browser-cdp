@@ -2346,7 +2346,16 @@ clearTimeout((panel as any)._dshHideT)
 		// ── 点选包装卡（conversation.input.dock 贡献者，order 0 = todo 同级）──
 		// 内容模型（dsh-paste-dock 同款）：块体归档为宿主文件，composer 只留
 		// 一行短引用——卡片按引用异步取回归档内容渲染 chip；✕ 只摘引用行（归
-		// 档文件保留）。诊断：window.__dshBrowserCdpDeco。
+		// 档文件保留）。样式走幂等 <style>（不透明实底 + input-traffic 同款
+		// 限宽公式：卡宽限制在内容列/拖动范围内，亮暗双态）。
+		// 诊断：window.__dshBrowserCdpDeco { stage, refs, draftLen }。
+		function injectPickCardStyles() {
+			if (document.getElementById('dsh-cdp-picks-styles') !== null) return
+			var style = document.createElement('style')
+			style.id = 'dsh-cdp-picks-styles'
+			style.textContent = "[data-dsh-cdp-picks-card] {\n  box-sizing: border-box; flex: none;\n  display: grid; gap: 4px; padding: 8px 10px;\n  font: inherit; font-size: 12px;\n  color: #1d1d1f; background: #f7f7f9;\n  border: 1px solid rgba(0, 0, 0, 0.16); border-radius: 12px;\n  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);\n  /* input-traffic 同款限宽：卡宽被限制在内容列（拖动范围）内，两侧留出\n     clearance，永不顶满整窗 */\n  width: min(\n    calc(100% - var(--dsh-composer-side-clearance, 16px) - var(--dsh-composer-side-clearance, 16px) - var(--dsh-composer-dock-inset, 8px) - var(--dsh-composer-dock-inset, 8px)),\n    calc(var(--dsh-chat-content-width, 100%) - var(--dsh-composer-dock-inset, 8px) - var(--dsh-composer-dock-inset, 8px))\n  );\n  overflow-y: auto; max-height: 40vh;\n}\n@media (prefers-color-scheme: dark) {\n  [data-dsh-cdp-picks-card] { color: #f2f2f7; background: #1c1c1e; border-color: rgba(255, 255, 255, 0.18); }\n}\n[data-dsh-cdp-picks-card] .dsh-cdp-picks-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }\n[data-dsh-cdp-picks-card] .dsh-cdp-picks-sub { font-size: 11px; color: rgba(60, 60, 67, 0.62); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }\n[data-dsh-cdp-picks-card] .dsh-cdp-picks-chip { display: flex; align-items: baseline; gap: 6px; padding: 3px 8px; background: rgba(120, 120, 128, 0.12); border: 1px solid rgba(0, 0, 0, 0.1); border-radius: 8px; min-width: 0; }\n[data-dsh-cdp-picks-card] .dsh-cdp-picks-num { font-weight: 700; flex: none; color: rgba(60, 60, 67, 0.62); }\n[data-dsh-cdp-picks-card] .dsh-cdp-picks-tag { font-weight: 600; flex: none; }\n[data-dsh-cdp-picks-card] .dsh-cdp-picks-desc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }\n[data-dsh-cdp-picks-card] .dsh-cdp-picks-close { margin-left: auto; flex: none; font: inherit; font-size: 12px; cursor: pointer; border: none; background: none; color: rgba(60, 60, 67, 0.62); padding: 0 2px; border-radius: 6px; }\n[data-dsh-cdp-picks-card] .dsh-cdp-picks-close:hover { background: rgba(120, 120, 128, 0.18); }\n@media (prefers-color-scheme: dark) {\n  [data-dsh-cdp-picks-card] .dsh-cdp-picks-sub { color: rgba(235, 235, 245, 0.62); }\n  [data-dsh-cdp-picks-card] .dsh-cdp-picks-chip { background: rgba(120, 120, 128, 0.24); border-color: rgba(255, 255, 255, 0.12); }\n  [data-dsh-cdp-picks-card] .dsh-cdp-picks-num { color: rgba(235, 235, 245, 0.62); }\n  [data-dsh-cdp-picks-card] .dsh-cdp-picks-close { color: rgba(235, 235, 245, 0.62); }\n  [data-dsh-cdp-picks-card] .dsh-cdp-picks-close:hover { background: rgba(120, 120, 128, 0.3); }\n}"
+			document.head.appendChild(style)
+		}
 		function CdpPicksDockCard(props: any) {
 			var input = props.input
 			var h = React.createElement
@@ -2385,42 +2394,35 @@ clearTimeout((panel as any)._dshHideT)
 				next = next.replace(/^\s*\n+/, '').replace(/\n+\s*$/, '')
 				input.setDraft(next)
 			}
-			var cardStyle: any = { display: 'grid', gap: '4px', padding: '8px 10px', font: 'inherit', fontSize: '12px', color: 'var(--dsw-alias-label-primary, inherit)', background: 'var(--dsw-alias-bg-surface, rgba(127,127,127,.14))', border: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.35))', borderRadius: '12px', boxSizing: 'border-box' }
-			var headStyle: any = { display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }
-			var subStyle: any = { fontSize: '11px', color: 'var(--dsw-alias-label-tertiary, rgba(127,127,127,.75))', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }
-			var chipStyle: any = { display: 'flex', alignItems: 'baseline', gap: '6px', padding: '3px 8px', background: 'var(--dsw-alias-bg-module-platform, rgba(127,127,127,.1))', border: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.22))', borderRadius: '8px', minWidth: 0 }
-			var numStyle: any = { fontWeight: 700, flex: '0 0 auto', color: 'var(--dsw-alias-label-tertiary, rgba(127,127,127,.75))' }
-			var tagStyle: any = { fontWeight: 600, flex: '0 0 auto' }
-			var descStyle: any = { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }
-			var closeStyle: any = { marginLeft: 'auto', flex: '0 0 auto', font: 'inherit', fontSize: '12px', cursor: 'pointer', border: 'none', background: 'none', color: 'var(--dsw-alias-label-tertiary, rgba(127,127,127,.75))', padding: '0 2px' }
 			return h('div', { style: { display: 'grid', gap: '6px' } }, refs.map(function (r: any) {
 				var content = contents[r.file]
 				var elements: any[] = []
 				if (typeof content === 'string' && content !== '') {
 					try { var obj = JSON.parse(content); elements = (obj && obj.elements) || [] } catch (e) {}
 				}
-				var head = h('div', { style: headStyle },
+				var head = h('div', { className: 'dsh-cdp-picks-head' },
 					h('span', { style: { fontWeight: 700 } }, '🌐 ' + wt('pickCardTitle')),
-					h('span', { style: subStyle }, (r.endpoint || '') + ' · ' + (r.title || '')),
-					h('span', { style: subStyle }, wt('pickCardElements', { n: r.count })),
-					h('button', { type: 'button', title: wt('pickCardRemove'), style: closeStyle, onClick: function () { removeRef(r.line) } }, '✕'))
+					h('span', { className: 'dsh-cdp-picks-sub' }, (r.endpoint || '') + ' · ' + (r.title || '')),
+					h('span', { className: 'dsh-cdp-picks-sub' }, wt('pickCardElements', { n: r.count })),
+					h('button', { type: 'button', title: wt('pickCardRemove'), className: 'dsh-cdp-picks-close', onClick: function () { removeRef(r.line) } }, '✕'))
 				var chips: any = []
-				if (typeof content !== 'string') chips.push(h('div', { key: 'loading', style: subStyle }, '…'))
+				if (typeof content !== 'string') chips.push(h('div', { key: 'loading', className: 'dsh-cdp-picks-sub' }, '…'))
 				for (var i = 0; i < elements.length && i < 6; i++) {
 					var el = elements[i] || {}
-					chips.push(h('div', { key: el.n || i, style: chipStyle },
-						h('span', { style: numStyle }, '#' + (el.n || (i + 1))),
-						h('span', { style: tagStyle }, el.tag || '?'),
-						h('span', { style: descStyle }, el.describe || el.name || '')))
+					chips.push(h('div', { key: el.n || i, className: 'dsh-cdp-picks-chip' },
+						h('span', { className: 'dsh-cdp-picks-num' }, '#' + (el.n || (i + 1))),
+						h('span', { className: 'dsh-cdp-picks-tag' }, el.tag || '?'),
+						h('span', { className: 'dsh-cdp-picks-desc' }, el.describe || el.name || '')))
 				}
-				if (elements.length > 6) chips.push(h('div', { key: 'more', style: subStyle }, '… +' + (elements.length - 6)))
-				return h('div', { key: r.file, style: cardStyle }, head, chips)
+				if (elements.length > 6) chips.push(h('div', { key: 'more', className: 'dsh-cdp-picks-sub' }, '… +' + (elements.length - 6)))
+				return h('div', { key: r.file, 'data-dsh-cdp-picks-card': '' }, head, chips)
 			 }))
 		}
 		
 		// 注册：order 0 = 与 todo 同级（带区上沿、浮在对话区一侧）；无 priority
 		// 字段（独立 cell id）。dsh-input-traffic/paste-dock 同缝。
 		function mountPicksDockCard(ctx: any) {
+			injectPickCardStyles()
 			try { (window as any).__dshBrowserCdpDeco = Object.assign({}, (window as any).__dshBrowserCdpDeco, { stage: 'registered' }) } catch (e) {}
 			ctx.slots.inject('conversation.input.dock', function () {
 				return ctx.slots.register({

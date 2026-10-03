@@ -2571,6 +2571,20 @@ clearTimeout((panel as any)._dshHideT)
 		// 引用片前的边界空格：宿主两处引用扫描都锚定 (^|\s)，片紧贴前字符时
 		// 两处都看不见（paste-dock 2026-10-02 实测）。从 composer DOM 读 caret
 		// 前文本；拿不准就给空格——多余空格无害，缺边界误整个特性。
+		// 归档文件名 slug：时间戳名对识别没用（真机反馈），用首元素特征的开头
+		// 几个字符（describe → name → tag 兜底页标题）——清成网关文件名白名单
+		// [A-Za-z0-9._-]，中文等清空时回退时间戳。后缀保留 5 位 base36 时间：
+		// 不同页面的同特征元素各归各档，防同名归档互相覆盖。
+		function pickSlugOf(entry: any) {
+			var raw = String((entry && entry.describe) || (entry && entry.name) || (entry && entry.tag) || '')
+			raw = raw.replace(/["'`]/g, '').trim()
+			return raw.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+/, '').slice(0, 12).replace(/-+$/, '')
+		}
+		function pickArchiveFileName(entry: any) {
+			var slug = pickSlugOf(entry)
+			var tail = Date.now().toString(36).slice(-5)
+			return slug ? 'picks-' + slug + '-' + tail + '.json' : 'picks-' + tail + '.json'
+		}
 		function needsBoundarySpace() {
 			var root: any = document.querySelector('[data-input-scroll] [contenteditable="true"]')
 			var selection = window.getSelection()
@@ -2588,7 +2602,7 @@ clearTimeout((panel as any)._dshHideT)
 		// 同款）：箭头跨步、退格整片删除、显示层就是"替换后的 @ 字段"。插入前
 		// 先 serializeReference 做能力证明（发送路径读同一注册表，字符串应答 =
 		// 发送不会抛）。任何一步不成 → false，调用方回退文本 token。
-		async function tryInsertPickChip(ctx: any, sessionId: any, actx: any, input: any, token: any) {
+		async function tryInsertPickChip(ctx: any, sessionId: any, actx: any, input: any, token: any, label: any) {
 			try {
 				var latch = pickInputActionsLatch
 				if (!latch.actions || latch.sessionId !== String(sessionId)) return false
@@ -2603,7 +2617,7 @@ clearTimeout((panel as any)._dshHideT)
 				}
 				// 空格编辑挪动了 draftRev，insertReference CAS 校验 span——必须重取
 				var span = latch.actions.captureInsertion()
-				return input.insertReference({ source: 'reference', ref: token, label: '🌐 ' + token.slice(1, -1), appearance: 'file', clipboardText: token }, span) === true
+				return input.insertReference({ source: 'reference', ref: token, label: label || '🌐 ' + token.slice(1, -1), appearance: 'file', clipboardText: token }, span) === true
 			} catch (e) {
 				return false
 			}
@@ -2653,14 +2667,16 @@ clearTimeout((panel as any)._dshHideT)
 							await postJson('/bcdp/api/picks-save', { block: JSON.stringify(page, null, 2), file: found.file, session: sessionId })
 							return
 						}
-						// 首次投递：新归档文件 + @"picks/…" 引用入草稿——优先插原子引用
-						// 片（宿主附件同款，显示层替换即片本体），插不进再回退文本 token
-						//（空框不加换行）。
+						// 首次投递：新归档文件（首元素特征 slug 名，可识别）+ @"picks/…"
+						// 引用入草稿——优先插原子引用片（宿主附件同款，显示层替换即片
+						// 本体），插不进再回退文本 token（空框不加换行）。
 						var pageNew = { cdpEndpoint: src.endpoint, targetId: src.targetId, pageUrl: src.pageUrl, pageTitle: src.pageTitle, elements: [Object.assign({ n: 1 }, entry)] }
-						var sres = await postJson('/bcdp/api/picks-save', { block: JSON.stringify(pageNew, null, 2), session: sessionId })
+						var newFile = pickArchiveFileName(entry)
+						var sres = await postJson('/bcdp/api/picks-save', { block: JSON.stringify(pageNew, null, 2), file: newFile, session: sessionId })
 						if (!sres || sres.ok === false || !sres.value) return
 						var token = '@"picks/' + sres.value.file + '"'
-						var chipOk = await tryInsertPickChip(ctx, sessionId, actx, input, token)
+						var chipLabel = '🌐 ' + (pickSlugOf(entry) || sres.value.file.replace(/\.json$/, ''))
+						var chipOk = await tryInsertPickChip(ctx, sessionId, actx, input, token, chipLabel)
 						if (!chipOk) {
 							var cur = readDraftText(input)
 							cur = cur ? cur + (cur.charAt(cur.length - 1) === '\n' ? '' : '\n') + token : token

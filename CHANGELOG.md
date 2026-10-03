@@ -44,6 +44,18 @@
 ### 修复
 - `makeWhich` 的路径分隔符与 PATH 分隔符改为跟随**被模拟的平台**（原用 `node:path` 的宿主值，darwin/linux 查找在 Windows 上会拼成 `dir\file` 而永远找不到）。
 
+## [0.16.23] - 2026-10-03 — 新线首发：compat/0.1.5（DSH 0.1.5-rc 宿主线），内容 = 0.17.23 全量反向同源
+
+### 变更
+- **开线**：自 compat/0.1.7（0.17.23）分叉，面向 DSH `0.1.5-rc.1+` 宿主；dist-tag `dsh-0.1.5`。
+- **接缝审计（对照 dsh-v0.1.5-rc.2）**：`conversation.input.dock`（order 0 引用卡）/ `conversation.input.overlay`（🌐 徽标）/ 门面 `draft`+`setDraft`+`insertReference` / `serializeReference` / `ReferenceChipNode` / `workspaceRegistry` / webServer 网关全量在位。
+- **线差异（自动降级，无需改码）**：`InputActions.captureInsertion` 不存在 → 点选引用走 `@"picks/…" 文本 token + 宿主 FOLDER_REF 染色`（原子片是 0.1.7-rc.1+ 能力）；`configForms` 不存在 → 声明式设置卡不挂载，配置经 profile `cordis.patch.yml`（schemastery 3.18.4 为常规依赖打进产物，`.volatile()` 调用本身不炸）。
+- **peer 放宽**：全部 `>=0.1.7-rc.1 <0.1.8-0` → `>=0.1.5-rc.1 <0.2.0-0`（含宿主 `dsh`）。
+
+### 验证
+- 全测与 0.17.23 同套（695 passed / 11 skipped）；两套 `tsc` 通过；build 三产物全绿。
+
+
 ## [0.17.23] - 2026-10-03 — 真机反馈⑩：点选特征采集换轨——纯文本链接读元素自身可见文本
 
 ### 修复（真机：News 这类链接全采成 `a name="" focusable`）

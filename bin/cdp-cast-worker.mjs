@@ -2129,10 +2129,14 @@ var require_websocket = /* @__PURE__ */ __commonJS({ "node_modules/ws/lib/websoc
 				this._bufferedAmount = 0;
 				this._isServer = false;
 				this._redirects = 0;
-				if (protocols === void 0) protocols = [];
+				if (protocols === void 0) if (!options || options.protocols === void 0) protocols = [];
+				else if (Array.isArray(options.protocols)) protocols = options.protocols;
+				else protocols = [options.protocols];
 				else if (!Array.isArray(protocols)) if (typeof protocols === "object" && protocols !== null) {
 					options = protocols;
-					protocols = [];
+					if (options.protocols === void 0) protocols = [];
+					else if (Array.isArray(options.protocols)) protocols = options.protocols;
+					else protocols = [options.protocols];
 				} else protocols = [protocols];
 				initAsClient(this, address, protocols, options);
 			} else {
@@ -2321,12 +2325,12 @@ var require_websocket = /* @__PURE__ */ __commonJS({ "node_modules/ws/lib/websoc
 				if (this._closeFrameSent && (this._closeFrameReceived || this._receiver._writableState.errorEmitted)) this._socket.end();
 				return;
 			}
-			this._readyState = WebSocket$3.CLOSING;
 			this._sender.close(code, data, !this._isServer, (err) => {
 				if (err) return;
 				this._closeFrameSent = true;
 				if (this._closeFrameReceived || this._receiver._writableState.errorEmitted) this._socket.end();
 			});
+			this._readyState = WebSocket$3.CLOSING;
 			setCloseTimer(this);
 		}
 		/**
@@ -2609,6 +2613,7 @@ var require_websocket = /* @__PURE__ */ __commonJS({ "node_modules/ws/lib/websoc
 			socketPath: void 0,
 			hostname: void 0,
 			protocol: void 0,
+			protocols: void 0,
 			timeout: void 0,
 			method: "GET",
 			host: void 0,

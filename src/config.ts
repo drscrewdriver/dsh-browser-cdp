@@ -90,6 +90,20 @@ export const Config = z.object({
       probeAt: z.number(),
       probeEngine: z.union(['chrome', 'lightpanda', 'unknown']),
     }),
+    z.object({
+      kind: z.string(),
+      id: z.string(),
+      label: z.string(),
+      servePath: z.string(),
+      enabled: z.boolean(),
+      note: z.string(),
+      probeStatus: z.union(['unknown', 'ok', 'error']),
+      probeLatencyMs: z.number(),
+      probeError: z.string(),
+      probeCode: z.string(),
+      probeAt: z.number(),
+      probeEngine: z.union(['chrome', 'lightpanda', 'unknown']),
+    }),
   ])).description('Ordered connection sequence: CDP endpoints and (at most one) local ego CLI link. Only the ACTIVATED and enabled entry receives every bcdp_* call. Order IS the priority order.').volatile(),
   activeTargetId: z.string().description('Id of the activated entry in links. Empty = nothing activated.').volatile(),
   cdpMode: cdpMode.description('auto = use the activated target and never start a local browser silently; remote = only ever connect to the activated target; local = always use local browser control.').volatile(),
@@ -103,6 +117,8 @@ export const Config = z.object({
   localHeadless: z.boolean().description('Run the locally launched browser headless.'),
   remoteEnabled: z.boolean().description('Master switch for REMOTE attach. Off = the configured target sequence is preserved but inert (nothing probes or connects remotely); flip back on any time. Does not affect cdpMode=local.').volatile(),
   localUserDataDir: z.string().description('Profile dir for the locally launched browser. Empty = managed dir; never point at your daily Chrome profile.'),
+  // ── Lightpanda backend: managed-serve knob (the row carries its own path) ──
+  lightpandaArgs: z.string().description('Extra args appended to a managed `lightpanda serve` argv. --host/--port are managed and cannot be overridden.').volatile(),
   // Deprecated read-compatible keys. The settings UI only writes canonical keys.
   castFpsCap: z.number().min(0).max(60).step(1),
   screencastQuality: z.number().min(1).max(100).step(1),
@@ -382,6 +398,7 @@ export function resolveConfig(config: RawConfig = {}): ResolvedConfig {
     legacyEgoToolNames: Boolean(config.legacyEgoToolNames),
     localHeadless: config.localHeadless === undefined ? false : Boolean(config.localHeadless),
     localUserDataDir: typeof config.localUserDataDir === 'string' ? config.localUserDataDir : '',
+    lightpandaArgs: trimmed(config.lightpandaArgs),
     remoteEnabled: config.remoteEnabled === undefined ? true : Boolean(config.remoteEnabled),
     // ── 阶段 10: JEV/Laya judge ───────────────────────────────────────────
     // `layaUrl` defaults to the sidecar's real port. JevLoop ships 7789 here,

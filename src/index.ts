@@ -55,6 +55,7 @@ import {
   sanitizeLinks,
   type AttachDecision,
   EGO_CLI_KIND,
+  LP_KIND,
 } from './cdp-targets.ts'
 import { createSubprocessCliIo, resolveCliBinary, spawnArgvFor, type SpawnShape } from './cdp/cli-link.ts'
 import { assembleSystemOneBody, buildJudgeRuntime, describeJudge, sendJudge } from './jev/client.ts'
@@ -65,7 +66,7 @@ import { buildRound, serializeLaya } from './jev/pipe.ts'
 import { chaptersOf } from './jev/frame.ts'
 import type { IntentSpec } from './jev/prompt.ts'
 import type { Frame } from './jev/frame.ts'
-import type { EgoContext, JudgeSettings, RawConfig, ResolvedConfig, SubprocessService, ToolExec, WebServerLike, BrowserLink, CdpMode } from './types.ts'
+import type { EgoContext, JudgeSettings, RawConfig, ResolvedConfig, SubprocessService, ToolExec, WebServerLike, BrowserLink, CdpMode, LightpandaLink } from './types.ts'
 
 export const name = 'dsh-browser-cdp'
 // Platform-aware host services: the web shell exposes `webServer`, other Web
@@ -649,6 +650,8 @@ interface EgoRuntimeConfig {
   readonly localHeadless: boolean
   readonly remoteEnabled: boolean
   readonly localUserDataDir: string
+  /** Lightpanda backend — extra `lightpanda serve` args for managed `lightpanda` rows. */
+  readonly lightpandaArgs: string
   // ── 阶段 10: JEV/Laya judge (design-jev-pipeline.md) ────────────────────
   //
   // Listed field-by-field rather than as one `JudgeSettings` object, for a
@@ -940,6 +943,7 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
     get localHeadless() { return resolveConfig(bridge.source() as RawConfig).localHeadless },
     get remoteEnabled() { return resolveConfig(bridge.source() as RawConfig).remoteEnabled },
     get localUserDataDir() { return resolveConfig(bridge.source() as RawConfig).localUserDataDir },
+    get lightpandaArgs() { return resolveConfig(bridge.source() as RawConfig).lightpandaArgs },
     // ── 阶段 10: JEV/Laya judge ─────────────────────────────────────────
     // `judgeSettingsOf` is resolved once per read and deconstructed, so the
     // "which keys does the judge need" decision lives in ONE place (config.ts)
@@ -1019,6 +1023,8 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
           },
           remoteEnabled: resolved.remoteEnabled,
           useLauncher: true,
+          // Lightpanda backend — managed-serve extra args for `lightpanda` rows.
+          lightpandaArgs: resolved.lightpandaArgs,
           // R7 — the local ego CLI link probes through the host subprocess
           // service, and gets our bundled harness only when it opts in.
           cliIo: createSubprocessCliIo(ctx.subprocess),
@@ -2537,7 +2543,13 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
         // ── R7: connection kinds, the local CLI, and the conflict guard ────
         const kindCount = (kind: string): number => cfg.links.filter((link) => link.kind === kind).length
         const dropped = cfg.droppedEgoCli
-        lines.push(`links: ${cfg.links.length} (cdp ${kindCount('cdp')}, ego-cli ${kindCount(EGO_CLI_KIND)})${dropped > 0 ? ` — ${dropped} extra ego-cli row(s) dropped (local-only singleton)` : ''}`)
+        lines.push(`links: ${cfg.links.length} (cdp ${kindCount('cdp')}, ego-cli ${kindCount(EGO_CLI_KIND)}, lightpanda ${kindCount(LP_KIND)})${dropped > 0 ? ` — ${dropped} extra ego-cli row(s) dropped (local-only singleton)` : ''}`)
+        // Lightpanda backend — managed-serve row status + the quick-trial vs
+        // headed-backstop positioning, in the doctor where confusion gets solved.
+        if (kindCount(LP_KIND) > 0) {
+          const lpRow = cfg.links.find((link) => link.kind === LP_KIND) as LightpandaLink | undefined
+          lines.push(`lightpanda row: servePath=${lpRow?.servePath === undefined || lpRow.servePath === '' ? '(auto: PATH → ~/.local/bin; win32 via WSL2)' : lpRow.servePath} — headless quick-trial engine; headed kinds (CDP / local Chrome / ego CLI) are the manual-fallback backstop`)
+        }
         // Resolve the CLI for real (no process is spawned for resolution) so the
         // doctor reports what a call would actually launch, not what was probed.
         const cliLink = cfg.links.find((link) => link.kind === EGO_CLI_KIND)

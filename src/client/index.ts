@@ -2,7 +2,7 @@
 declare function require(id: string): any
 
 import { NS, dictionaries } from './locales'
-import { addRow, applyProbe, buildCdpRow, buildCliRow, hasCliLink, isFull, isValidEndpoint, MAX_LINKS, moveRow, removeRow, updateRow } from './fam-links'
+import { addRow, applyProbe, buildCdpRow, buildCliRow, buildLpRow, hasCliLink, hasLpLink, isFull, isValidEndpoint, MAX_LINKS, moveRow, removeRow, updateRow } from './fam-links'
 
 // Structural view of the host locale service (register + bind is all this
 // plugin touches; kept local so the client build needs no type deps).
@@ -87,6 +87,7 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 		var _egoLocale = (function () {
 			try { var lang = navigator.language || ''; return lang.startsWith('zh') ? 'zh' : 'en' } catch { return 'en' }
 		})()
+
 		// Dictionaries live in ./locales.ts (nine languages, zh = source of truth).
 		// `wt` prefers the host locale service binding installed by apply() (all
 		// nine languages, live-switching); `watchDict` keeps the previous zh/en
@@ -101,6 +102,7 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 				var dict = watchDict[_egoLocale] || watchDict.en
 				text = dict[key] || key
 			}
+
 			if (params) { for (var k in params) { text = text.replace(new RegExp('{' + k + '}', 'g'), String(params[k])) } }
 			return text
 		}
@@ -749,6 +751,8 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 			var addEndpoint = addEndpointState[0], setAddEndpoint = addEndpointState[1]
 			var addCliPathState = React.useState('')
 			var addCliPath = addCliPathState[0], setAddCliPath = addCliPathState[1]
+			var addLpPathState = React.useState('')
+			var addLpPath = addLpPathState[0], setAddLpPath = addLpPathState[1]
 
 			var btnStyle = { font: 'inherit', fontSize: '12px', cursor: writable ? 'pointer' : 'not-allowed', border: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.35))', background: 'none', color: 'var(--dsw-alias-label-primary, inherit)', borderRadius: '8px', padding: '2px 8px', flex: '0 0 auto' }
 			var badgeStyle = { fontSize: '10px', fontWeight: 600, letterSpacing: '.04em', flex: '0 0 auto', color: 'var(--dsw-alias-label-tertiary, rgba(127,127,127,.7))', border: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.25))', borderRadius: '6px', padding: '0 5px', lineHeight: '16px' }
@@ -781,6 +785,16 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 				}
 				setAddCliPath(''); setErrText('')
 			}
+			function addLp() {
+				var res = addRow(links, buildLpRow({ label: '', servePath: addLpPath }))
+				if (res.code) { setErrText(res.code === 'link-limit-reached' ? limitText() : wt('linksAddLpExists')); return }
+				writeLinks(res.links)
+				if (activeId === '') {
+					// 空序列的第一个目标入列即激活（无歧义）；后续行保持不自动激活。
+					void scope.set('activeTargetId', res.links[res.links.length - 1].id)
+				}
+				setAddLpPath(''); setErrText('')
+			}
 			function removeOne(row) {
 				var res = removeRow(links, row.id)
 				writeLinks(res.links)
@@ -798,6 +812,8 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 						var outcome = data && data.value && data.value.outcome
 							? data.value.outcome
 							: { ok: false, code: 'probe-failed', message: 'no outcome' }
+						// Lightpanda backend — persist the recognized engine with the probe state.
+						if (outcome && outcome.engine === undefined && outcome.ok === true) outcome.engine = 'chrome'
 						writeLinks(applyProbe(links, row.id, outcome, Date.now()))
 					})
 					.catch(function (error) {
@@ -829,6 +845,7 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 						wt('linksEmpty'))
 					: links.map(function (row, idx) {
 						var isCli = row.kind === 'ego-cli'
+						var isLp = row.kind === 'lightpanda'
 						var isActive = row.id !== undefined && row.id === activeId
 						var probeBadge = null
 						if (row.probeStatus === 'ok' || row.probeStatus === 'error') {
@@ -842,7 +859,7 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 								h('input', { type: 'checkbox', checked: row.enabled === true, disabled: !writable,
 									title: wt('linksEnabled'),
 									onChange: function (e) { writeLinks(updateRow(links, row.id, { enabled: e.target.checked })) } }),
-								h('span', { style: badgeStyle }, isCli ? 'CLI' : 'CDP'),
+								h('span', { style: badgeStyle }, isCli ? 'CLI' : isLp ? 'LP·无头' : 'CDP'),
 								h(FamRowInput, { v: row.label || '', writable: writable, placeholder: wt('linksLabel'),
 									onCommit: function (v) { writeLinks(updateRow(links, row.id, { label: v })) } }),
 								probeBadge,
@@ -857,10 +874,11 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 										} },
 										wt('linksActivate'))),
 							h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
-								h(FamRowInput, { v: (isCli ? row.cliPath : row.endpoint) || '', writable: writable,
-									placeholder: isCli ? wt('linksCliPathHint') : wt('linksEndpointHint'),
+								h(FamRowInput, { v: (isCli ? row.cliPath : isLp ? row.servePath : row.endpoint) || '', writable: writable,
+									placeholder: isCli ? wt('linksCliPathHint') : isLp ? wt('linksLpPathHint') : wt('linksEndpointHint'),
 									onCommit: function (v) {
 										if (isCli) { writeLinks(updateRow(links, row.id, { cliPath: v })); return }
+										if (isLp) { writeLinks(updateRow(links, row.id, { servePath: v })); return }
 										if (!isValidEndpoint(v)) { setErrText(wt('linksEndpointInvalid')); return }
 										writeLinks(updateRow(links, row.id, { endpoint: v }))
 									} }),
@@ -869,7 +887,7 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 										title: wt('linksCliSdk'),
 										onChange: function (e) { writeLinks(updateRow(links, row.id, { useSdkPath: e.target.checked })) } }),
 									wt('linksCliSdk')) : null,
-								!isCli ? h('button', { type: 'button', disabled: !writable || probingId === row.id, style: btnStyle,
+								!isCli && !isLp ? h('button', { type: 'button', disabled: !writable || probingId === row.id, style: btnStyle,
 									onClick: function () { probeOne(row) } },
 									probingId === row.id ? wt('linksProbing') : wt('linksProbe')) : null,
 								h('button', { type: 'button', disabled: !writable || idx === 0, title: wt('linksMoveUp'), style: btnStyle,
@@ -878,8 +896,10 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 									onClick: function () { writeLinks(moveRow(links, row.id, 1)) } }, '↓'),
 								h('button', { type: 'button', disabled: !writable, title: wt('linksRemove'), style: btnStyle,
 									onClick: function () { removeOne(row) } }, '✕'),
-								isCli && cdpMode === 'remote'
-									? h('span', { style: { fontSize: '11px', color: '#ff9f0a', flex: '1 1 100%' } }, wt('linksCliRemoteWarn'))
+								(isCli || isLp) && cdpMode === 'remote'
+									? h('span', { style: { fontSize: '11px', color: '#ff9f0a', flex: '1 1 100%' } }, wt(isCli ? 'linksCliRemoteWarn' : 'linksLpRemoteWarn'))
+									: null,
+								isLp ? h('span', { style: { fontSize: '11px', color: 'var(--dsw-alias-label-tertiary, rgba(127,127,127,.7))', flex: '1 1 100%' } }, wt('linksLpHeadlessHint'))
 									: null))
 					}),
 				localRow,
@@ -903,6 +923,15 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 						h('button', { type: 'button', disabled: !writable || isFull(links) || hasCliLink(links),
 							title: hasCliLink(links) ? wt('linksAddCliExists') : (isFull(links) ? limitText() : undefined),
 							style: btnStyle, onClick: addCli }, wt('linksAddCli'))),
+						h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' } },
+							h('input', { type: 'text', value: addLpPath, disabled: !writable || isFull(links) || hasLpLink(links),
+								placeholder: wt('linksLpPathHint'),
+								style: Object.assign({ flex: '1 1 160px', minWidth: 0 }, inputStyle),
+								onChange: function (e: any) { setAddLpPath(e.target.value) },
+								onKeyDown: function (e: any) { if (e.key === 'Enter') { addLp() } } }),
+							h('button', { type: 'button', disabled: !writable || isFull(links) || hasLpLink(links),
+								title: hasLpLink(links) ? wt('linksAddLpExists') : (isFull(links) ? limitText() : undefined),
+								style: btnStyle, onClick: addLp }, wt('linksAddLp'))),
 					errText ? h('div', { style: { fontSize: '11px', color: '#ff453a' } }, errText) : null))
 		}
 

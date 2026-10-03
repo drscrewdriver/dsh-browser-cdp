@@ -9,6 +9,15 @@
 ### 验证
 - `typecheck` 过；690 passed / 11 skipped。
 
+## [0.18.15] - 2026-10-03 — 🌐 引用徽标：composer 卡内浮动标识（同 0.17.18 反向同源）
+
+### 新增
+- **引用徽标**：草稿含我们的引用行时，`conversation.input.overlay` 席位（order 110）浮出 🌐 徽标——悬停显示页面标题/连接/元素数；与 paste-dock 的 📄 文档徽标同位共存。
+- 组件按会话探测（`props.sessionId` + 工厂下发的 `getDraft` 闭包），解析不了渲染 null。
+
+### 验证
+- `typecheck` 过；690 passed / 11 skipped。
+
 ## [0.18.13] - 2026-10-03 — 包装卡挂官方 dock 缝（todo 同级 order 0）+ 投递模型变更：块体归档为文件（同 0.17.15/0.17.16 反向同源）
 
 ### 新增/变更

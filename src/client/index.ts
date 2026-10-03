@@ -1074,6 +1074,7 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 		mountFamilySettingsCard(ctx)
 		mountPluginsPageCard(ctx)
 		mountPicksDockCard(ctx)
+		mountPicksBadge(ctx)
 		var betterSidebarService: any
 		try { betterSidebarService = typeof ctx.get === 'function' ? ctx.get('betterSidebar') : undefined } catch (e) { betterSidebarService = undefined }
 		if (betterSidebarService !== undefined) {
@@ -2419,6 +2420,49 @@ clearTimeout((panel as any)._dshHideT)
 			 }))
 		}
 		
+		// ── 点选引用徽标（conversation.input.overlay 贡献者）────────────────
+		// 草稿含我们的引用行时，composer 卡内浮出 🌐 徽标（paste-dock 文档徽标的
+		// 同位）——悬停显示连接/页面/元素数。组件按会话探测，解析不了渲染 null。
+		function CdpPicksBadge(props: any) {
+			var h = React.createElement
+			var tick = React.useState(0)
+			var setTick = tick[1]
+			React.useEffect(function () {
+				var timer = window.setInterval(function () { setTick(function (n: any) { return n + 1 }) }, 1000)
+				return function () { window.clearInterval(timer) }
+			}, [])
+			var refs: any[] = []
+			try {
+				var sessionId = props && props.sessionId !== undefined && props.sessionId !== null ? String(props.sessionId) : null
+				var sid = sessionId
+				if (sid) {
+					var draft = typeof props.getDraft === 'function' ? String(props.getDraft() || '') : ''
+					var refRe = /\[(?:🌐 )?CDP-PICKS/g
+					var countRefs = (draft.match(refRe) || []).length
+					var refRe2 = /\[🌐 CDP-PICKS → ([^\s|]+) \| ([^|]*) \| ([^|]*) \| elements:(\d+)[^\]]*\]/g
+					var mm
+					while ((mm = refRe2.exec(draft)) !== null) refs.push({ file: mm[1], endpoint: mm[2], title: mm[3], count: Number(mm[4]) })
+				}
+			} catch (e) {}
+			try { (window as any).__dshBrowserCdpDeco = Object.assign({}, (window as any).__dshBrowserCdpDeco, { badgeRefs: refs.length, blockMarkers: countRefs }) } catch (e) {}
+			if (refs.length === 0) return null
+			return h('div', { className: 'dsh-cdp-picks-badges' }, refs.map(function (r: any, i: any) {
+				return h('span', { key: r.file, className: 'dsh-cdp-picks-badge', title: '🌐 ' + (r.title || '') + ' · ' + (r.endpoint || '') + ' · elements:' + r.count }, '🌐' + (refs.length > 1 ? ' ×' + (i + 1) : ''))
+			}))
+		}
+
+		// 注册：order 110 = 排在 paste-dock 徽标（90/100）之后。
+		function mountPicksBadge(ctx: any) {
+			ctx.slots.inject('conversation.input.overlay', function () {
+				return ctx.slots.register({
+					name: 'conversation.input.overlay',
+					id: 'dsh-browser-cdp.picks-badge',
+					order: 110,
+					label: 'dsh-browser-cdp picks badge',
+				}, CdpPicksBadge)
+			}, 'dsh-browser-cdp: picks badge')
+		}
+
 		// 注册：order 0 = 与 todo 同级（带区上沿、浮在对话区一侧）；无 priority
 		// 字段（独立 cell id）。dsh-input-traffic/paste-dock 同缝。
 		function mountPicksDockCard(ctx: any) {
@@ -2437,7 +2481,10 @@ clearTimeout((panel as any)._dshHideT)
 							var conversation = actx.get('conversation')
 							input = conversation.input.for(actx)
 						} catch (e) { input = null }
-						return { input: input }
+						return {
+							input: input,
+							getDraft: function () { return readDraftText(input) }
+						}
 					},
 				}, CdpPicksDockCard)
 			}, 'dsh-browser-cdp: picks dock card')

@@ -2216,6 +2216,16 @@ clearTimeout((panel as any)._dshHideT)
 			var h = React.createElement
 			var tick = React.useState(0)
 			var setTick = tick[1]
+			// 宿主标准 props（SessionStandardProps）带 Session 身份 + 公共输入动作
+			// ——latch 供 deliver 插原子引用片用（effect 里写，render 期无副作用）
+			var offeredSession = props && props.sessionId !== undefined && props.sessionId !== null ? String(props.sessionId) : null
+			var offeredActions = props && props.inputActions ? props.inputActions : null
+			React.useEffect(function () {
+				if (offeredSession === null) return
+				latchPickInputActions(offeredSession, offeredActions)
+			}, [offeredSession, offeredActions])
+			// picks-load 的会话来源：inject 下发的字符串优先，宿主标准 props 兜底
+			var sid = typeof props.session === 'string' && props.session !== '' ? props.session : offeredSession
 			React.useEffect(function () {
 				var timer = window.setInterval(function () { setTick(function (n) { return n + 1 }) }, 1000)
 				return function () { window.clearInterval(timer) }
@@ -2224,21 +2234,35 @@ clearTimeout((panel as any)._dshHideT)
 			var refRe = /@"(picks\/[^"\s]+\.json)"/g
 			var refs = [], mm
 			while ((mm = refRe.exec(snap)) !== null) refs.push({ file: mm[1], line: mm[0] })
-			try { (window as any).__dshBrowserCdpDeco = { stage: refs.length ? 'rendered' : 'no-refs', refs: refs.length, draftLen: snap.length } } catch (e) {}
+			try { (window as any).__dshBrowserCdpDeco = { stage: refs.length ? 'rendered' : 'no-refs', refs: refs.length, draftLen: snap.length, sid: sid ? 'yes' : 'no', latch: pickInputActionsLatch.sessionId ? 'yes' : 'no' } } catch (e) {}
 			var loadedState = React.useState({})
 			var contents = loadedState[0], setContents = loadedState[1]
+			var errState = React.useState({})
+			var errs = errState[0], setErrs = errState[1]
 			var filesKey = refs.map(function (r) { return r.file }).join('|')
 			// 归档文件可能被同页合并改写（deliver 原文件重写），快照里看不出——
 			// 每 5s 重读一次引用的归档（本地文件读，开销可忽略），token→归档名
-			// 去掉 picks/ 前缀（网关文件名校验只收 basename）。
+			// 去掉 picks/ 前缀（网关文件名校验只收 basename）。失败显码不吞：
+			// 计数恒 0 而用户看不到原因是上次真机排障的最大代价。
 			React.useEffect(function () {
 				var cancelled = false
 				refs.forEach(function (r) {
-					postJson('/bcdp/api/picks-load', { file: r.file.slice('picks/'.length), session: props.session }).then(function (res) {
+					postJson('/bcdp/api/picks-load', { file: r.file.slice('picks/'.length), session: sid }).then(function (res) {
 						if (cancelled) return
-						var content = res && res.ok !== false && res.value ? String(res.value.content || '') : ''
-						setContents(function (prev) { var n = Object.assign({}, prev); n[r.file] = content; return n })
-					}).catch(function () {})
+						if (res && res.ok !== false && res.value) {
+							var content = String(res.value.content || '')
+							setContents(function (prev) { var n = Object.assign({}, prev); n[r.file] = content; return n })
+							setErrs(function (prev) { if (!(r.file in prev)) return prev; var n = Object.assign({}, prev); delete n[r.file]; return n })
+						} else {
+							var code = res && res.error && res.error.code ? String(res.error.code) : 'load-failed'
+							setContents(function (prev) { var n = Object.assign({}, prev); n[r.file] = ''; return n })
+							setErrs(function (prev) { var n = Object.assign({}, prev); n[r.file] = code; return n })
+						}
+					}).catch(function () {
+						if (cancelled) return
+						setContents(function (prev) { var n = Object.assign({}, prev); n[r.file] = ''; return n })
+						setErrs(function (prev) { var n = Object.assign({}, prev); n[r.file] = 'load-failed'; return n })
+					})
 				})
 				return function () { cancelled = true }
 			}, [filesKey, Math.floor(tick[0] / 5)])
@@ -2256,13 +2280,18 @@ clearTimeout((panel as any)._dshHideT)
 				var elements = []
 				var pageTitle = ''
 				if (typeof content === 'string' && content !== '') {
-					try { var obj = JSON.parse(content); elements = (obj && obj.elements) || []; pageTitle = (obj && obj.pageTitle) || '' } catch (e) {}
+					try { var obj = JSON.parse(content); elements = (obj && obj.elements) || []; pageTitle = (obj && obj.pageTitle) || '' } catch (e) { pageTitle = '' }
 				}
+				// 计数三态：空内容不给 0——要么加载中（…），要么亮错误码（⚠ no-workspace
+				// / not-found / load-failed），用户看得见故障不再瞎猜。
+				var countText
+				if (typeof content !== 'string' || content === '') countText = errs[r.file] ? '⚠ ' + errs[r.file] : '…'
+				else countText = wt('pickCardElements', { n: elements.length })
 				var head = h('div', { className: 'dsh-cdp-picks-head' },
 					h('span', { style: { fontWeight: 700 } }, '🌐 ' + wt('pickCardTitle')),
 					h('span', { className: 'dsh-cdp-picks-sub' }, '@' + r.file),
 					h('span', { className: 'dsh-cdp-picks-sub' }, pageTitle),
-					h('span', { className: 'dsh-cdp-picks-sub' }, typeof content === 'string' ? wt('pickCardElements', { n: elements.length }) : '…'),
+					h('span', { className: 'dsh-cdp-picks-sub' }, countText),
 					h('button', { type: 'button', title: wt('pickCardRemove'), className: 'dsh-cdp-picks-close', onClick: function () { removeRef(r.line) } }, '✕'))
 				var chips = []
 				if (typeof content !== 'string') chips.push(h('div', { key: 'loading', className: 'dsh-cdp-picks-sub' }, '…'))
@@ -2380,6 +2409,56 @@ clearTimeout((panel as any)._dshHideT)
 			return ''
 		}
 
+		// Session 槽位渲染时 latch 的公共输入动作（dsh-paste-dock 同款）：
+		// captureInsertion() 是宿主 insertReference CAS 校验的 TokenSpan 唯一
+		// 合法来源，只能在槽位组件 props（SessionStandardProps）里拿到。按
+		// session 配对，切会话后旧 actions 不可跨用。
+		var pickInputActionsLatch = { sessionId: null, actions: null }
+		function latchPickInputActions(sessionId, actions) {
+			if (!sessionId || !actions || typeof actions.captureInsertion !== 'function') return
+			pickInputActionsLatch = { sessionId: String(sessionId), actions: actions }
+		}
+		// 引用片前的边界空格：宿主两处引用扫描都锚定 (^|\s)，片紧贴前字符时
+		// 两处都看不见（paste-dock 2026-10-02 实测）。从 composer DOM 读 caret
+		// 前文本；拿不准就给空格——多余空格无害，缺边界误整个特性。
+		function needsBoundarySpace() {
+			var root = document.querySelector('[data-input-scroll] [contenteditable="true"]')
+			var selection = window.getSelection()
+			if (root === null || selection === null || selection.rangeCount === 0) return true
+			var caret = selection.getRangeAt(0)
+			if (!root.contains(caret.startContainer)) return true
+			var before = document.createRange()
+			before.selectNodeContents(root)
+			before.setEnd(caret.startContainer, caret.startOffset)
+			var text = before.toString()
+			if (text === '') return false
+			return !/\s/u.test(text.slice(-1))
+		}
+		// 把归档引用插成 composer 的原子引用片（ReferenceChipNode，宿主自家附件
+		// 同款）：箭头跨步、退格整片删除、显示层就是"替换后的 @ 字段"。插入前
+		// 先 serializeReference 做能力证明（发送路径读同一注册表，字符串应答 =
+		// 发送不会抛）。任何一步不成 → false，调用方回退文本 token。
+		async function tryInsertPickChip(ctx, sessionId, actx, input, token) {
+			try {
+				var latch = pickInputActionsLatch
+				if (!latch.actions || latch.sessionId !== String(sessionId)) return false
+				var triggers = typeof ctx.get === 'function' ? ctx.get('inputTriggers') : null
+				var controller = triggers && typeof triggers.sessionOf === 'function' ? triggers.sessionOf(actx) : null
+				var modelText = controller && typeof controller.serializeReference === 'function'
+					? await controller.serializeReference('reference', token, new AbortController().signal)
+					: null
+				if (typeof modelText !== 'string') return false
+				if (needsBoundarySpace() && typeof input.insertText === 'function') {
+					input.insertText(' ', latch.actions.captureInsertion())
+				}
+				// 空格编辑挪动了 draftRev，insertReference CAS 校验 span——必须重取
+				var span = latch.actions.captureInsertion()
+				return input.insertReference({ source: 'reference', ref: token, label: '🌐 ' + token.slice(1, -1), appearance: 'file', clipboardText: token }, span) === true
+			} catch (e) {
+				return false
+			}
+		}
+
 		function deliverPickToConversation(ctx, element, action) {
 			try {
 				var describe = element && typeof element.describe === 'string' ? element.describe : ''
@@ -2424,14 +2503,19 @@ clearTimeout((panel as any)._dshHideT)
 							await postJson('/bcdp/api/picks-save', { block: JSON.stringify(page, null, 2), file: found.file, session: sessionId })
 							return
 						}
-						// 首次投递：新归档文件 + @"picks/…" token 入草稿（空框不加换行）
+						// 首次投递：新归档文件 + @"picks/…" 引用入草稿——优先插原子引用
+						// 片（宿主附件同款，显示层替换即片本体），插不进再回退文本 token
+						//（空框不加换行）。
 						var pageNew = { cdpEndpoint: src.endpoint, targetId: src.targetId, pageUrl: src.pageUrl, pageTitle: src.pageTitle, elements: [Object.assign({ n: 1 }, entry)] }
 						var sres = await postJson('/bcdp/api/picks-save', { block: JSON.stringify(pageNew, null, 2), session: sessionId })
 						if (!sres || sres.ok === false || !sres.value) return
 						var token = '@"picks/' + sres.value.file + '"'
-						var cur = readDraftText(input)
-						cur = cur ? cur + (cur.charAt(cur.length - 1) === '\n' ? '' : '\n') + token : token
-						input.setDraft(cur)
+						var chipOk = await tryInsertPickChip(ctx, sessionId, actx, input, token)
+						if (!chipOk) {
+							var cur = readDraftText(input)
+							cur = cur ? cur + (cur.charAt(cur.length - 1) === '\n' ? '' : '\n') + token : token
+							input.setDraft(cur)
+						}
 					} catch (e) {}
 				})()
 				return { ok: true, code: 'archiving', count: 1 }

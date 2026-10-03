@@ -44,6 +44,16 @@
 ### 修复
 - `makeWhich` 的路径分隔符与 PATH 分隔符改为跟随**被模拟的平台**（原用 `node:path` 的宿主值，darwin/linux 查找在 Windows 上会拼成 `dir\file` 而永远找不到）。
 
+## [0.17.23] - 2026-10-03 — 真机反馈⑩：点选特征采集换轨——纯文本链接读元素自身可见文本
+
+### 修复（真机：News 这类链接全采成 `a name="" focusable`）
+- **根因**：`describeNode` 的 name 只从属性取（`aria-label`/`name`/`title`），而 `<a>News</a>` 的可见文本在 textContent 里，`DOM.describeNode` 深度 0 不可见——纯文本链接全部 `name=""`，点谁都是同一个描述、同一个 slug。
+- **修复**：新增 `readNodeText`（`DOM.resolveNode` + `Runtime.callFunctionOn` 读元素自身：input 的 value/placeholder、img 的 alt、select 选中项、aria-label/title/innerText，压空白截 60 字符）；pick 链路 name 为空时回退到它——描述变 `a name="News" focusable`，slug 变 `picks-News-xxxxx.json`，归档里模型拿到的 name 也是真文本。
+- best-effort 契约：文本读失败绝不推翻已成立的 pick；有属性名的元素一次不多读。
+
+### 验证
+- 全测 695 passed / 11 skipped（含 2 条新测试：空名回退读文本 + 有名不读）；两套 `tsc` 通过。
+
 ## [0.17.22] - 2026-10-03 — slug 上限 24 → 12（用户裁定：12 个最多了）
 
 ### 变更

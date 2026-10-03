@@ -44,6 +44,29 @@
 ### 修复
 - `makeWhich` 的路径分隔符与 PATH 分隔符改为跟随**被模拟的平台**（原用 `node:path` 的宿主值，darwin/linux 查找在 Windows 上会拼成 `dir\file` 而永远找不到）。
 
+## [0.17.24] - 2026-10-04 — Lightpanda 作为可选后端（P0）：识别投影 + 全链降级
+
+### 新增
+- **引擎识别与能力投影**：`src/cdp/capabilities.ts` 单点权威（`engineOf` 认 `/json/version` 的 `Browser: Lightpanda/…` 前缀，`capabilitiesFor` 出投影；unknown/chrome 恒=全能力——回归红线「误判只应少给不应错给」）。probe/attach 双时机识别：link 新增 `probeEngine` 探针字段 + `AttachState.engine`，面板 badge / `cdp-status` / `cdp-probe` / `bcdp_doctor` 可见，旧行收敛 `'unknown'`（与 probeStatus 家族同生命周期）。
+- **engine 跨进程传递**：spawn env `BCDP_CDP_ENGINE`（循 `EGO_LINUX_CDP_URL` 先例）——host 侧投影一次，worker/render 子进程只读不重算。
+- **真机探针** `tests/cdp-probe/lightpanda.probe.test.ts`（`LP_PROBE_URL` 自跳过；8 断言：识别 / navigate+lifecycleEvent / evaluate+AXTree / png 出图 + jpeg 结构化 -32000 / cookies 往返 / Overlay UnknownMethod 且 session 不受污染 / Input 注入 / Network 事件五件套）。
+
+### 变更（识别 lightpanda 后自动降级，无需配置）
+- **format 四处收口**（投影单点决策）：worker screencast + backstop（`capture-cdp.ts`）、**jev capture（`jev/effects.ts`；不修则 LP 上 jev 视觉链 -32000 全链硬失败）**、worker `/api/marks`——LP 下 wire 全 `format:'png'` 且无 `quality`；`bcdp_captcha`/jev 输出带 `engine`/`rendering:'text'` 元数据（captcha 本为 evaluate 探测，无损）。
+- **观察窗**：引擎无 screencast 时 capture-manager 拒绝启动采集循环（不再每 N 秒撞 UnknownMethod），status/SSE 带 `engineUnsupported`，浮动球与侧栏两面板显示降级提示条；SSE 帧按 `fmt` 选用 png/jpeg data URL。
+- **pick**：`/api/pick` engine-gate 返回 `engine-unsupported`（i18n 映射）；坐标回退 `/api/pick/click` 经依赖验证（DOM 命中测试，不依赖 Overlay/bindingCalled）**保留可用**。
+- **`bcdp_download`**：注册处 gate（LP 无 Page 下载事件，原会白等超时）——结构化报错不挂起。
+- **`bcdp_auth_flush`**：LP 下返回 `degraded: true`（引擎无 `Storage.flushCookies`；原为 worker 吞错后的假 `ok: true`）。
+- **doctor/help**：doctor 显示 engine + 降级清单 + **分系统安装指引**（win32→WSL2 内置方案步骤；linux/mac→`pkg.lightpanda.io` 一键脚本，装入 `~/.local/bin` 需含 PATH）；`bcdp_help` 新增 `topic=lightpanda`；工具清单补漏的 `bcdp_jev_attempt`（38 个）。
+- **README/HANDOVER/THIRD_PARTY_NOTICES**：Lightpanda 小节（分系统安装表 + 降级矩阵）、HANDOVER env 表补 `BCDP_CDP_ENGINE`、AGPL 客户端使用声明（仅 CDP 客户端，无代码聚合，不传染）。
+
+### 不变量
+- **`Browser.close` 永不发目标端点**：唯一合法调用点 = login-import 本地临时 Chrome（加防回归注释）；新增 `tests/browser-close-invariant.test.ts` 源码扫描钉死——未来任何新调用点都会测试失败并强制面对引擎语义。
+- `runtime/` 零改动；unknown/chrome 端点行为逐位不变。
+
+### 验证
+- 全测 708 passed / 12 skipped（基线 695 + 13 新用例）；两套 `tsc` 通过；`tsdown` build 过。
+
 ## [0.17.23] - 2026-10-03 — 真机反馈⑩：点选特征采集换轨——纯文本链接读元素自身可见文本
 
 ### 修复（真机：News 这类链接全采成 `a name="" focusable`）

@@ -1,5 +1,19 @@
 > ⚠️ **0.18.10 已被 registry 烧号**：npmjs 受理后长期停留在 staged 状态从未提交（读路径 404、重发 `EPUBLISHCONFLICT: previously staged`），版本号永久不可安装——**安装请用 0.18.11**（内容 = 0.18.10 全部 + dock 注册诊断 `__dshBrowserCdpDeco` + locale 补齐 + 点选卡片正则放宽）。0.18.5 同前例。
 
+## [0.18.21] - 2026-10-04 — Lightpanda 受管行类型：按系统拉起 serve，有头/无头分型，顺序即优先级（同 0.17.25 同源）
+
+### 新增
+- **新连接类型 `lightpanda`（本机单例，同 ego-cli 规则）**：设置面板「添加 Lightpanda（受管）」入列，可排序/激活；插件负责 serve 的拉起/复用/停止。win32 经 WSL2（`wsl.exe -- lightpanda serve …`，遥测 env 经 WSLENV 带入），linux/mac 本机直装（显式路径 → `~/.local/bin` 等安装根 → PATH）。
+- **有头/无头分型与顺序语义**（面板徽标 `LP·无头` + 行内提示）：CDP 端点/本机 Chrome/ego CLI 是有头类型——可人工兜底（手动输账号、过验证码）；Lightpanda 是无头类型——无法人工介入，只适合快速试验。顺序即优先级：LP 排前 = 快速场景优先用；排有头类型后 = 兜底优先，LP 实际不会被启用。
+- **引擎互斥单例**：登记表带 engine 字段；受管 Chrome 与 Lightpanda 抢同一受管槽。win32 停止对 WSL 内进程做定向 pkill 兜底。
+- **doctor/help**：links 计数含 lightpanda + 行状态；help topic=lightpanda 更新。
+
+### 变更
+- `cdpMode=remote` 下激活 LP 行显式报 `mode-kind-mismatch`；probe 回写 `probeEngine`；`lightpandaArgs` 设置键（受管旗标过滤）。
+
+### 验证
+- 全测 714 passed / 12 skipped；两套 `tsc` 通过；build 过；`runtime/` 零改动。
+
 ## [0.18.20] - 2026-10-04 — Lightpanda 作为可选后端（P0）：识别投影 + 全链降级（同 0.17.24 同源）
 
 ### 新增

@@ -2576,7 +2576,7 @@ clearTimeout((panel as any)._dshHideT)
 		// [A-Za-z0-9._-]，中文等清空时回退时间戳。后缀保留 5 位 base36 时间：
 		// 不同页面的同特征元素各归各档，防同名归档互相覆盖。
 		function pickSlugOf(entry: any) {
-			var raw = String((entry && entry.describe) || (entry && entry.name) || (entry && entry.tag) || '')
+			var raw = String((entry && entry.name) || (entry && entry.describe) || (entry && entry.tag) || '')
 			raw = raw.replace(/["'`]/g, '').trim()
 			return raw.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+/, '').slice(0, 12).replace(/-+$/, '')
 		}

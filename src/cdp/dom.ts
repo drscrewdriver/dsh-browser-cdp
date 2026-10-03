@@ -124,6 +124,46 @@ export async function describeNode(
   }
 }
 
+/**
+ * Read an element's OWN visible text — the piece `DOM.describeNode` cannot see
+ * at depth 0. Anchor/button text lives in the subtree, so a pure-text link
+ * (<a>News</a>) carries no name attribute and describes as `name=""`; the
+ * visible text IS the feature users (and slugs) recognize. Best-effort by
+ * contract: any failure resolves to a LayerFailure, never throws — a text
+ * read must not break a pick that already resolved.
+ */
+export async function readNodeText(
+  call: PageCall,
+  sessionId: string | undefined,
+  backendNodeId: number,
+  timeoutMs?: number,
+): Promise<{ ok: true; text: string } | LayerFailure> {
+  try {
+    const resolved = (await call('DOM.resolveNode', { backendNodeId }, {
+      ...(sessionId === undefined ? {} : { sessionId }),
+      ...(timeoutMs === undefined ? {} : { timeoutMs }),
+    })) as { object?: { objectId?: unknown } }
+    const objectId = resolved?.object?.objectId
+    if (typeof objectId !== 'string') {
+      return { ok: false, code: 'node-not-resolved', message: 'DOM.resolveNode returned no objectId' }
+    }
+    const functionDeclaration =
+      'function () { const cap = (s) => String(s).replace(/\\s+/g, " ").trim().slice(0, 60);\n' +
+      'if (this instanceof HTMLInputElement) return cap(this.value || this.placeholder || "");\n' +
+      'if (this instanceof HTMLImageElement) return cap(this.alt || "");\n' +
+      'if (this instanceof HTMLSelectElement) return cap(this.selectedOptions && this.selectedOptions[0] ? this.selectedOptions[0].text : "");\n' +
+      'return cap(this.getAttribute("aria-label") || this.getAttribute("title") || (this.innerText ?? this.textContent) || ""); }'
+    const result = (await call('Runtime.callFunctionOn', { objectId, functionDeclaration, returnByValue: true }, {
+      ...(sessionId === undefined ? {} : { sessionId }),
+      ...(timeoutMs === undefined ? {} : { timeoutMs }),
+    })) as { result?: { value?: unknown } }
+    const text = typeof result?.result?.value === 'string' ? result.result.value : ''
+    return { ok: true, text }
+  } catch (error) {
+    return { ok: false, code: 'text-read-failed', message: error instanceof Error ? error.message : String(error) }
+  }
+}
+
 export interface Rect {
   x: number
   y: number

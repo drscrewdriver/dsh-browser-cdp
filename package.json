@@ -1,7 +1,7 @@
 {
   "name": "dsh-browser-cdp",
-  "version": "0.17.23",
-  "description": "dsh-browser-cdp: DSH browser plugin — attach to a running Chrome/Edge over CDP (no bundled browser needed); structured browser-automation tools (30+ bcdp_*) that drive the vendored ego runtime through ctx.subprocess, plus a realtime watch panel (live SSE screencast + direct mouse interaction + download capture + human-verification notice). Web shell: floating watch panel without dsh-better-sidebar, sidebar tab with it. Headless/TUI hosts: tools-only. [DSH 0.1.7+ line: declarative settings via Config .volatile() fields; for DSH 0.1.2-rc.1 ~ 0.1.6 use the 0.16.x line]",
+  "version": "0.16.23",
+  "description": "dsh-browser-cdp: DSH browser plugin — attach to a running Chrome/Edge over CDP (no bundled browser needed); structured browser-automation tools (30+ bcdp_*) that drive the vendored ego runtime through ctx.subprocess, plus a realtime watch panel (live SSE screencast + direct mouse interaction + download capture + human-verification notice). Web shell: floating watch panel without dsh-better-sidebar, sidebar tab with it. Headless/TUI hosts: tools-only. [DSH 0.1.5 line: dock picks card/badge/session-scoped archive/feature-slug picks full; hosts without InputActions.captureInsertion quote picks as @\"picks/…\" text tokens; no declarative settings form — configure via profile cordis.patch.yml. For DSH 0.1.7-rc.1+ prefer the 0.17.x line; for DSH 0.1.2-rc.1 ~ 0.1.4 use the 0.16.x line]",
   "type": "module",
   "main": "./lib/index.js",
   "exports": {
@@ -23,7 +23,7 @@
   ],
   "dsh": {
     "engines": {
-      "dsh": ">=0.1.7-rc.1 <0.1.8-0"
+      "dsh": ">=0.1.5-rc.1 <0.2.0-0"
     },
     "bundle": {
       "patch": "./cordis.patch.yml"
@@ -44,12 +44,12 @@
     "@deepseek-ai/schemastery": "^3.18.4"
   },
   "peerDependencies": {
-    "@deepseek-ai/dsh-client-locale": ">=0.1.7-rc.1 <0.1.8-0",
-    "@deepseek-ai/dsh-client-store": ">=0.1.7-rc.1 <0.1.8-0",
-    "@deepseek-ai/dsh-client-ui-settings-plugins": ">=0.1.7-rc.1 <0.1.8-0",
-    "@deepseek-ai/dsh-client-ui-slots": ">=0.1.7-rc.1 <0.1.8-0",
-    "@deepseek-ai/dsh-settings": ">=0.1.7-rc.1 <0.1.8-0",
-    "@deepseek-ai/dsh-tools": ">=0.1.7-rc.1 <0.1.8-0",
+    "@deepseek-ai/dsh-client-locale": ">=0.1.5-rc.1 <0.2.0-0",
+    "@deepseek-ai/dsh-client-store": ">=0.1.5-rc.1 <0.2.0-0",
+    "@deepseek-ai/dsh-client-ui-settings-plugins": ">=0.1.5-rc.1 <0.2.0-0",
+    "@deepseek-ai/dsh-client-ui-slots": ">=0.1.5-rc.1 <0.2.0-0",
+    "@deepseek-ai/dsh-settings": ">=0.1.5-rc.1 <0.2.0-0",
+    "@deepseek-ai/dsh-tools": ">=0.1.5-rc.1 <0.2.0-0",
     "react": "^18.2.0"
   },
   "peerDependenciesMeta": {
@@ -77,7 +77,7 @@
   },
   "devDependencies": {
     "@deepseek-ai/cosmokit": "^1.8.5",
-    "@deepseek-ai/dsh-tools": ">=0.1.7-rc.1 <0.1.8-0",
+    "@deepseek-ai/dsh-tools": ">=0.1.5-rc.1 <0.2.0-0",
     "@types/node": "^22.20.1",
     "@types/react": "~18.3.31",
     "@types/ws": "^8.5.10",
@@ -86,11 +86,11 @@
     "typescript": "^5.9.0",
     "vitest": "^3.2.0",
     "ws": "^8.18.0",
-    "@deepseek-ai/dsh-sandbox": "^0.1.7-rc.1"
+    "@deepseek-ai/dsh-sandbox": "^0.1.5-rc.3"
   },
   "engines": {
     "node": ">=22",
-    "dsh": ">=0.1.7-rc.1 <0.1.8-0"
+    "dsh": ">=0.1.5-rc.1 <0.2.0-0"
   },
   "license": "MIT",
   "repository": {

@@ -1,7 +1,7 @@
 # dsh-browser-cdp — 看得见的 Agent 浏览器（CDP 接入）
 
 <p align="center">
-  <img src="https://img.shields.io/badge/DSH-%3E%3D0.1.7--rc.1-blue" alt="DSH >= 0.1.7-rc.1">
+  <img src="https://img.shields.io/badge/DSH-0.1.5--rc~0.2.0-blue" alt="DSH 0.1.5-rc ~ 0.2.0">
   <img src="https://img.shields.io/badge/DSH--better--sidebar-%3E%3D0.12.2(optional)-red" alt="dsh-better-sidebar >= 0.12.2 (optional)">
   <img src="https://img.shields.io/badge/Node-%3E%3D22-brightgreen?logo=node.js&logoColor=white" alt="Node >= 22">
 </p>
@@ -12,7 +12,7 @@
 
 | 依赖 | 最低版本 | 推荐版本 | 说明 |
 |---|---|---|---|
-| **DSH** (DeepSeek Harness) | `0.1.7-rc.1` | `≥ 0.1.7-rc.1` | 0.1.7 起设置面为声明式（Config `.volatile()` 字段自动生成设置表单），`.volatile()` 在更早的宿主上不存在。peer 依赖同步锁定 `>=0.1.7-rc.1 <0.2.0-0`。DSH `0.1.2-rc.1` ~ `0.1.6` 请使用 0.16.x 版本线（含旧的 `settings.plugin.item` 设置卡），0.1.0-rc.x / 0.1.1-rc.x 请使用 v0.8.0 及更早版本 |
+| **DSH** (DeepSeek Harness) | `0.1.5-rc.1` | `≥ 0.1.5-rc.1` | **本线（0.16.x）覆盖 DSH `0.1.5-rc.1`，也兼容 `0.1.7-rc.1+`**。线差异：0.1.5 宿主没有 `InputActions.captureInsertion`（点选引用走 `@"picks/…"` 文本 token + 宿主前缀染色，无原子片）、没有声明式设置面（`configForms` 不存在 → 配置经 profile `cordis.patch.yml` 或浮动面板）；dock 引用卡/🌐 徽标/归档会话级解析/元素特征采集（readNodeText）全量可用。peer 已放宽 `>=0.1.5-rc.1 <0.2.0-0`。DSH `0.1.2-rc.1` ~ `0.1.4` 及更早暂无维护线，0.1.0-rc.x / 0.1.1-rc.x 请使用 v0.8.0 及更早版本 |
 | **dsh-better-sidebar** | `0.12.2`（可选） | `≥ 0.17.1` | 未安装时自动回退浮动观察球；`< 0.12.2` 可运行但外部链接拦截（`urlTarget`）静默降级 |
 | **Node.js** | `22` | — | harness 环境自带 |
 

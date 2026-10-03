@@ -17,6 +17,8 @@
 // Errors carry { ok: false, error: { code, message } }.
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { fileURLToPath } from 'node:url'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { resolve } from 'node:path'
 import { resolveConfig } from './config.ts'
 import type { EgoContext, WebServerLike } from './types.ts'
 import type { FfmpegInstallationManager, FfmpegStatus } from './ffmpeg-installation.ts'
@@ -36,6 +38,24 @@ export interface SettingsBridge {
 
 /** HTTP route prefix owning every ego-browser API request. */
 const API_PREFIX = '/bcdp/api'
+
+/**
+ * Archive dir for CDP-PICKS blocks: the composer holds a one-line reference
+ * and the raw JSON lives here (the dsh-paste-dock content model — the raw
+ * expanded text must not flood the input). Plugin-namespaced subdir under
+ * the same state root the cast worker uses.
+ */
+function picksDir(): string {
+  const e = process.env
+  const isWin = process.platform === 'win32'
+  const home = e.HOME || e.USERPROFILE || (isWin ? e.LOCALAPPDATA || '' : '/root')
+  const stateHome = e.EGO_LINUX_STATE_DIR || (isWin
+    ? (e.LOCALAPPDATA || `${home}\\AppData\\Local`)
+    : (e.XDG_STATE_HOME || `${home}/.local/state`))
+  return stateHome.endsWith('ego-lite-linux')
+    ? resolve(stateHome, 'picks')
+    : resolve(stateHome, 'ego-lite-linux', 'picks')
+}
 
 /** Config keys the `set` endpoint accepts (allow-list; unknown keys are dropped). */
 const ALLOWED_KEYS = new Set<string>([
@@ -186,6 +206,45 @@ export function registerEgoBrowserGateway(
             const timeoutMs = typeof body.timeoutMs === 'number' && Number.isFinite(body.timeoutMs) ? body.timeoutMs : undefined
             const outcome = await probeEndpoint(endpoint, { timeoutMs })
             writeJson(res, 200, envelopeOk({ outcome }))
+          } else if (method === 'picks-save') {
+            // Archive one CDP-PICKS block under <picksDir>; the composer holds
+            // only the one-line reference. A client-supplied file name is
+            // honored ONLY when it passes the strict name check (overwrite =
+            // same-page merge), otherwise a fresh timestamped file is created.
+            const saveBody = body as { block?: unknown; file?: unknown }
+            const block = typeof saveBody.block === 'string' ? saveBody.block : ''
+            if (block === '') {
+              writeJson(res, 400, envelopeError('invalid-block', 'block is required'))
+              return
+            }
+            const file = typeof saveBody.file === 'string' && /^[A-Za-z0-9._-]+\.json$/.test(saveBody.file)
+              ? saveBody.file
+              : `picks-${Date.now()}.json`
+            const dir = picksDir()
+            await mkdir(dir, { recursive: true })
+            const target = resolve(dir, file)
+            if (!target.startsWith(resolve(dir))) {
+              writeJson(res, 400, envelopeError('invalid-path', 'path escapes the picks dir'))
+              return
+            }
+            await writeFile(target, block, 'utf8')
+            writeJson(res, 200, envelopeOk({ path: target, file }))
+          } else if (method === 'picks-load') {
+            // Read one archived CDP-PICKS block back (dock card rendering).
+            const loadBody = body as { file?: unknown }
+            const file = typeof loadBody.file === 'string' && /^[A-Za-z0-9._-]+\.json$/.test(loadBody.file)
+              ? loadBody.file
+              : ''
+            if (file === '') {
+              writeJson(res, 400, envelopeError('invalid-file', 'file is required'))
+              return
+            }
+            try {
+              const content = await readFile(resolve(picksDir(), file), 'utf8')
+              writeJson(res, 200, envelopeOk({ content }))
+            } catch (error) {
+              writeJson(res, 404, envelopeError('not-found', error instanceof Error ? error.message : String(error)))
+            }
           } else {
             writeJson(res, 404, envelopeError('not-found', `unknown ego-browser API method "${method}"`))
           }

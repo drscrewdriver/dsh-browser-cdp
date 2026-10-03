@@ -44,6 +44,17 @@
 ### 修复
 - `makeWhich` 的路径分隔符与 PATH 分隔符改为跟随**被模拟的平台**（原用 `node:path` 的宿主值，darwin/linux 查找在 Windows 上会拼成 `dir\file` 而永远找不到）。
 
+## [0.17.16] - 2026-10-03 — 投递模型变更：块体归档为文件，输入框只留一行引用（dsh-paste-dock 同款）
+
+### 变更
+- **投递不再把长 JSON 写进输入框**：点选块体经网关新路由 `picks-save` 归档为 `<stateDir>/picks/<file>.json`，composer 只留一行短引用 `[🌐 CDP-PICKS → <file> | endpoint | 页面标题 | elements:n]`——原文展开不再挤占/干扰输入。模型按引用内的绝对路径用文件工具读取即得全部元素定位（backendNodeId 可直接喂 `bcdp_cdp`）。
+- **同页合并**：引用行按 endpoint 识别同页——第二次点选读回归档、追加元素、原文件重写、引用行原位更新（序号续号）。
+- **网关新路由**：`POST /bcdp/api/picks-save`（写入 <stateDir>/picks/，客户端文件名严格校验，拒绝越界路径）与 `POST /bcdp/api/picks-load`（读回归档）。
+- **包装卡**：按引用异步取回归档内容渲染 chip（每文件一卡）；✕ 摘引用行（归档文件保留）。
+
+### 验证
+- `typecheck` 过；693 passed / 11 skipped。
+
 ## [0.17.15] - 2026-10-03 — 草稿读取修复：活值在 `input.draft` 门面字段（用户诊断实锤）
 
 ### 修复（根因）

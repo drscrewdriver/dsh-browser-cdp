@@ -44,6 +44,19 @@
 ### 修复
 - `makeWhich` 的路径分隔符与 PATH 分隔符改为跟随**被模拟的平台**（原用 `node:path` 的宿主值，darwin/linux 查找在 Windows 上会拼成 `dir\file` 而永远找不到）。
 
+## [0.17.19] - 2026-10-03 — @mention 引用模型：token 以 @ 开头（`@"picks/<file>.json"`）+ 归档会话级解析
+
+### 变更
+- **投递/引用格式换轨（0.17.16 模型的修正）**：composer 里的引用从 `[🌐 CDP-PICKS → … | … | … | elements:N]` 长行改为 **`@"picks/<file>.json"` 短 token**——被替换字段以 @ 开头（dsh-paste-dock 文件引用同精髓），显示层把它替换成文件片；dock 卡/🌐 徽标同步按 @ 引用解析，✕ 摘除整个 token。
+- **同页合并简化**：扫草稿各 @ 引用 → 逐个读归档比对 `cdpEndpoint` → 命中者原文件重写；token 不含元素数，合并时草稿零改动（引用卡每 5s 重读归档自动刷新元素数）。
+- **归档目录会话级解析**：`picks-save`/`picks-load` 请求携带 `session`，网关经 `workspaceRegistry` 把会话解析到其注册工作区的 `picks/` 目录（无注册工作区或多个候选 → 409 `no-workspace`，不猜）；同 dsh-paste-dock 的 `resolveWorkspaceDir` 语义。
+
+### 修复
+- **引用卡居中**：样式补 `margin-left/right: auto`——卡在 dock 带内居中（限宽公式不变），不再偏一侧。
+
+### 验证
+- 全测 693 passed / 11 skipped；两套 `tsc` 通过；`lib/client.js` 161.93 kB（构建含 `@"picks/` token 写入与 session 参数）。
+
 ## [0.17.18] - 2026-10-03 — 🌐 引用徽标：composer 卡内浮动标识（overlay 席位）
 
 ### 新增

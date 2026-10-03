@@ -44,6 +44,20 @@
 ### 修复
 - `makeWhich` 的路径分隔符与 PATH 分隔符改为跟随**被模拟的平台**（原用 `node:path` 的宿主值，darwin/linux 查找在 Windows 上会拼成 `dir\file` 而永远找不到）。
 
+## [0.17.25] - 2026-10-04 — Lightpanda 受管行类型：按系统拉起 serve，有头/无头分型，顺序即优先级
+
+### 新增
+- **新连接类型 `lightpanda`（本机单例，同 ego-cli 规则）**：设置面板「添加 Lightpanda（受管）」入列，可排序/激活；插件负责 serve 的拉起/复用/停止。win32 经 WSL2（`wsl.exe -- lightpanda serve …`，遥测 env 经 WSLENV 带入），linux/mac 本机直装（显式路径 → `~/.local/bin` 等安装根 → PATH）。
+- **有头/无头分型与顺序语义**（面板徽标 `LP·无头` + 行内提示）：CDP 端点/本机 Chrome/ego CLI 是有头类型——可人工兜底（手动输账号、过验证码）；Lightpanda 是无头类型——无法人工介入，只适合快速试验。顺序即优先级：LP 排前 = 快速场景优先用；排有头类型后 = 兜底优先，LP 实际不会被启用。
+- **引擎互斥单例**：登记表带 engine 字段；受管 Chrome 与 Lightpanda 抢同一受管槽（引擎切换时旧实例被停掉）。win32 停止对 WSL 内进程做定向 pkill 兜底（taskkill /T 够不到 Linux 侧）。
+- **doctor/help**：links 计数含 lightpanda + 行状态；help topic=lightpanda 更新受管行与顺序语义。
+
+### 变更
+- `cdpMode=remote` 下激活 LP 行显式报 `mode-kind-mismatch`（与 ego-cli 同规则）；probe 回写 `probeEngine`；`lightpandaArgs` 设置键（受管旗标过滤，裸 `--port/--host/--address` 连值剔除）。
+
+### 验证
+- 全测 716 passed / 12 skipped（+9 新用例）；两套 `tsc` 通过；build 过；`runtime/` 零改动。
+
 ## [0.17.24] - 2026-10-04 — Lightpanda 作为可选后端（P0）：识别投影 + 全链降级
 
 ### 新增

@@ -44,6 +44,16 @@
 ### 修复
 - `makeWhich` 的路径分隔符与 PATH 分隔符改为跟随**被模拟的平台**（原用 `node:path` 的宿主值，darwin/linux 查找在 Windows 上会拼成 `dir\file` 而永远找不到）。
 
+## [0.17.20] - 2026-10-03 — 真机反馈⑧：原子引用片插入（宿主附件同款）+ 归档加载失败显码
+
+### 修复（真机：计数 0 + 无片替换）
+- **显示替换换轨**：纯文本 `@"picks/…"` 只会被宿主 `FOLDER_REF_RE` 染色（宿主从不做文本→片的自动替换，paste-dock 的文档片是它主动插入的原子节点）——deliver 首次投递改为**优先插原子引用片**（`ReferenceChipNode`：`inputActions.captureInsertion()` 取 TokenSpan + `inputTriggers.serializeReference` 能力证明 + `insertReference` CAS；边界空格同 paste-dock），插不进回退文本 token。
+- **计数 0 根治**：卡片加载失败原来被吞成"已选 0 个元素"——改三态：加载中 `…`、失败亮错误码（`⚠ no-workspace / not-found / load-failed`）、成功显真实元素数；错误码同时进 `__dshBrowserCdpDeco`。
+- **会话来源加固**：卡片 picks-load 的 session 以 inject 下发字符串优先、宿主标准 props（`sessionId`）兜底。
+
+### 验证
+- 全测 693 passed / 11 skipped；两套 `tsc` 通过；bundle 实测含 `tryInsertPickChip`/`captureInsertion`/`serializeReference`。
+
 ## [0.17.19] - 2026-10-03 — @mention 引用模型：token 以 @ 开头（`@"picks/<file>.json"`）+ 归档会话级解析
 
 ### 变更

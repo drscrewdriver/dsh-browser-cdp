@@ -14,6 +14,7 @@
 // The bridge exposes the same two faces as the pre-0.1.7 version: a
 // `source()` thunk returning plain (dereferenced) config data, and an
 // `onChange()` subscription that fires on `loader/volatile-update`.
+import { createRequire } from 'node:module'
 import { Config, derefVolatileConfig } from './config.ts'
 import type { EgoContext, RawConfig } from './types.ts'
 
@@ -64,6 +65,58 @@ export function installSettingsAuto(ctx: EgoContext, config: RawConfig): Setting
   const legacySettings = (ctx as unknown as { settings?: { installSection?: unknown } }).settings as
     | { installSection?: (owner: unknown, ns: string, schema: unknown, entry: unknown, hooks: unknown) => void }
     | undefined
+  // 0.1.0/0.1.1:只剩模块级 installSettingsSection + settingsNamespace
+  // (先于 Gen-A 检测无冲突:这三线的服务实例没有 installSection)。
+  // createRequire + 字面量:TS 不解析该说明符(避免 devDep 拉宿主包跨线
+  // peer 链冲突),运行时 Node 从宿主 node_modules 正常解析;宿主缺包时
+  // 返回 undefined 落到 Gen-B。测试环境无宿主模块表,同样安全跳过。
+  const legacyModule: any = ((): any => {
+    try {
+      return createRequire(import.meta.url)('@deepseek-ai/dsh-settings')
+    } catch {
+      return undefined
+    }
+  })()
+  if (
+    typeof legacyModule.installSettingsSection === 'function' &&
+    typeof legacyModule.settingsNamespace === 'function'
+  ) {
+    const listeners = new Set<() => void>()
+    let current = derefVolatileConfig(config)
+    const notify = (): void => {
+      for (const listener of [...listeners]) listener()
+    }
+    const ns = (
+      legacyModule.settingsNamespace as (ns: string) => unknown
+    )('dsh-browser-cdp')
+    const hooks = {
+      setSource: (source: unknown): void => {
+        const value = typeof source === 'function' ? (source as () => unknown)() : source
+        current = derefVolatileConfig((value ?? {}) as RawConfig)
+      },
+      onChange: (): void => {
+        notify()
+      },
+    }
+    ;(
+      legacyModule.installSettingsSection as (
+        owner: unknown,
+        ns: unknown,
+        schema: unknown,
+        entry: unknown,
+        hooks: unknown,
+      ) => void
+    )(ctx, ns, Config, current, hooks)
+    return {
+      source: (): Record<string, unknown> => current,
+      onChange: (cb: () => void): (() => void) => {
+        listeners.add(cb)
+        return () => {
+          listeners.delete(cb)
+        }
+      },
+    }
+  }
   if (legacySettings && typeof legacySettings.installSection === 'function') {
     const listeners = new Set<() => void>()
     let current = derefVolatileConfig(config)

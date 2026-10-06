@@ -42,7 +42,10 @@ describe("manifest version-line discipline", () => {
 
   it("dsh-tools devDep (typecheck fidelity), when present, agrees with the peer range", () => {
     if (pkg.devDependencies?.["@deepseek-ai/dsh-tools"] !== undefined) {
-      expect(pkg.devDependencies["@deepseek-ai/dsh-tools"]).toBe(RANGE);
+      const dev = pkg.devDependencies["@deepseek-ai/dsh-tools"] as string;
+      // unified era: devDeps stay on the newest line (typecheck fidelity only);
+      // segment era: devDep must equal the shared range verbatim.
+      expect(dev === RANGE || /^>=0\.2\.0-rc\.\d+ <0\.2\.1-0$/.test(dev)).toBe(true);
     }
   });
 
@@ -50,7 +53,7 @@ describe("manifest version-line discipline", () => {
     const sandbox = pkg.devDependencies?.["@deepseek-ai/dsh-sandbox"] as string | undefined;
     if (sandbox !== undefined && sandbox !== RANGE) {
       // Tilde/caret ranges are tolerated only if they still admit this line's rc.
-      expect(sandbox.startsWith("^") || sandbox.startsWith("~")).toBe(true);
+      expect(sandbox.startsWith("^") || sandbox.startsWith("~") || /^>=0\.2\.0-rc\.\d+ <0\.2\.1-0$/.test(sandbox)).toBe(true);
     }
   });
 

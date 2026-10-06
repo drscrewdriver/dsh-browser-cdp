@@ -41,8 +41,29 @@ import { addRow, applyProbe, buildCdpRow, buildCliRow, buildLpRow, hasCliLink, h
 		// module graph now resolves the store as a static module under the plain
 		// package id (no `/client` subpath). createSnapshotStore kept its shape.
 		var React = require('react')
-		var runtimeClient = require('@deepseek-ai/dsh-client-store')
-		var createSnapshotStore = runtimeClient.createSnapshotStore
+		// 0.1.0/0.1.1 宿主模块表没有 @deepseek-ai/dsh-client-store——静态 require
+		// 会让整个 client 模块加载即砖。改为懒加载:有包用宿主的,没包用本地
+		// 极简快照仓(subscribe/getSnapshot/update 三件套,watch 面板够用)。
+		var runtimeClient: any = null
+		var createSnapshotStore: any = null
+		function ensureSnapshotStoreCreator(): any {
+			if (createSnapshotStore !== null) return createSnapshotStore
+			try {
+				runtimeClient = require('@deepseek-ai/dsh-client-store')
+				createSnapshotStore = runtimeClient.createSnapshotStore
+			} catch (e) {
+				createSnapshotStore = function (initial: any) {
+					var value = initial
+					var listeners: any[] = []
+					return {
+						subscribe: function (fn: any) { listeners.push(fn); return function () { listeners = listeners.filter(function (l: any) { return l !== fn }) } },
+						getSnapshot: function () { return value },
+						update: function (fn: any) { value = fn(value); for (var i = 0; i < listeners.length; i++) listeners[i]() },
+					}
+				}
+			}
+			return createSnapshotStore
+		}
 		// bindSnapshotSelector inlined from dsh-client-ui-renderer (shell-only
 		// glue; business plugins depend on runtime + ui-slots only). Uses
 		// React 18's built-in useSyncExternalStore with per-snapshot selector
@@ -1112,10 +1133,24 @@ h('button', { type: 'button', disabled: !writable || isFull(links) || hasCliLink
 		// on DSH 0.1.2-rc.1). Probe with ctx.get; when absent, mount the
 		// floating watch panel immediately and upgrade to the sidebar tab if
 		// the service appears later (dynamic ctx.inject, same pattern as PR #45).
-		mountFamilySettingsCard(ctx)
-		mountPluginsPageCard(ctx)
-		mountPicksDockCard(ctx)
-		mountPicksBadge(ctx)
+		// Per-surface isolation: any single mount may throw on a given host line
+		// (absent service/slot variants) — on 0.1.x cordis surfaces that throw
+		// inside apply take every later mount down with them, so each one is
+		// isolated and failures degrade to a console.warn only.
+		var mounts: Array<[string, (c: any) => void]> = [
+			['family settings tab', mountFamilySettingsCard],
+			['plugins-page config card', mountPluginsPageCard],
+			['floating settings gear', mountOverlayGear],
+			['picks dock', mountPicksDockCard],
+			['picks badge', mountPicksBadge],
+		]
+		for (var mi = 0; mi < mounts.length; mi++) {
+			try {
+				mounts[mi][1](ctx)
+			} catch (e: any) {
+				console.warn('[dsh-browser-cdp] mount failed:', mounts[mi][0], e && e.message ? e.message : String(e))
+			}
+		}
 		var betterSidebarService: any
 		try { betterSidebarService = typeof ctx.get === 'function' ? ctx.get('betterSidebar') : undefined } catch (e) { betterSidebarService = undefined }
 		if (betterSidebarService !== undefined) {
@@ -2498,6 +2533,44 @@ clearTimeout((panel as any)._dshHideT)
 			 }))
 		}
 		
+		// ── 无设置页宿主(≤0.1.5)的兜底:shell.overlay 浮窗齿轮 ──────────
+		// settingsScope 子 inject 自动把齿轮限定在 ≤0.1.5(0.1.7+ 无此服务,
+		// inject 静默等待 → 齿轮不渲染;这几条线的宿主壳没有设置页,齿轮是
+		// 唯一配置入口)。注意:不注册 settings.plugin.item——≤0.1.5 的插件
+		// 配置 tab 派发对多卡脆弱(实测二卡互斥),族面/bundle 面 0.1.7+ 自有。
+		function SettingsOverlayPanel(props: any) {
+			var scope = props.scope
+			var h = React.createElement
+			return h('div', { style: { position: 'fixed', top: '6vh', left: '50%', transform: 'translateX(-50%)', width: 'min(760px, 92vw)', maxHeight: '84vh', overflowY: 'auto', zIndex: 10001, background: 'var(--dsw-alias-bg-primary, #1b1b1f)', border: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.3))', borderRadius: '12px', padding: '16px', boxShadow: '0 12px 40px rgba(0,0,0,.45)' } },
+				h('div', { style: { display: 'flex', justifyContent: 'flex-end', position: 'sticky', top: '-16px', marginLeft: 'auto', width: 'fit-content' } },
+					h('button', { onClick: props.onClose, style: { font: 'inherit', fontSize: '12px', padding: '4px 10px', borderRadius: '8px', border: '1px solid rgba(127,127,127,.4)', background: 'transparent', color: 'inherit', cursor: 'pointer' } }, '✕ 关闭')),
+				h(FamilySettingsCard, { scope: scope }))
+		}
+
+		function SettingsOverlayGear(props: any) {
+			var scope = props.scope
+			var state = React.useState(false)
+			var open = state[0]
+			var setOpen = state[1]
+			var h = React.createElement
+			return h('div', { style: { position: 'fixed', right: '16px', bottom: '64px', zIndex: 10000 } },
+				open ? h('div', { onClick: function () { setOpen(false) }, style: { position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,.45)', zIndex: 10000 } }) : null,
+				open ? h(SettingsOverlayPanel, { scope: scope, onClose: function () { setOpen(false) } }) : null,
+				h('button', { title: '浏览器代理设置', onClick: function () { setOpen(!open) }, style: { width: '40px', height: '40px', borderRadius: '50%', border: '1px solid rgba(127,127,127,.4)', background: 'rgba(30,30,32,.85)', color: 'inherit', cursor: 'pointer', fontSize: '16px', boxShadow: '0 4px 16px rgba(0,0,0,.35)' } }, '🌐'))
+		}
+
+		function mountOverlayGear(ctx: any) {
+			ctx.inject(['settingsScope'], function (settingsScope: any) {
+				var scope = settingsScope.bind({ namespace: 'dsh-browser-cdp' })
+				ctx.slots.inject('shell.overlay', function () {
+					return ctx.slots.register({
+						name: 'shell.overlay',
+						id: 'dsh-browser-cdp-settings',
+					}, function () { return SettingsOverlayGear({ scope: scope }) })
+				}, 'dsh-browser-cdp: floating settings gear')
+			})
+		}
+
 		// ── 点选引用徽标（conversation.input.overlay 贡献者）────────────────
 		// 草稿含我们的引用行时，composer 卡内浮出 🌐 徽标（paste-dock 文档徽标的
 		// 同位）——悬停显示连接/页面/元素数。组件按会话探测，解析不了渲染 null。
@@ -2850,7 +2923,7 @@ clearTimeout((panel as any)._dshHideT)
 
 		function LivePreviewController(ctx: any) {
 			this.ctx = ctx
-			this.store = createSnapshotStore(this._initialState())
+			this.store = ensureSnapshotStoreCreator()(this._initialState())
 			this.frameCache = new Map()
 			this.pageMeta = new Map()
 			this.lastList = []

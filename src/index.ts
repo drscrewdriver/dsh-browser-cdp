@@ -44,7 +44,7 @@ import { registerEgoBrowserGateway } from './gateway.ts'
 import { EGO_HELP_INDEX } from './help.ts'
 import { HUMAN_CHECK_PROBE } from './captcha.ts'
 import { Config as ConfigSchema, resolveConfig, judgeSettingsOf, EGO_CLI_BLOCKED, CHROME_BLOCKED, filterArgs } from './config.ts'
-import { installEgoBrowserSettings } from './settings.ts'
+import { installSettingsAuto } from './settings.ts'
 import { getSharedFfmpegInstallationManager } from './ffmpeg-installation.ts'
 import { SENTINEL, j, str, num, bool, readAll, SAFE_FN } from './util.ts'
 import {
@@ -75,7 +75,7 @@ export const name = 'dsh-browser-cdp'
 // watch routes are registered opportunistically via ctx.get('webServer') and
 // guarded, so a GUI-less host is a safe no-op. The bcdp_* tools depend only on
 // tools + subprocess, present in every host.
-export const inject = ['tools', 'subprocess']
+export const inject = ['tools', 'subprocess', 'settings']
 // Schemastery schema for the composition entry and the declarative settings
 // page. Re-exported from config.ts so the cordis loader validates the
 // composition layer and (0.1.7) projects the `.volatile()` fields into the
@@ -874,7 +874,8 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
   // without re-registration. A plain-field change remounts the plugin and
   // rebuilds this bridge from a fresh apply(); a volatile-only change is
   // delivered through the bridge's onChange (loader/volatile-update).
-  const bridge = installEgoBrowserSettings(ctx, config)
+  // 跨版本:0.1.2/0.1.5 走 installSection 代际,0.1.7+/0.2.0 走声明式 volatile(installEgoBrowserSettings 内部判定)
+  const bridge = installSettingsAuto(ctx, config)
   const ffmpegManager = getSharedFfmpegInstallationManager()
   const initialFfmpegConfig = resolveConfig(bridge.source() as RawConfig)
   void ffmpegManager.check({ configuredPath: initialFfmpegConfig.ffmpegPath, requestedEncoder: initialFfmpegConfig.ffmpegEncoder }).catch(() => {

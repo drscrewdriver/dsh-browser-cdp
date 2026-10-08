@@ -706,15 +706,120 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 		// 6-dot drag grip for the panel's title bar.
 		const ICON_GRIP = `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="8" cy="6" r="1.8"/><circle cx="16" cy="6" r="1.8"/><circle cx="8" cy="12" r="1.8"/><circle cx="16" cy="12" r="1.8"/><circle cx="8" cy="18" r="1.8"/><circle cx="16" cy="18" r="1.8"/></svg>`;
 
+		// ── 设置卡双轨数据源的桥轨（session-guard BridgeDocHandle 同式收缩版）──
+		// ≤0.1.5 宿主无 configForms 服务（代际切分：configForms 属 rc.1+ 代），
+		// 卡的原生数据臂坐死 → 改走自家 webServer 桥 describe/mutate 读写宿主
+		// settings 服务。快照形状对齐原生 scope（value/writable 两字段卡面消费）；
+		// 路由与 server 侧 registerSettingsBridge（src/settings.ts）逐字符一致。
+		var BRIDGE_ROUTES = { describe: '/api/dsh-browser-cdp/settings/describe', mutate: '/api/dsh-browser-cdp/settings/mutate' }
+
+		// ≤0.1.5 describe 的 descriptor.value 是「每字段 → {}」骨架（真值拆在
+		// base+user 两层）——命中即以 {...base, ...user} 重组（本卡字段全是
+		// 顶层标量/数组，浅合并即语义；session-guard isFieldSkeleton 同款）。
+		function bridgeDescriptorPlainValue(d: any) {
+			var v = d && d.value
+			if (v !== null && typeof v === 'object' && !Array.isArray(v)) {
+				var values = Object.keys(v)
+				var skeleton = values.length > 0 && values.every(function (k) {
+					var x = v[k]
+					return x !== null && typeof x === 'object' && !Array.isArray(x) && Object.keys(x).length === 0
+				})
+				if (skeleton) {
+					var merged: any = {}
+					var pull = function (layer: any) {
+						if (layer !== null && typeof layer === 'object' && !Array.isArray(layer)) {
+							for (var k in layer) merged[k] = layer[k]
+						}
+					}
+					pull(d.base)
+					pull(d.user)
+					return merged
+				}
+			}
+			return v
+		}
+
+		function makeBridgeScope() {
+			var listeners: any[] = []
+			var snapshot: any = { status: 'loading', value: undefined, writable: true, mode: 'bridge' }
+			var revision: any = undefined
+			var retriesLeft = 4
+			var inflight: any = undefined
+			function notify() { for (var i = 0; i < listeners.length; i++) listeners[i]() }
+			function applyDescriptor(d: any, writable: boolean) {
+				revision = typeof d.revision === 'number' ? d.revision : undefined
+				snapshot = { status: 'ready', value: bridgeDescriptorPlainValue(d), writable: writable, mode: 'bridge' }
+			}
+			function request(path: string, body: any) {
+				return fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body ?? {}) })
+					.then(function (r) {
+						if (!r.ok) throw new Error('bridge ' + path + ' HTTP ' + r.status)
+						return r.json()
+					})
+			}
+			function retryOrFail() {
+				if (retriesLeft > 0) {
+					retriesLeft -= 1
+					inflight = undefined
+					setTimeout(function () { void refresh() }, 1500)
+					return true
+				}
+				snapshot = { status: 'unavailable', value: undefined, writable: false, mode: 'bridge' }
+				return false
+			}
+			function refresh(): any {
+				if (inflight !== undefined) return inflight
+				inflight = request(BRIDGE_ROUTES.describe, {}).then(function (body: any) {
+					if (body && body.ok && body.value && body.value.descriptor !== undefined) {
+						retriesLeft = 4
+						applyDescriptor(body.value.descriptor, body.value.writable !== false)
+					} else if (!(body && body.code && (body.code === 'settings-unavailable' || body.code === 'ns-not-registered') && retryOrFail())) {
+						snapshot = { status: 'unavailable', value: undefined, writable: false, mode: 'bridge' }
+					}
+					inflight = undefined
+					notify()
+				}, function () {
+					retryOrFail() // 网络异常按瞬态处理；预算耗尽落终态
+					inflight = undefined
+					notify()
+				})
+				return inflight
+			}
+			void refresh()
+			return {
+				subscribe: function (listener: any) {
+					listeners.push(listener)
+					return function () {
+						var i = listeners.indexOf(listener)
+						if (i >= 0) listeners.splice(i, 1)
+					}
+				},
+				getSnapshot: function () { return snapshot },
+				set: function (field: string, value: any): Promise<boolean> {
+					return request(BRIDGE_ROUTES.mutate, { ops: [{ op: 'set', path: [field], value: value }], expectedRevision: revision })
+						.then(function (body: any) {
+							if (body && body.ok && body.value && body.value.descriptor !== undefined) {
+								applyDescriptor(body.value.descriptor, snapshot.writable)
+								notify()
+								return true
+							}
+							if (body && body.code === 'settings-conflict') { void refresh() }
+							return false
+						})
+				},
+			}
+		}
+
 		// ── 插件族共用设置 tab（「起子插件设置」）──────────────────────────
 		// dsh-thinking-levels 的顶级 settings.section 声明 `dsh-family.tab` 子席位；
-		// 本卡全量渲染 Config 的用户可调 volatile 字段（分组 + links 连接目标），
-		// configForms 直用原生句柄（快照身份稳定）。thinking-levels 缺席时
-		// inject 静默等待，不阻塞客户端半。
+		// 本卡全量渲染 Config 的用户可调 volatile 字段（分组 + links 连接目标）。
+		// 数据臂双轨：rc.1+ 用 configForms 原生句柄（快照身份稳定）；≤0.1.5 无
+		// configForms 服务 → 落 webServer 桥轨。thinking-levels 缺席时 inject
+		// 静默等待，不阻塞客户端半。
 		function mountFamilySettingsCard(ctx: any) {
 			var forms = typeof ctx.get === 'function' ? ctx.get('configForms') : undefined
-			if (!forms || typeof forms.get !== 'function') return
-			var scope = forms.get('dsh-browser-cdp')
+			var scope = forms && typeof forms.get === 'function' ? forms.get('dsh-browser-cdp') : undefined
+			if (!scope) scope = makeBridgeScope()
 			ctx.slots.inject('dsh-family.tab', function () {
 				return ctx.slots.register({
 					name: 'dsh-family.tab',
@@ -735,8 +840,8 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 		// renderSlot），无需 b660785 的缺席守卫。
 		function mountPluginsPageCard(ctx: any) {
 			var forms = typeof ctx.get === 'function' ? ctx.get('configForms') : undefined
-			if (!forms || typeof forms.get !== 'function') return
-			var scope = forms.get('dsh-browser-cdp')
+			var scope = forms && typeof forms.get === 'function' ? forms.get('dsh-browser-cdp') : undefined
+			if (!scope) scope = makeBridgeScope()
 			ctx.slots.inject('plugins.bundle.config', function () {
 				return ctx.slots.register({
 					name: 'plugins.bundle.config',

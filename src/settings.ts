@@ -144,3 +144,133 @@ export function installSettingsAuto(ctx: EgoContext, config: RawConfig): Setting
   }
   return installEgoBrowserSettings(ctx, config)
 }
+
+// ── 设置 webServer 桥（老线数据臂；session-guard settings-bridge 同式）────
+// ≤0.1.5 宿主无 configForms 服务（input-traffic 代际切分：configForms 是
+// rc.1+ 代），client 设置卡的原生数据臂坐死；卡改走本桥 describe/mutate 两
+// 端点读写宿主 settings 服务：读 = svc.describe 取自家 ns 描述符（ns 已由
+// installSettingsAuto 的 installSection 注册）；写 = svc.mutate 转发 ops 落
+// 宿主（不落第二份状态），成功即 describe 回填。POST-only + 256KB。
+// 路由必须与 client 侧 makeBridgeScope 的 BRIDGE_ROUTES 逐字符一致。
+const SETTINGS_BRIDGE_NS = 'dsh-browser-cdp'
+
+function bridgeSendJson(res: any, code: number, body: unknown): void {
+  res.writeHead(code, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-cache' })
+  res.end(JSON.stringify(body))
+}
+
+function bridgeReadJson(req: any): Promise<any> {
+  return new Promise((resolve, reject) => {
+    const chunks: any[] = []
+    let size = 0
+    req.on('data', (chunk: any) => {
+      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+      size += buf.length
+      if (size > 256 * 1024) {
+        reject(new Error('bridge body too large'))
+        if (typeof req.resume === 'function') req.resume()
+        return
+      }
+      chunks.push(buf)
+    })
+    req.on('end', () => {
+      const raw = Buffer.concat(chunks).toString('utf8')
+      if (raw === '') {
+        resolve({})
+        return
+      }
+      try {
+        resolve(JSON.parse(raw))
+      } catch (e) {
+        reject(e instanceof Error ? e : new Error(String(e)))
+      }
+    })
+    req.on('error', reject)
+  })
+}
+
+function bridgeDescribeNs(svc: any, ns: string): any {
+  return svc.describe({ redactSecrets: true }).find((d: any) => d.ns === ns)
+}
+
+/**
+ * 注册 /api/dsh-browser-cdp/settings/{describe,mutate} 两端点（kind:'exact'）。
+ * 宿主 settings 服务经惰性 ctx.get 取（cordis get 永不 throw；服务未解析时
+ * describe 回 settings-unavailable，client 桥按瞬态重试）。webServer 缺席的
+ * 宿主（TUI/headless）整段 no-op。
+ */
+export function registerSettingsBridge(wctx: unknown, ctx: unknown): void {
+  const ws = wctx as { register?: (route: unknown) => unknown } | undefined
+  if (!ws || typeof ws.register !== 'function') return
+  const c = ctx as { get?: (name: string) => unknown } | undefined
+  const getSettingsSvc = (): any => {
+    try {
+      return typeof c?.get === 'function' ? c.get('settings') : undefined
+    } catch {
+      return undefined
+    }
+  }
+  ws.register({
+    kind: 'exact',
+    path: `/api/${SETTINGS_BRIDGE_NS}/settings/describe`,
+    handler: (req: any, res: any) => {
+      if (req.method !== 'POST') {
+        bridgeSendJson(res, 405, { ok: false, code: 'method-not-allowed' })
+        return
+      }
+      const svc = getSettingsSvc()
+      if (!svc || typeof svc.describe !== 'function') {
+        bridgeSendJson(res, 200, { ok: false, code: 'settings-unavailable', message: 'settings service not resolved yet' })
+        return
+      }
+      try {
+        const descriptor = bridgeDescribeNs(svc, SETTINGS_BRIDGE_NS)
+        if (descriptor === undefined) {
+          bridgeSendJson(res, 200, { ok: false, code: 'ns-not-registered', message: `settings namespace "${SETTINGS_BRIDGE_NS}" is not registered` })
+          return
+        }
+        bridgeSendJson(res, 200, { ok: true, value: { descriptor, writable: svc.writable !== false } })
+      } catch (e) {
+        bridgeSendJson(res, 200, { ok: false, code: 'internal', message: e instanceof Error ? e.message : String(e) })
+      }
+    },
+  })
+  ws.register({
+    kind: 'exact',
+    path: `/api/${SETTINGS_BRIDGE_NS}/settings/mutate`,
+    handler: (req: any, res: any) => {
+      if (req.method !== 'POST') {
+        bridgeSendJson(res, 405, { ok: false, code: 'method-not-allowed' })
+        return
+      }
+      const svc = getSettingsSvc()
+      if (!svc || typeof svc.mutate !== 'function') {
+        bridgeSendJson(res, 200, { ok: false, code: 'settings-unavailable', message: 'settings service mutate not available' })
+        return
+      }
+      bridgeReadJson(req).then((body: any) => {
+        const ops = body?.ops
+        const valid = Array.isArray(ops) && ops.every((op: any) => op !== null && typeof op === 'object' && (op.op === 'set' || op.op === 'unset'))
+        if (!valid) {
+          bridgeSendJson(res, 200, { ok: false, code: 'settings-rejected', message: 'malformed bridge mutate ops' })
+          return
+        }
+        const expectedRevision = typeof body.expectedRevision === 'number' ? body.expectedRevision : undefined
+        Promise.resolve(svc.mutate(SETTINGS_BRIDGE_NS, ops, expectedRevision)).then(() => {
+          const descriptor = bridgeDescribeNs(svc, SETTINGS_BRIDGE_NS)
+          if (descriptor === undefined) {
+            bridgeSendJson(res, 200, { ok: false, code: 'internal', message: `namespace "${SETTINGS_BRIDGE_NS}" disposed after mutate` })
+            return
+          }
+          bridgeSendJson(res, 200, { ok: true, value: { descriptor } })
+        }).catch((e) => {
+          const msg = e instanceof Error ? e.message : String(e)
+          const conflict = e instanceof Error && /conflict|revision/i.test(msg)
+          bridgeSendJson(res, 200, conflict ? { ok: false, code: 'settings-conflict', message: msg } : { ok: false, code: 'internal', message: msg })
+        })
+      }).catch((e) => {
+        bridgeSendJson(res, 200, { ok: false, code: 'bad-request', message: e instanceof Error ? e.message : String(e) })
+      })
+    },
+  })
+}

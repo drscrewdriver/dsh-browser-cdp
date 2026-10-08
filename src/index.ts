@@ -44,7 +44,7 @@ import { registerEgoBrowserGateway } from './gateway.ts'
 import { EGO_HELP_INDEX } from './help.ts'
 import { HUMAN_CHECK_PROBE } from './captcha.ts'
 import { Config as ConfigSchema, resolveConfig, judgeSettingsOf, EGO_CLI_BLOCKED, CHROME_BLOCKED, filterArgs } from './config.ts'
-import { installSettingsAuto } from './settings.ts'
+import { installSettingsAuto, registerSettingsBridge } from './settings.ts'
 import { getSharedFfmpegInstallationManager } from './ffmpeg-installation.ts'
 import { SENTINEL, j, str, num, bool, readAll, SAFE_FN } from './util.ts'
 import {
@@ -1119,6 +1119,16 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
     } catch (err) {
       ctx.logger?.warn?.(
         `dsh-browser-cdp: capability gateway init failed: ${(err as Error)?.message ?? err}`,
+      )
+    }
+    // 设置桥（老线数据臂，session-guard settings-bridge 同式）：≤0.1.5 无
+    // configForms，client 设置卡走 /api/dsh-browser-cdp/settings/* 读写宿主
+    // settings 服务。rc.1+ 上路由无害冗余（卡仍走原生 configForms 臂）。
+    try {
+      registerSettingsBridge(wctx, ctx)
+    } catch (err) {
+      ctx.logger?.warn?.(
+        `dsh-browser-cdp: settings bridge init failed: ${(err as Error)?.message ?? err}`,
       )
     }
   })

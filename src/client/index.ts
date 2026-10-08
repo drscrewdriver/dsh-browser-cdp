@@ -1245,7 +1245,7 @@ h('button', { type: 'button', disabled: !writable || isFull(links) || hasCliLink
 		var mounts: Array<[string, (c: any) => void]> = [
 			['family settings tab', mountFamilySettingsCard],
 			['plugins-page config card', mountPluginsPageCard],
-			['floating settings gear', mountOverlayGear],
+
 			['picks dock', mountPicksDockCard],
 			['picks badge', mountPicksBadge],
 		]
@@ -2638,43 +2638,6 @@ clearTimeout((panel as any)._dshHideT)
 			 }))
 		}
 		
-		// ── 无设置页宿主(≤0.1.5)的兜底:shell.overlay 浮窗齿轮 ──────────
-		// settingsScope 子 inject 自动把齿轮限定在 ≤0.1.5(0.1.7+ 无此服务,
-		// inject 静默等待 → 齿轮不渲染;这几条线的宿主壳没有设置页,齿轮是
-		// 唯一配置入口)。注意:不注册 settings.plugin.item——≤0.1.5 的插件
-		// 配置 tab 派发对多卡脆弱(实测二卡互斥),族面/bundle 面 0.1.7+ 自有。
-		function SettingsOverlayPanel(props: any) {
-			var scope = props.scope
-			var h = React.createElement
-			return h('div', { style: { position: 'fixed', top: '6vh', left: '50%', transform: 'translateX(-50%)', width: 'min(760px, 92vw)', maxHeight: '84vh', overflowY: 'auto', zIndex: 10001, background: 'var(--dsw-alias-bg-primary, #1b1b1f)', border: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.3))', borderRadius: '12px', padding: '16px', boxShadow: '0 12px 40px rgba(0,0,0,.45)' } },
-				h('div', { style: { display: 'flex', justifyContent: 'flex-end', position: 'sticky', top: '-16px', marginLeft: 'auto', width: 'fit-content' } },
-					h('button', { onClick: props.onClose, style: { font: 'inherit', fontSize: '12px', padding: '4px 10px', borderRadius: '8px', border: '1px solid rgba(127,127,127,.4)', background: 'transparent', color: 'inherit', cursor: 'pointer' } }, '✕ 关闭')),
-				h(FamilySettingsCard, { scope: scope }))
-		}
-
-		function SettingsOverlayGear(props: any) {
-			var scope = props.scope
-			var state = React.useState(false)
-			var open = state[0]
-			var setOpen = state[1]
-			var h = React.createElement
-			return h('div', { style: { position: 'fixed', right: '16px', bottom: '64px', zIndex: 10000 } },
-				open ? h('div', { onClick: function () { setOpen(false) }, style: { position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,.45)', zIndex: 10000 } }) : null,
-				open ? h(SettingsOverlayPanel, { scope: scope, onClose: function () { setOpen(false) } }) : null,
-				h('button', { title: '浏览器代理设置', onClick: function () { setOpen(!open) }, style: { width: '40px', height: '40px', borderRadius: '50%', border: '1px solid rgba(127,127,127,.4)', background: 'rgba(30,30,32,.85)', color: 'inherit', cursor: 'pointer', fontSize: '16px', boxShadow: '0 4px 16px rgba(0,0,0,.35)' } }, '🌐'))
-		}
-
-		function mountOverlayGear(ctx: any) {
-			ctx.inject(['settingsScope'], function (settingsScope: any) {
-				var scope = settingsScope.bind({ namespace: 'dsh-browser-cdp' })
-				ctx.slots.inject('shell.overlay', function () {
-					return ctx.slots.register({
-						name: 'shell.overlay',
-						id: 'dsh-browser-cdp-settings',
-					}, function () { return SettingsOverlayGear({ scope: scope }) })
-				}, 'dsh-browser-cdp: floating settings gear')
-			})
-		}
 
 		// ── 点选引用徽标（conversation.input.overlay 贡献者）────────────────
 		// 草稿含我们的引用行时，composer 卡内浮出 🌐 徽标（paste-dock 文档徽标的

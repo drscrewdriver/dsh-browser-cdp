@@ -60,3 +60,10 @@ MIT License (as provided by the upstream project):
     LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
     OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
     SOFTWARE.
+
+## License scope
+
+Third-party components are covered by their own licenses; see this file. The
+vendored ego-lite runtime (`runtime/`) is MIT, Copyright CitroLabs/ego-lite
+contributors. Optional FFmpeg builds downloaded at runtime carry
+GPL-3.0-or-later obligations described above.

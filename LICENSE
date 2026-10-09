@@ -1,6 +1,6 @@
 MIT License
 
-Copyright (c) 2026 Fisfzy and dsh-ego-browser contributors
+Copyright (c) 2026 drscrewdriver
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -19,9 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
----
-Third-party components are covered by their own licenses; see
-THIRD_PARTY_NOTICES.md. The vendored ego-lite runtime (runtime/) is MIT,
-Copyright CitroLabs/ego-lite contributors. Optional FFmpeg builds downloaded
-at runtime carry GPL-3.0-or-later obligations described in the same file.

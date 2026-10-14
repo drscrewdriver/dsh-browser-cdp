@@ -2,6 +2,7 @@
 declare function require(id: string): any
 
 import { addRow, applyProbe, buildCdpRow, buildCliRow, buildLpRow, hasCliLink, hasLpLink, isFull, isValidEndpoint, MAX_LINKS, moveRow, removeRow, updateRow } from './fam-links'
+import { claimFamilyHostIfOrphaned } from './family-host'
 
 		// #region CDP browser bridge client: realtime watch-bubble
 		//
@@ -820,7 +821,11 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 			var forms = typeof ctx.get === 'function' ? ctx.get('configForms') : undefined
 			var scope = forms && typeof forms.get === 'function' ? forms.get('dsh-browser-cdp') : undefined
 			if (!scope) scope = makeBridgeScope()
+			// 探针：宿主执行过本工厂 == 有人声明了 `dsh-family.tab`（插件侧唯一合法的
+			// 「容器在不在」判据：槽门面不暴露 spec 查询，entriesOfSlot 也不区分空与未声明）。
+			var familyTabHeld = false
 			ctx.slots.inject('dsh-family.tab', function () {
+				familyTabHeld = true
 				return ctx.slots.register({
 					name: 'dsh-family.tab',
 					id: 'dsh-browser-cdp',
@@ -829,6 +834,16 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 					inject: function () { return { scope: scope } },
 				}, FamilySettingsCard)
 			}, 'dsh-browser-cdp: family settings tab')
+			// 家族容器兜底：thinking-levels/guard/steward/mcp 全部让位或声明失败时，
+			// 上面的 inject 会静默等待——本卡整轮启动不可见且不报错。到分级时刻自己上位。
+			// declare-or-withdraw：声明失败就放弃，绝不裸注册不带 children 的残废节。
+			var claim = claimFamilyHostIfOrphaned(
+				ctx.slots,
+				function () { return familyTabHeld },
+				function () { return '起子插件设置' },
+				'[dsh-browser-cdp]',
+			)
+			if (typeof ctx.effect === 'function') ctx.effect(function () { return claim }, 'dsh-browser-cdp: family host backstop')
 		}
 
 		// ── 插件详情页设置卡（plugins.bundle.config keyed 席位）─────────────

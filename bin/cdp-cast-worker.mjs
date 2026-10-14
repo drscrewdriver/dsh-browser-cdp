@@ -4317,7 +4317,15 @@ var CaptureManager = class {
 
 //#endregion
 //#region src/worker/mp4-fragments.ts
+/**
+* Incremental parser for fragmented-MP4 streams produced by FFmpeg
+* (`empty_moov+default_base_moof+frag_keyframe`). Splits the byte stream on
+* box boundaries and emits two callback events: the init segment
+* (ftyp+moov) once, then each media fragment (moof+mdat) as it completes.
+* Only 32-bit box headers are supported; any other box order is an error.
+*/
 const MAX_BOX_BYTES = 64 * 1024 * 1024;
+/** Stateful box splitter: feed via push(), close with end() to detect truncation. */
 var Mp4FragmentParser = class {
 	onInit;
 	onFragment;
@@ -4335,6 +4343,7 @@ var Mp4FragmentParser = class {
 		this.fragmentBoxes = [];
 		this.ready = false;
 	}
+	/** Append a raw chunk and emit every MP4 box that is now fully buffered. */
 	push(chunk) {
 		this.buffer = Buffer.concat([this.buffer, Buffer.from(chunk)]);
 		while (this.buffer.length >= 8) {
@@ -4348,9 +4357,11 @@ var Mp4FragmentParser = class {
 			this.#box(type, box);
 		}
 	}
+	/** Signal end of stream; throws if a partial box is still buffered. */
 	end() {
 		if (this.buffer.length !== 0) throw new Error("truncated MP4 stream");
 	}
+	/** Route one complete box: init phase collects ftyp/moov, media phase pairs moof+mdat. */
 	#box(type, box) {
 		if (!this.ready) {
 			if (type !== "ftyp" && type !== "moov") throw new Error(`unexpected MP4 init box ${type}`);
@@ -4379,6 +4390,7 @@ var Mp4FragmentParser = class {
 //#endregion
 //#region src/worker/capture-platform.ts
 const execFile$1 = promisify(execFile);
+/** Emit the FFmpeg input arguments for this platform: win32 gfxcapture filter, darwin avfoundation, X11 x11grab; throws on Wayland. */
 function buildCaptureInput({ platform: platform$1 = process.platform, env = process.env, source, fps, maxWidth, encoder }) {
 	if (platform$1 === "win32") {
 		if (source.sourceType !== "window-hwnd" || !source.hwnd) {
@@ -4434,6 +4446,7 @@ function buildCaptureInput({ platform: platform$1 = process.platform, env = proc
 		`${display}+${source.captureX},${source.captureY}`
 	];
 }
+/** Emit the FFmpeg output/encoder arguments: Windows h264_mf/libx264 fast-start paths vs. the crop+scale baseline path, both streaming fragmented MP4 to stdout. */
 function buildEncoderArgs({ encoder, fps, maxWidth, bitrateKbps = 4e3, source, platform: platform$1 = process.platform }) {
 	const maxrateKbps = Math.round(bitrateKbps * 1.25);
 	const bufsizeKbps = bitrateKbps * 2;
@@ -4502,6 +4515,7 @@ function buildEncoderArgs({ encoder, fps, maxWidth, bitrateKbps = 4e3, source, p
 		"pipe:1"
 	];
 }
+/** Pick the window closest to CDP-reported bounds (±8px tolerance), preferring a title match among the closest candidates. */
 function selectWindowCandidate(windows, bounds, targetTitle = "") {
 	const candidates = windows.filter((window) => window.hwnd && window.width > 0 && window.height > 0);
 	if (candidates.length === 0) return null;
@@ -4519,6 +4533,7 @@ function selectWindowCandidate(windows, bounds, targetTitle = "") {
 	}
 	return ranked[0].window;
 }
+/** List visible top-level windows owned by `browserPid` (Windows only) by running an inline PowerShell script that P/invokes user32.dll. */
 async function enumerateWindowsForPid(browserPid, run = execFile$1) {
 	if (!Number.isInteger(browserPid) || browserPid <= 0) return [];
 	const script = `
@@ -4584,6 +4599,7 @@ ConvertTo-Json -Compress -InputObject @($items)
 	const parsed = JSON.parse(stdout.trim() || "[]");
 	return Array.isArray(parsed) ? parsed : [parsed];
 }
+/** Resolve the capture source for a CDP target: window-geometry probe via Runtime.evaluate, then hwnd matching (win32) or display-crop math elsewhere; throws coded errors when the target is missing/not visible/minimized. */
 async function resolveCaptureSource({ sessions, targetId, browserPid, platform: platform$1 = process.platform, windowEnumerator = enumerateWindowsForPid }) {
 	const value = (await sessions.call(targetId, "Runtime.evaluate", {
 		expression: "({screenX,screenY,outerWidth,outerHeight,innerWidth,innerHeight,devicePixelRatio,title:document.title})",

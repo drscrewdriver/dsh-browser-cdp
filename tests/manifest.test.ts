@@ -21,8 +21,14 @@ const pluginJson = JSON.parse(await readFile(new URL("../dsh-plugin.json", impor
 const DSH_PEERS = Object.keys(pkg.peerDependencies).filter((k: string) => /^@deepseek-ai\/dsh-/.test(k));
 const RANGES = DSH_PEERS.map((k: string) => pkg.peerDependencies[k]);
 const RANGE = RANGES[0];
-// Shared range lower bound, e.g. ">=0.2.0-rc.1 <0.2.1-0" or ">=0.1.2-rc.1" -> "0.2.0" / "0.1.2"
-const LINE = (RANGE.match(/^>=(\d+\.\d+\.\d+)-rc\.\d+/) || [])[1] as string | undefined;
+// Shared range lower bound, e.g. ">=0.2.0-rc.1 <0.2.1-0", ">=0.1.2-rc.1" or
+// ">=0.1.0-0 <0.3.0-0" -> "0.2.0" / "0.1.2" / "0.1.0".
+const LINE = (RANGE.match(/^>=(\d+\.\d+\.\d+)/) || [])[1] as string | undefined;
+// Detected range strategy. Segment/master ranges anchor to ONE host rc line;
+// the unified strategy (branch unified/15rc) deliberately spans every line with a
+// wide window so a single build serves them all -- there is no single "this line"
+// to name in the description, so the line-naming assertion is strategy-aware.
+const UNIFIED = /^>=\d+\.\d+\.\d+-0 <\d+\.\d+\.\d+-0$/.test(RANGE);
 
 describe("manifest version-line discipline", () => {
   it("all dsh peers share one identical range", () => {
@@ -30,8 +36,8 @@ describe("manifest version-line discipline", () => {
     expect(new Set(RANGES).size).toBe(1);
   });
 
-  it("the shared range is rc-anchored: two-sided (compat era) or open-ended (master era)", () => {
-    expect(RANGE).toMatch(/^>=(?:\d+\.\d+\.\d+-rc\.\d+(?:\s+<\d+\.\d+\.\d+-0)?)$/);
+  it("the shared range is anchored: rc-window (segment era), open-ended (master era) or unified cross-line window", () => {
+    expect(RANGE).toMatch(/^>=(?:\d+\.\d+\.\d+-rc\.\d+(?:\s+<\d+\.\d+\.\d+-0)?|\d+\.\d+\.\d+-0\s+<\d+\.\d+\.\d+-0)$/);
     expect(LINE).toBeTruthy();
   });
 
@@ -71,6 +77,12 @@ describe("manifest version-line discipline", () => {
 
   it("description names this line; compat-era lines also point older hosts to the previous line", () => {
     const description = pkg.description as string;
+    if (UNIFIED) {
+      // Unified range serves every host line at once: no single line to name, so
+      // the description instead declares the DSH coverage strategy.
+      expect(description).toMatch(/DSH/);
+      return;
+    }
     expect(description).toContain(LINE);
     if (/\[DSH [^\]]*line:/.test(description)) {
       expect(description).toMatch(/use the \d+\.\d+\.x line/);

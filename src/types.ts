@@ -237,6 +237,14 @@ export interface ResolvedConfig {
   runtimeArgs: string
   remoteEnabled: boolean
   legacyEgoToolNames: boolean
+  // ── 工具分级注入（见 src/toolTiers.ts；字面量联合就地声明以保持本文件零 import）─
+  /** lazy = 只常驻 core 级，其余按开关注入（默认）；always = 挂载即全量注册。 */
+  toolInjection: 'always' | 'lazy'
+  /** 一级一个开关：true = 开放注册，false = 封印（从模型工具列表消失）。core 级不可封印。 */
+  toolBrowse: boolean
+  toolExtended: boolean
+  /** 评审级开关；开 + 配了 JEV/Laya Key 才会真的注入。 */
+  toolJudge: boolean
   chromeArgs: string
   // ── R1/R7: connection sequence + activation ─────────────────────────────
   /**

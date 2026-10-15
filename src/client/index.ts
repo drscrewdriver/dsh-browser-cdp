@@ -3,6 +3,7 @@ declare function require(id: string): any
 
 import { addRow, applyProbe, buildCdpRow, buildCliRow, buildLpRow, hasCliLink, hasLpLink, isFull, isValidEndpoint, MAX_LINKS, moveRow, removeRow, updateRow } from './fam-links'
 import { claimFamilyHostIfOrphaned } from './family-host'
+import { commitField } from './fam-write'
 
 		// #region CDP browser bridge client: realtime watch-bubble
 		//
@@ -804,12 +805,21 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 								notify()
 								return true
 							}
-							if (body && body.code === 'settings-conflict') { void refresh() }
-							return false
+							// 拒写（revision 冲突 / 宿主瞬态错 / 非法值）时不能直接返回 false：
+							// 上层重试带的是 `revision`，它还是陈的。先把 describe 等到底
+							// （拿到新 revision 与宿主真值）再交回失败，重试才有意义。
+							return Promise.resolve(refresh()).then(function () { return false }, function () { return false })
+						}, function () {
+							// 网络异常同路：重读后报失败，交给上层重试预算
+							return Promise.resolve(refresh()).then(function () { return false }, function () { return false })
 						})
 				},
 			}
 		}
+
+		// 所有字段写入走 ./fam-write 的 commitField：带 revision、被拒（并发编辑
+		// 冲突或瞬态故障）则有限次重试，预算用尽报 false 给调用方回滚乐观态。
+		// 桥轨的 set 在返回 false 前已经把 describe 等到底，所以重试带的是新 revision。
 
 		// ── 插件族共用设置 tab（「起子插件设置」）──────────────────────────
 		// dsh-thinking-levels 的顶级 settings.section 声明 `dsh-family.tab` 子席位；
@@ -870,6 +880,14 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 		// kind: bool=checkbox / num=数字 / str=文本 / secret=密码 / sel=下拉。
 		// 文案直接内联 en/zh（跟随 wt 的 _egoLocale），不再膨胀字典键。
 		var FAM_FIELD_GROUPS = [
+			// 工具封印：放在最前（与 prime-memory 的「工具封印」节同一位置）——
+			// 它是“今天这个会话能看到多少个工具”的唯一开关面。
+			{ gk: 'gTools', en: 'Tool sealing', zh: '工具封印', fields: [
+				{ k: 'toolInjection', kind: 'sel', options: ['lazy', 'always'], en: ['Injection mode', 'lazy (default) = only the 6 core tools stay resident; the rest are injected after the first bcdp_* call and sealed back on idle reaping. always = every tool registered at mount (historical)'], zh: ['工具注入模式', 'lazy（默认）= 只常驻核心 6 个，首次 bcdp_* 调用后铺开、闲置回收时收回；always = 挂载即注册全部（历史行为）'] },
+				{ k: 'toolBrowse', kind: 'bool', en: ['Basic browsing tools (14)', 'On (default) = registered after browser activity; off = 14 tools removed from the model tool list (click / fill / key / screenshot / read / wait ...)'], zh: ['基础操作工具（14 个）', '开（默认）= 浏览器活动后正常注册；关 = 14 个工具从模型工具列表移除（点击/填写/键鼠/截图/读取/等待…）'] },
+				{ k: 'toolExtended', kind: 'bool', en: ['Extended tools (13)', 'On (default) = registered; off = 13 tools removed (drag / upload / download / dialog / raw CDP / script escape hatches / login import)'], zh: ['扩展能力工具（13 个）', '开（默认）= 正常注册；关 = 13 个工具移除（拖拽/上传/下载/对话框/裸 CDP/脚本逃生舱/登录导入）'] },
+				{ k: 'toolJudge', kind: 'bool', en: ['Judgement tools bcdp_jev_* (5)', 'On still requires a JEV or Laya key — without one they can only answer "not configured", so they stay sealed anyway'], zh: ['评审工具 bcdp_jev_*（5 个）', '开仍需配了 JEV/Laya Key；没 Key 它们本来也只能回答「未配置」，依旧不注入'] },
+			] },
 			{ gk: 'gBasic', en: 'Basics', zh: '基础', fields: [
 				{ k: 'isolateSpaces', kind: 'bool', en: ['Space isolation', 'Off = persistent profile (logins survive restarts); on = isolated sandbox'], zh: ['空间隔离', '关 = 持久化配置（重启保留登录态）；开 = 每次隔离沙箱'] },
 				{ k: 'idleTimeoutMin', kind: 'num', min: 0, max: 1440, step: 1, en: ['Auto-stop idle browser (minutes, 0 = off)', 'Stops the backing browser after N minutes without a bcdp_* call; relaunches on demand'], zh: ['空闲自动停止（分钟，0 = 不停）', '超过 N 分钟没有 bcdp_* 调用即停止后台浏览器，下次调用按需重启'] },
@@ -965,9 +983,7 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 				h('span', { style: titleStyle }, famText(f, 'title')),
 				f.desc === false || !famText(f, 'desc') ? null : h('span', { style: descStyle }, famText(f, 'desc')))
 			if (f.kind === 'bool') {
-				return h('div', { style: rowStyle }, label,
-					h('input', { type: 'checkbox', checked: value[f.k] === true, disabled: !writable,
-						onChange: function (e: any) { void scope.set(f.k, e.target.checked) } }))
+				return h(FamBoolRow, { f: f, value: value, writable: writable, scope: scope })
 			}
 			if (f.kind === 'num') {
 				return h('div', { style: rowStyle }, label,
@@ -977,12 +993,87 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 				return h('div', { style: rowStyle }, label,
 					h('select', { value: String(value[f.k] ?? f.options[0]), disabled: !writable,
 						style: { font: 'inherit', color: 'inherit', background: 'var(--dsw-alias-bg-module-platform, rgba(127,127,127,.08))', border: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.35))', borderRadius: '8px', padding: '4px 8px' },
-						onChange: function (e: any) { void scope.set(f.k, e.target.value) } },
+						onChange: function (e: any) { void commitField(scope, f.k, e.target.value) } },
 						f.options.map(function (o: any) { return h('option', { key: o, value: o }, o) })))
 			}
 			// str / secret：文本行（宽度占满，失焦提交）
 			return h('div', { style: { display: 'grid', gap: '2px', padding: '6px 0' } }, label,
 				h(FamStrInput, { f: f, v: value[f.k], writable: writable, scope: scope }))
+		}
+
+		// 胶囊开关。宿主没有可借的共享 switch 组件（自动表单页是另一套 DOM），所以按
+		// --dsw-alias 令牌自绘：用原生 <button role="switch"> 自带聚焦与回车/空格，
+		// 不重造键盘轮子；尺寸固定 38×22、旋钮 18px，border-box 下位移 16px 刚好贴右。
+		function FamSwitch(props: any) {
+			var h = React.createElement
+			var on = props.checked === true
+			var busy = props.busy === true
+			var disabled = props.writable !== true || busy
+			return h('button', {
+				type: 'button', role: 'switch', 'aria-checked': on, 'aria-label': props.ariaLabel || '',
+				disabled: disabled, title: props.title || '',
+				style: {
+					flex: '0 0 auto', width: '38px', height: '22px', padding: 0, boxSizing: 'border-box',
+					position: 'relative', cursor: disabled ? 'default' : 'pointer',
+					borderRadius: '999px', border: '1px solid transparent',
+					background: on ? 'var(--dsw-alias-bg-brand, #3a76f0)' : 'var(--dsw-alias-bg-module-platform, rgba(127,127,127,.28))',
+					opacity: busy ? 0.55 : 1, transition: 'background .16s ease, opacity .16s ease',
+				},
+				onClick: function () { props.onToggle(!on) },
+			}, h('span', {
+				style: {
+					position: 'absolute', top: '1px', left: '1px', width: '18px', height: '18px',
+					borderRadius: '999px', boxSizing: 'border-box',
+					background: 'var(--dsw-alias-label-inverse, #fff)', boxShadow: '0 1px 2px rgba(0,0,0,.35)',
+					transform: on ? 'translateX(16px)' : 'translateX(0)', transition: 'transform .16s ease',
+				},
+			}))
+		}
+
+		// 布尔行 = 乐观态 + 胶囊开关 + 失败回滚。
+		// 点下去先本地翻转（pending），提交走 commitField（带重试）；宿主快照追上来
+		// 就清掉 pending，重试预算用尽则回滚到宿主真值并亮一行提示——开关停在“看起
+		// 来改了其实没改”是最坑的状态，宁可弹回去并说一一声。
+		function FamBoolRow(props: any) {
+			var f = props.f
+			var scope = props.scope
+			var writable = props.writable
+			var h = React.createElement
+			var host = props.value[f.k] === true
+			var pendingState = React.useState(undefined)
+			var pending = pendingState[0], setPending = pendingState[1]
+			var errState = React.useState(false)
+			var failed = errState[0], setFailed = errState[1]
+			React.useEffect(function () {
+				if (pending !== undefined && props.value[f.k] === pending) setPending(undefined)
+			}, [props.value[f.k]])
+			var shown = pending === undefined ? host : pending === true
+			var rowStyle = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', padding: '6px 0' }
+			var textCol = { display: 'flex', flexDirection: 'column', gap: '2px', minWidth: 0 }
+			var titleStyle = { fontSize: '13px', color: 'var(--dsw-alias-label-primary, inherit)' }
+			var descStyle = { fontSize: '12px', color: 'var(--dsw-alias-label-tertiary, rgba(127,127,127,.8))', lineHeight: 1.5 }
+			function toggle(next: boolean) {
+				if (writable !== true || pending !== undefined) return
+				setFailed(false)
+				setPending(next)
+				void commitField(scope, f.k, next).then(function (ok: any) {
+					if (ok === true) return
+					setPending(undefined)
+					setFailed(true)
+				})
+			}
+			return h('div', { style: { display: 'grid', gap: '2px' } },
+				h('div', { style: rowStyle },
+					h('div', { style: textCol },
+						h('span', { style: titleStyle }, famText(f, 'title')),
+						f.desc === false || !famText(f, 'desc') ? null : h('span', { style: descStyle }, famText(f, 'desc'))),
+					h(FamSwitch, {
+						checked: shown, busy: pending !== undefined, writable: writable,
+						ariaLabel: famText(f, 'title'), onToggle: toggle,
+					})),
+				failed ? h('span', { style: { fontSize: '12px', color: 'var(--dsw-alias-text-danger, #e5534b)' } },
+					_egoLocale === 'zh' ? '保存未成功（已重试），开关已回到宿主当前值。' : 'Save failed after retries; the switch is back to the host value.') : null,
+			)
 		}
 
 		function FamNumInput(props: any) {
@@ -1001,7 +1092,7 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 					n = Math.round(n / (f.step || 1)) * (f.step || 1)
 					if (f.min !== undefined) n = Math.max(f.min, n)
 					if (f.max !== undefined) n = Math.min(f.max, n)
-					void props.scope.set(f.k, n)
+					void commitField(props.scope, f.k, n)
 				} })
 		}
 
@@ -1014,8 +1105,8 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 			return h('input', { type: f.kind === 'secret' ? 'password' : 'text', value: v, disabled: !props.writable,
 				style: { width: '100%', font: 'inherit', color: 'inherit', background: 'var(--dsw-alias-bg-module-platform, rgba(127,127,127,.08))', border: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.35))', borderRadius: '8px', padding: '5px 10px', boxSizing: 'border-box' },
 				onChange: function (e: any) { setV(e.target.value) },
-				onBlur: function () { void props.scope.set(f.k, v) },
-				onKeyDown: function (e: any) { if (e.key === 'Enter') { void props.scope.set(f.k, v) } } })
+				onBlur: function () { void commitField(props.scope, f.k, v) },
+				onKeyDown: function (e: any) { if (e.key === 'Enter') { void commitField(props.scope, f.k, v) } } })
 		}
 
 		// 连接目标（links）：按行渲染启用开关 + 激活按钮（写 activeTargetId）。
@@ -1037,7 +1128,7 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 		}
 
 		// 连接目标（links）v2：启用 / 激活 / 就位编辑 / 探测 / 增删 / 排序。
-		// 写回只有一条通道：整组 scope.set('links', next)（行级 volatile 写不存在），
+		// 写回只有一条通道：整组 commitField(scope, 'links', next)（行级 volatile 写不存在），
 		// 每个离散动作恰好一次 set。守卫规则在 ./fam-links（与宿主 sanitize/upsert
 		// 同构）：ego-cli 单例、MAX_LINKS 上限、endpoint 轻校验——空/非法端点行能过
 		// 设置写入，却会在宿主下次 resolve 时被 coerceLink 静默丢弃，必须写前挡住。
@@ -1068,7 +1159,7 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 			var inputStyle = { font: 'inherit', fontSize: '12px', color: 'inherit', background: 'var(--dsw-alias-bg-module-platform, rgba(127,127,127,.08))', border: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.35))', borderRadius: '8px', padding: '3px 8px' }
 
 			function writeLinks(next: any) {
-				Promise.resolve(scope.set('links', next)).then(function (ok: any) {
+				commitField(scope, 'links', next).then(function (ok: any) {
 					if (ok === false) setErrText(wt('linksWriteFailed'))
 				}, function () { setErrText(wt('linksWriteFailed')) })
 			}
@@ -1080,7 +1171,7 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 				writeLinks(res.links)
 				if (activeId === '') {
 					// 空序列的第一个目标入列即激活（无歧义）；后续行保持不自动激活。
-					void scope.set('activeTargetId', res.links[res.links.length - 1].id)
+					void commitField(scope, 'activeTargetId', res.links[res.links.length - 1].id)
 				}
 				setAddLabel(''); setAddEndpoint(''); setErrText('')
 			}
@@ -1090,7 +1181,7 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 				writeLinks(res.links)
 				if (activeId === '') {
 					// 空序列的第一个目标入列即激活（无歧义）；后续行保持不自动激活。
-					void scope.set('activeTargetId', res.links[res.links.length - 1].id)
+					void commitField(scope, 'activeTargetId', res.links[res.links.length - 1].id)
 				}
 				setAddCliPath(''); setErrText('')
 			}
@@ -1100,7 +1191,7 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 				writeLinks(res.links)
 				if (activeId === '') {
 					// 空序列的第一个目标入列即激活（无歧义）；后续行保持不自动激活。
-					void scope.set('activeTargetId', res.links[res.links.length - 1].id)
+					void commitField(scope, 'activeTargetId', res.links[res.links.length - 1].id)
 				}
 				setAddLpPath(''); setErrText('')
 			}
@@ -1110,7 +1201,7 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 				// 删激活行 = 清空激活，不顺延（先 links 后 activeId；两次触发被
 				// 宿主 inFlight/pending 合并，瞬态悬挂无害）。
 				if (res.removed && res.removed.id !== undefined && res.removed.id === activeId) {
-					void scope.set('activeTargetId', '')
+					void commitField(scope, 'activeTargetId', '')
 				}
 			}
 			function probeOne(row: any) {
@@ -1136,15 +1227,15 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 			var localActive = cdpMode === 'local'
 			var localRow = h('div', { key: 'fam-links-local', style: { borderTop: '1px dashed var(--dsw-alias-border-l2, rgba(127,127,127,.18))', padding: '6px 0', display: 'grid', gap: '4px' } },
 				h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
-					h('input', { type: 'checkbox', checked: value.allowLocalFallback === true, disabled: !writable,
+					h(FamSwitch, { checked: value.allowLocalFallback === true, writable: writable,
 						title: wt('linksLocalEnableHint'),
-						onChange: function (e: any) { void scope.set('allowLocalFallback', e.target.checked) } }),
+						onToggle: function (next: boolean) { void commitField(scope, 'allowLocalFallback', next) } }),
 					h('span', { style: badgeStyle }, 'LOCAL'),
 					h('span', { style: { fontSize: '13px', color: 'var(--dsw-alias-label-primary, inherit)', flex: '1 1 120px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, wt('linksLocalRow')),
 					localActive
 						? h('span', { style: { fontSize: '11px', color: '#30d158', flex: '0 0 auto' } }, wt('linksActive'))
 						: h('button', { type: 'button', disabled: !writable, style: btnStyle,
-							onClick: function () { void scope.set('cdpMode', 'local') } },
+							onClick: function () { void commitField(scope, 'cdpMode', 'local') } },
 							wt('linksActivate'))))
 			return h('div', { style: { borderTop: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.25))', paddingTop: '6px', display: 'grid', gap: '4px' } },
 				h('div', { style: { fontSize: '12px', fontWeight: 600, color: 'var(--dsw-alias-label-secondary, rgba(127,127,127,.9))', padding: '2px 0 4px' } },
@@ -1165,9 +1256,9 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 						}
 						return h('div', { key: row.id || idx, style: { borderTop: '1px dashed var(--dsw-alias-border-l2, rgba(127,127,127,.18))', padding: '6px 0', display: 'grid', gap: '4px' } },
 							h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
-								h('input', { type: 'checkbox', checked: row.enabled === true, disabled: !writable,
+								h(FamSwitch, { checked: row.enabled === true, writable: writable,
 									title: wt('linksEnabled'),
-									onChange: function (e: any) { writeLinks(updateRow(links, row.id, { enabled: e.target.checked })) } }),
+									onToggle: function (next: boolean) { writeLinks(updateRow(links, row.id, { enabled: next })) } }),
 								h('span', { style: badgeStyle }, isCli ? 'CLI' : isLp ? 'LP·无头' : 'CDP'),
 								h(FamRowInput, { v: row.label || '', writable: writable, placeholder: wt('linksLabel'),
 									onCommit: function (v: any) { writeLinks(updateRow(links, row.id, { label: v })) } }),
@@ -1177,9 +1268,9 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 									: h('button', { type: 'button', disabled: !writable || row.enabled === false,
 										title: row.enabled === false ? wt('linksDisabledHint') : undefined, style: btnStyle,
 										onClick: function () {
-											void scope.set('activeTargetId', row.id)
+											void commitField(scope, 'activeTargetId', row.id)
 											// 从受管本地切回目标序列：local 模式无视激活项，不同步模式就是点了没反应。
-											if (cdpMode === 'local') { void scope.set('cdpMode', 'auto') }
+											if (cdpMode === 'local') { void commitField(scope, 'cdpMode', 'auto') }
 										} },
 										wt('linksActivate'))),
 							h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
@@ -1192,9 +1283,9 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 										writeLinks(updateRow(links, row.id, { endpoint: v }))
 									} }),
 								isCli ? h('label', { style: { display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: 'var(--dsw-alias-label-tertiary, rgba(127,127,127,.7))', flex: '0 0 auto' } },
-									h('input', { type: 'checkbox', checked: row.useSdkPath === true, disabled: !writable,
+									h(FamSwitch, { checked: row.useSdkPath === true, writable: writable,
 										title: wt('linksCliSdk'),
-										onChange: function (e: any) { writeLinks(updateRow(links, row.id, { useSdkPath: e.target.checked })) } }),
+										onToggle: function (next: boolean) { writeLinks(updateRow(links, row.id, { useSdkPath: next })) } }),
 									wt('linksCliSdk')) : null,
 								!isCli && !isLp ? h('button', { type: 'button', disabled: !writable || probingId === row.id, style: btnStyle,
 									onClick: function () { probeOne(row) } },

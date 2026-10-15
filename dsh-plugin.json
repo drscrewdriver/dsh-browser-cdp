@@ -2,7 +2,7 @@
   "$schema": "https://dsh.community/schemas/dsh-plugin-0.15.json",
   "id": "dsh-browser-cdp",
   "name": "dsh-browser-cdp",
-  "version": "1.1.5-local.1",
+  "version": "1.2.0",
   "manifestVersion": "0.15",
   "facets": {
     "host": {
@@ -56,6 +56,48 @@
             "zh": "Agent 浏览器"
           },
           "fields": [
+            {
+              "path": [
+                "toolInjection"
+              ],
+              "label": "工具注入模式 (Tool injection mode)",
+              "kind": "select",
+              "options": [
+                {
+                  "value": "lazy",
+                  "label": "lazy"
+                },
+                {
+                  "value": "always",
+                  "label": "always"
+                }
+              ],
+              "hint": "lazy（默认）= 只常驻核心 6 个，首次 bcdp_* 调用后按下方开关注入，闲置回收时收回；always = 挂载即注册全部 38 个（历史行为）。"
+            },
+            {
+              "path": [
+                "toolBrowse"
+              ],
+              "label": "基础操作工具（14 个）",
+              "kind": "boolean",
+              "hint": "开（默认）= 浏览器活动后正常注册；关 = 14 个工具从模型工具列表移除（点击/填写/键鼠/截图/读取/等待…）。"
+            },
+            {
+              "path": [
+                "toolExtended"
+              ],
+              "label": "扩展能力工具（13 个）",
+              "kind": "boolean",
+              "hint": "开（默认）= 正常注册；关 = 13 个工具移除（拖拽/上传/下载/对话框/裸 CDP/脚本逃生舱/登录导入）。"
+            },
+            {
+              "path": [
+                "toolJudge"
+              ],
+              "label": "评审工具 bcdp_jev_*（5 个）",
+              "kind": "boolean",
+              "hint": "开仍需配了 JEV 或 Laya Key：没 Key 的评审工具只能回答「未配置」，依旧不注入。关 = 任何情况下都不注入。"
+            },
             {
               "path": [
                 "isolateSpaces"

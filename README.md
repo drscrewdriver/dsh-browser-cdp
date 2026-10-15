@@ -215,6 +215,33 @@ dshx list                                                # 应显示：[on] dsh-
 | 元工具 | `bcdp_help` `bcdp_doctor` `bcdp_http` |
 | 评审（JEV/Laya，外接判定服务可选） | `bcdp_jev_status` `bcdp_jev_frame` `bcdp_jev_ask` `bcdp_jev_run` `bcdp_jev_attempt` |
 
+## 工具注入分级（懒注册 / 分级 / 锁定）
+
+38 个工具全量注册时，**每个会话每一轮**都要为它们的 schema 付费（实测 `description` + `parameters` ≈ 25.6K 字符 ≈ 5–7K token），而不碰浏览器的会话一个也用不上。插件因此把「谁能出现在模型面前」收成一处策略（`src/toolTiers.ts`），分四级注入：
+
+| 级别 | 成员 | 何时出现 |
+|---|---|---|
+| **core** 常驻（6） | `bcdp_status` `bcdp_doctor` `bcdp_help` `bcdp_space_open` `bcdp_navigate` `bcdp_snapshot` | 永远在场，不可封印——否则 lazy 模式连解锁入口都没有 |
+| **browse** 基础操作（14） | 点击/填写/键鼠/截图/读取/等待/关闭空间 等 | `lazy` 下等首次活动；`always` 下挂载即在 |
+| **extended** 扩展能力（13） | 拖拽/上传/下载/对话框/裸 CDP/脚本逃生舱/登录搬运 | 同上 |
+| **judge** 评审链（5） | `bcdp_jev_*` | 除解锁外，**还要求配了 JEV 或 Laya Key**——没 Key 它们只能回答「未配置」 |
+
+设置项在插件设置页**最上方**的「工具封印」分块（全部 volatile，翻完当场生效，不重启插件）——一级一个开关，形状照 dsh-prime-memory 的「工具封印」：
+
+- **`toolInjection`** `lazy`（**默认**：只常驻 core，首次 `bcdp_*` 调用后按开关注入）/ `always`（挂载即全量，历史行为）。
+- **`toolBrowse`**（14）/ **`toolExtended`**（13）/ **`toolJudge`**（5）：开 = 开放注册，关 = 该级从模型工具列表移除。三级各自独立，封一级不波及别级；`core` 级不给开关（封了就没了活动入口）。
+
+行为要点：
+
+- **封印 = 反注册**（工具从模型的工具列表里消失），不是执行期拒绝。解锁信号挂在 `bcdp_*` 调用的公共出口上，工具体不知道分级存在；`bcdp_status` / `bcdp_help` / `bcdp_doctor` 自身也算活动信号（读了指南就得有工具可用）。
+- **闲置自动收回**：`lazy` + `idleTimeoutMin > 0` 时，空闲回收把后台浏览器停掉的同一刻收回扩展面；下次活动重新铺开。`always` 模式不受影响。
+- `legacyEgoToolNames` 的 `ego_*` 别名跟随其 `bcdp_*` 本体的级别。
+- 当前注入面写在 `bcdp_doctor` 报告首行（`tool injection: mode=lazy browse=open extended=open judge=open judgeKey=none active=no → live 6 / sealed 32`），不用猜。
+- 默认档下不碰浏览器的会话只有 **6** 个工具在场（≈ 2.9K 字符，−88.6%）；要回到历史行为把 `toolInjection` 改成 `always`（38 件全在场需再配一个评审 Key）。
+- 四个字段都带 schema `.default()`：volatile 字段的表单描述符直接拿 schema 默认值，不写默认会出现「面板显示 A、运行时用 B」。
+
+> 取舍提醒：窄工具（一个动作一个工具）是模型写对参数、少重试的护栏。把交互原子合并成脚本逃生舱会省上下文，但代价是模型要自己写 heredoc、出错率上升——本插件保持全部 38 个工具的签名不变，只改**出现时机**。
+
 ## 观察窗怎么用
 
 右下角 **🌐 常驻小球** → 点开：

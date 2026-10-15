@@ -121,9 +121,35 @@ export function getLastEgoActivity(): number {
   return lastEgoActivity
 }
 
+// ── activity subscribers (tool-tier injection) ────────────────────────────
+// The tier controller needs the same signal the reaper reads — "a bcdp_* call
+// just happened" — but must not have to thread a callback through the nine
+// `markEgoToolCall()` call sites in the tool bodies. One module-level fan-out
+// keeps the tools oblivious to tiers.
+const activityListeners = new Set<() => void>()
+
+/**
+ * Subscribe to "one bcdp_* call just landed".
+ * @returns the unsubscribe function.
+ */
+export function onEgoActivity(cb: () => void): () => void {
+  activityListeners.add(cb)
+  return () => {
+    activityListeners.delete(cb)
+  }
+}
+
 export function markEgoToolCall(sessionId?: string): void {
   toolCallCount += 1
   lastEgoActivity = Date.now()
+  // Tier fan-out: never let a listener throw into the tool's own result path.
+  for (const cb of [...activityListeners]) {
+    try {
+      cb()
+    } catch {
+      /* tier reapply is best-effort; the tool call stands */
+    }
+  }
   // Push the new count to every connected SSE client immediately. The event
   // payload carries the counter AND the calling session id (when the caller
   // supplied one): the client scopes its sidebar auto-open to that session, so

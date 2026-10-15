@@ -78,8 +78,8 @@ export function installSettingsAuto(ctx: EgoContext, config: RawConfig): Setting
     }
   })()
   if (
-    typeof legacyModule.installSettingsSection === 'function' &&
-    typeof legacyModule.settingsNamespace === 'function'
+    typeof legacyModule?.installSettingsSection === 'function' &&
+    typeof legacyModule?.settingsNamespace === 'function'
   ) {
     const listeners = new Set<() => void>()
     let current = derefVolatileConfig(config)

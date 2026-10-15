@@ -39,12 +39,13 @@ import { existsSync, readdirSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { importLoginCookies } from './login-import.ts'
-import { initCastServer, markEgoToolCall, getLastEgoActivity, setAttachEndpoint, recycleWorker } from './cast-server.ts'
+import { initCastServer, markEgoToolCall, getLastEgoActivity, onEgoActivity, setAttachEndpoint, recycleWorker } from './cast-server.ts'
 import { registerEgoBrowserGateway } from './gateway.ts'
 import { EGO_HELP_INDEX } from './help.ts'
 import { HUMAN_CHECK_PROBE } from './captcha.ts'
 import { Config as ConfigSchema, resolveConfig, judgeSettingsOf, EGO_CLI_BLOCKED, CHROME_BLOCKED, filterArgs } from './config.ts'
 import { installSettingsAuto, registerSettingsBridge } from './settings.ts'
+import { createTierInjector, judgeConfigured, unknownTieredTools, type TierInjector } from './toolTiers.ts'
 import { getSharedFfmpegInstallationManager } from './ffmpeg-installation.ts'
 import { SENTINEL, j, str, num, bool, readAll, SAFE_FN } from './util.ts'
 import {
@@ -627,6 +628,11 @@ interface EgoRuntimeConfig {
   readonly idleTimeoutMin: number
   readonly chromeArgs: string
   readonly isolateSpaces: boolean
+  // ── 工具分级注入（src/toolTiers.ts）───────────────────────────────
+  readonly toolInjection: ResolvedConfig['toolInjection']
+  readonly toolBrowse: boolean
+  readonly toolExtended: boolean
+  readonly toolJudge: boolean
   // ── R1/R7: connection sequence + activation ─────────────────────────────
   readonly links: BrowserLink[]
   /** R7 — extra `ego-cli` rows that sanitize dropped (local-only singleton). */
@@ -678,6 +684,13 @@ interface EgoRuntimeConfig {
 
 interface ExecLike {
   signal?: AbortSignal
+}
+
+/** 常驻级工具看到的工具分级视图（活动脉冲 + 活动位 + 当前注入面）。 */
+interface TierView {
+  pulse: () => void
+  active: () => boolean
+  surface: () => { live: string[]; sealed: string[] }
 }
 
 async function runEgoScript(subprocess: SubprocessService, script: string, exec: ExecLike, cfg: EgoRuntimeConfig, graceOverrideMs?: number): Promise<WarmupResult> {
@@ -916,6 +929,10 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
     get chromeArgs() { return resolveConfig(bridge.source() as RawConfig).chromeArgs },
     get isolateSpaces() { return resolveConfig(bridge.source() as RawConfig).isolateSpaces },
     get idleTimeoutMin() { return resolveConfig(bridge.source() as RawConfig).idleTimeoutMin },
+    get toolInjection() { return resolveConfig(bridge.source() as RawConfig).toolInjection },
+    get toolBrowse() { return resolveConfig(bridge.source() as RawConfig).toolBrowse },
+    get toolExtended() { return resolveConfig(bridge.source() as RawConfig).toolExtended },
+    get toolJudge() { return resolveConfig(bridge.source() as RawConfig).toolJudge },
     // ── R1: CDP sequence + activation ────────────────────────────────────
     get links() { return resolveConfig(bridge.source() as RawConfig).links },
     // Read from the RAW source on purpose: the drop count only exists before
@@ -964,28 +981,98 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
     get jevStepBudget() { return judgeSettingsOf(resolveConfig(bridge.source() as RawConfig)).stepBudget },
     get jevWallMs() { return judgeSettingsOf(resolveConfig(bridge.source() as RawConfig)).wallMs },
   }
+  // ── 工具分级注入 ──────────────────────────────────────────────────────
+  // 以前挂载时一次性把 38 个 bcdp_* 工具注册进宿主工具表，每个会话每一轮都付
+  // schema 成本（实测 desc+params ≈ 25.6K 字符），而不碰浏览器的会话一个也用不上。
+  // 现在把「谁能出现在模型面前」交给 src/toolTiers.ts 的策略，注册时机由这个
+  // 控制器执行：封印 = 反注册（从工具列表消失），不是执行期拒绝——与
+  // prime-memory 的工具组封印同式。
+  let browserActive = false
+  const tiers: TierInjector = createTierInjector({
+    register: (tool) => {
+      const dispose = ctx.tools.register(tool) as unknown as () => void
+      // Cordis lifecycle: unregister the tool when the plugin unmounts.
+      ctx.effect?.(() => dispose)
+      return dispose
+    },
+    policy: () => ({
+      injection: cfg.toolInjection,
+      toolBrowse: cfg.toolBrowse,
+      toolExtended: cfg.toolExtended,
+      toolJudge: cfg.toolJudge,
+      judgeConfigured: judgeConfigured({ jevKey: cfg.jevKey, layaKey: cfg.layaKey }),
+      active: browserActive,
+    }),
+    logger: ctx.logger,
+  })
+  /** 活动信号：只翻一次牌，重复调用零成本。 */
+  const pulseActivity = (): void => {
+    if (browserActive) return
+    browserActive = true
+    tiers.reapply()
+  }
+  // markEgoToolCall() 是所有 bcdp_* 调用的公共出口（也是 idle reaper 的活动时钟），
+  // 分级解锁挂在同一个信号上：工具体不需要知道 tiers 存在。
+  {
+    const offActivity = onEgoActivity(pulseActivity)
+    ctx.effect?.(() => offActivity)
+  }
+  /**
+   * 闲置回收后把注入面收回 core 级（lazy 模式专属）：浏览器已经停了，模型
+   * 面上留着 30 多个驱动它的工具只是白付。下一次活动会重新铺开。
+   */
+  const sealAfterReap = (): void => {
+    if (cfg.toolInjection !== 'lazy' || !browserActive) return
+    browserActive = false
+    tiers.reapply()
+  }
+  /**
+   * 常驻级工具看到的分级视图：`pulse` = 把本次调用当成一次浏览器活动；
+   * `surface` = 当前注入面（doctor 直接打出来，开关状态得看得见）。
+   */
+  const tierView: TierView = {
+    pulse: pulseActivity,
+    active: () => browserActive,
+    surface: () => tiers.surface(),
+  }
   const reg = (tool: ToolHandle): void => {
-    const dispose = ctx.tools.register(tool) as unknown as () => void
-    // Cordis lifecycle: unregister the tool when the plugin unmounts.
-    ctx.effect?.(() => dispose)
+    tiers.offer(tool)
     // T8.5: optional ego_* aliases for scripts written before the bcdp_*
     // rename. Off by default; the old names collide with the upstream
     // ego-browser plugin, so enabling this IS the opt-in to that conflict.
+    // The alias follows its bcdp_* twin's tier (tierOfTool is prefix-agnostic).
     if (cfg.legacyEgoToolNames && typeof tool.name === 'string' && tool.name.startsWith('bcdp_')) {
       const alias = { ...tool, name: 'ego_' + tool.name.slice('bcdp_'.length) } as ToolHandle
       try {
-        const disposeAlias = ctx.tools.register(alias) as unknown as () => void
-        ctx.effect?.(() => disposeAlias)
+        tiers.offer(alias)
       } catch (error) {
         ctx.logger?.warn?.(`dsh-browser-cdp: legacy alias ${alias.name} not registered: ${(error as Error).message}`)
       }
     }
   }
-  registerEgoStatus(ctx, cfg, reg)
+  registerEgoStatus(ctx, cfg, reg, tierView)
   registerAuthFlush(ctx, cfg, reg)
   registerLoginImport(ctx, cfg, reg)
   registerActionTools(ctx, cfg, reg)
-  registerHelpAndDoctor(ctx, cfg, reg)
+  registerHelpAndDoctor(ctx, cfg, reg, tierView)
+  // 注入面与分级表自检：出现表上没登记的名字 = 它落到了默认 extended，lazy 模式
+  // 下会被悄悄延后注入。测试拦在前面，这条 warn 负责漏网时看得见。
+  {
+    const s = tiers.surface()
+    const unlisted = unknownTieredTools([...s.live, ...s.sealed])
+    if (unlisted.length > 0) {
+      ctx.logger?.warn?.(`dsh-browser-cdp: tools missing from the tier table (defaulted to extended): ${unlisted.join(' ')}`)
+    }
+    ctx.logger?.info?.(
+      `dsh-browser-cdp: tool surface ${s.live.length}/${s.live.length + s.sealed.length}` +
+      ` (injection=${cfg.toolInjection}, switches browse=${cfg.toolBrowse ? 'open' : 'sealed'}` +
+      ` extended=${cfg.toolExtended ? 'open' : 'sealed'} judge=${cfg.toolJudge ? 'open' : 'sealed'},` +
+      ` judgeConfigured=${judgeConfigured({ jevKey: cfg.jevKey, layaKey: cfg.layaKey })})`,
+    )
+  }
+  // 设置页翻 toolInjection / toolBrowse / toolExtended / toolJudge → volatile 热更 → 当场重算注入面
+  // （与 prime-memory 的 applyToolSeals 同式：不需要重启插件）。
+  bridge.onChange(() => tiers.reapply())
 
   // ── R1: CDP attach cache — the bridge between settings and every spawn ────
   // `resolveEgoEnv` is synchronous and reads `defaultAttachCache`, so the cache
@@ -1186,6 +1273,9 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
             graceMs: 8_000,
           })
           handle.done.catch(() => null)
+          // 分级注入：浏览器此刻已经停了，把活动期铺开的工具收回 core 级
+          // （仅 lazy 模式；always 模式的活动位不影响注入面，不去动它）。
+          sealAfterReap()
         } catch {
           // never let the reaper throw
         }
@@ -1232,7 +1322,7 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
   )
 }
 /** `bcdp_status` probes CLI availability by running the real `--status` path. */
-function registerEgoStatus(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool: ToolHandle) => void): void {
+function registerEgoStatus(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool: ToolHandle) => void, tiers: TierView): void {
   reg(
     defineTool({
       name: 'bcdp_status',
@@ -1257,8 +1347,12 @@ function registerEgoStatus(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool: T
       // budget so it does not report "unavailable" merely because the backing
       // browser was still warming up.
       timeoutMs: 25_000,
-      execute: async () =>
-        withEgoLock(async () => {
+      execute: async () => {
+        // 分级注入：常驻级的探测/指南/诊断被调用 = 用户或模型已经在关
+        // 注浏览器，把其余分级按当前深度铺开来（幂等）。不借
+        // markEgoToolCall：那个信号会顺带弹开侧栏观察面板。
+        tiers.pulse()
+        return withEgoLock(async () => {
           try {
             const handle = ctx.subprocess.spawn({
               argv: [...cfg.egoArgvPrefix, '--status'],
@@ -1288,7 +1382,8 @@ function registerEgoStatus(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool: T
               error: describeSpawnFailure(err),
             }
           }
-        }),
+        })
+      },
       presentCall: () => ({
         card: 'generic',
         title: 'bcdp_status',
@@ -2407,7 +2502,7 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
 
 // ── bcdp_help: built-in tool / category index ───────────────────────────────
 /** Register bcdp_help / bcdp_doctor / bcdp_script. */
-function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool: ToolHandle) => void): void {
+function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool: ToolHandle) => void, tiers: TierView): void {
   reg(
     defineTool({
       name: 'bcdp_captcha',
@@ -2481,6 +2576,9 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
       },
       timeoutMs: 10_000,
       execute: async (args: Record<string, unknown>) => {
+        // 分级注入：读了指南就得有工具可用，否则指南里介绍的工具模型
+        // 根本调不到。
+        tiers.pulse()
         const q = str(args.topic, '').trim().toLowerCase()
         const key = Object.prototype.hasOwnProperty.call(EGO_HELP_INDEX, q) ? q : ''
         const text = key
@@ -2514,7 +2612,20 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
       },
       timeoutMs: 25_000,
       execute: async () => {
+        // 分级注入：预检即视为浏览器活动（同 bcdp_status）。
+        tiers.pulse()
         const lines: string[] = []
+        // 工具注入面：每个开关的当前状态与实际注册了多少工具，一行说完。
+        {
+          const s = tiers.surface()
+          const key = judgeConfigured({ jevKey: cfg.jevKey, layaKey: cfg.layaKey })
+          lines.push(
+            `tool injection: mode=${cfg.toolInjection}` +
+            ` browse=${cfg.toolBrowse ? 'open' : 'sealed'} extended=${cfg.toolExtended ? 'open' : 'sealed'}` +
+            ` judge=${cfg.toolJudge ? 'open' : 'sealed'} judgeKey=${key ? 'set' : 'none'}` +
+            ` active=${tiers.active() ? 'yes' : 'no'} → live ${s.live.length} / sealed ${s.sealed.length}`,
+          )
+        }
         // vendored runtime
         lines.push(`egoBin: ${cfg.egoBin}`)
         try { lines.push(`egoBin exists: ${existsSync(cfg.egoBin)}`) } catch { lines.push('egoBin exists: n/a') }

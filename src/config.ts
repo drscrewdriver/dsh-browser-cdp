@@ -21,6 +21,7 @@ import { sanitizeLinks } from './cdp-targets.ts'
 const backend = z.union(['auto', 'cdp', 'ffmpeg'])
 const profile = z.union(['low', 'balanced', 'high'])
 const cdpMode = z.union(['auto', 'local', 'remote'])
+const toolInjection = z.union(['lazy', 'always'])
 const encoder = z.union([
   'auto', 'software', 'h264_mf', 'h264_nvenc', 'h264_qsv', 'h264_amf',
   'h264_videotoolbox', 'h264_vaapi',
@@ -114,6 +115,17 @@ export const Config = z.object({
   // ── M0.9 local launcher knobs (declared now, launcher lands in T2.11+) ──
   allowLocalFallback: z.boolean().description('auto mode may fall back to launching a local browser when the activated target is unreachable. Off by default: the fallback must be explicit.').volatile(),
   legacyEgoToolNames: z.boolean().description('ALSO register the tools under their old ego_* names for scripts written before the bcdp_* rename. Off by default; mutually exclusive with installing the upstream ego-browser plugin (same tool names).'),
+  // ── 工具分级注入（src/toolTiers.ts）─────────────────────────────────
+  // 38 个 bcdp_* 工具每个会话每一轮都要付 schema 成本，而多数会话不碰
+  // 浏览器。每个字段都带 `.default()`：volatile 字段的表单描述符直接把 schema
+  // 默认值画出来，不写默认就会出现「面板显示 A、运行时用 B」。本插件其余
+  // 字段靠 resolveConfig 兑底是因为它们有迁移史；这几个新字段没这份包被。
+  toolInjection: toolInjection.default('lazy').description('lazy = keep only the core tier resident and inject the rest after the first bcdp_* activity (the idle reaper seals them back); always = register every allowed tool at mount (the historical behaviour).').volatile(),
+  // 一级一个开关，ON = 开放注册，OFF = 封印（从模型工具列表移除）。core 级不给
+  // 开关：封掉它 lazy 模式就没有解锁入口了。
+  toolBrowse: z.boolean().default(true).description('Basic browsing tier (14 tools: click / fill / key / hover / scroll / select / check / screenshot / page_info / read_element / js / wait / wait_for_selector / space_close). Off = sealed: removed from the model tool list.').volatile(),
+  toolExtended: z.boolean().default(true).description('Extended tier (13 tools: drag / upload / download / dialog / raw CDP / http / cli / script / captcha / auth_flush / login_import / wait_for_url / wait_for_response). Off = sealed even after browser activity.').volatile(),
+  toolJudge: z.boolean().default(true).description('Judgement tier (5 bcdp_jev_* tools). On still requires a JEV or Laya key: without one they can only answer "not configured", so they stay sealed anyway.').volatile(),
   localHeadless: z.boolean().description('Run the locally launched browser headless.'),
   remoteEnabled: z.boolean().description('Master switch for REMOTE attach. Off = the configured target sequence is preserved but inert (nothing probes or connects remotely); flip back on any time. Does not affect cdpMode=local.').volatile(),
   localUserDataDir: z.string().description('Profile dir for the locally launched browser. Empty = managed dir; never point at your daily Chrome profile.'),
@@ -341,6 +353,15 @@ export function judgeSettingsOf(config: ResolvedConfig): JudgeSettings {
   }
 }
 
+/**
+ * 分级开关的默认极性 = 开放。只有显式的假值才是封印：`undefined`（用户从没碰
+ * 过表单）与手改 YAML 写出的 `'false'` / `0` 都得认，否则一个空字段就会把
+ * 14 个工具静默封掉。prime-memory 的 `v.toolRoom !== false` 同式，只是这里把
+ * 手改形状一并接住。
+ */
+const tierOpenByDefault = (value: unknown): boolean =>
+  !(value === false || value === 'false' || value === 0)
+
 export function resolveConfig(config: RawConfig = {}): ResolvedConfig {
   // 0.1.7: volatile fields arrive as live refs in the composition entry —
   // deref them once here so the whole resolution below sees plain data.
@@ -396,6 +417,15 @@ export function resolveConfig(config: RawConfig = {}): ResolvedConfig {
     cursorName: typeof config.cursorName === 'string' && config.cursorName.trim() !== '' ? config.cursorName : 'DeepSeek',
     allowLocalFallback: config.allowLocalFallback === undefined ? false : Boolean(config.allowLocalFallback),
     legacyEgoToolNames: Boolean(config.legacyEgoToolNames),
+    // ── 工具分级注入 ──────────────────────────────────────────────
+    // 默认值同时写在这里和 schema `.default()` 上：schema 默认让设置表单与生效
+    // 值同源，这里的兑底让手改/缺失/老宿主不写值时也能解出同一个答案。
+    // `!== false` 是 prime-memory 的写法（settings.ts 的 toolRoom 同式）：
+    // undefined 一律当作「开放」，只有显式 false 才是封印。
+    toolInjection: oneOf(config.toolInjection, ['lazy', 'always'], 'lazy'),
+    toolBrowse: tierOpenByDefault(config.toolBrowse),
+    toolExtended: tierOpenByDefault(config.toolExtended),
+    toolJudge: tierOpenByDefault(config.toolJudge),
     localHeadless: config.localHeadless === undefined ? false : Boolean(config.localHeadless),
     localUserDataDir: typeof config.localUserDataDir === 'string' ? config.localUserDataDir : '',
     lightpandaArgs: trimmed(config.lightpandaArgs),

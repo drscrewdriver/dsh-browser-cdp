@@ -11,7 +11,7 @@ describe("FamLinks v2 write discipline (source contracts)", () => {
     expect(end).toBeGreaterThan(start);
     const fn = source.slice(start, end);
     const linksWrite = fn.indexOf("writeLinks(res.links)");
-    const activeClear = fn.indexOf("scope.set('activeTargetId', '')");
+    const activeClear = fn.indexOf("commitField(scope, 'activeTargetId', '')");
     expect(linksWrite).toBeGreaterThan(-1);
     expect(activeClear).toBeGreaterThan(linksWrite);
   });
@@ -55,16 +55,16 @@ describe("FamLinks v2 write discipline (source contracts)", () => {
 
   it("the managed-local row is explicit and mode-synced", () => {
     expect(source).toMatch(/wt\('linksLocalRow'\)/);
-    expect(source).toMatch(/void scope\.set\('cdpMode', 'local'\)/);
-    expect(source).toMatch(/if \(cdpMode === 'local'\) \{ void scope\.set\('cdpMode', 'auto'\) \}/);
-    expect(source).toMatch(/void scope\.set\('allowLocalFallback'/);
+    expect(source).toMatch(/void commitField\(scope, 'cdpMode', 'local'\)/);
+    expect(source).toMatch(/if \(cdpMode === 'local'\) \{ void commitField\(scope, 'cdpMode', 'auto'\) \}/);
+    expect(source).toMatch(/void commitField\(scope, 'allowLocalFallback'/);
   });
 
   it("the first target added to an empty sequence activates itself", () => {
     expect(source).toMatch(/activeId === ''/);
   });
   it("the cast worker state file is plugin-namespaced (upstream ego-cast.json coexistence)", async () => {
-    expect(source).toMatch(/void scope\.set\('cdpMode', 'local'\)/);
+    expect(source).toMatch(/void commitField\(scope, 'cdpMode', 'local'\)/);
     const { readFile } = await import("node:fs/promises");
     const workerTs = await readFile(new URL("../src/worker/cdp-cast-worker.ts", import.meta.url), "utf8");
     const castServer = await readFile(new URL("../src/cast-server.ts", import.meta.url), "utf8");

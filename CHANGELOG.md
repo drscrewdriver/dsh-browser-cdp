@@ -1,5 +1,40 @@
 > ⚠️ **0.18.10 已被 registry 烧号**：npmjs 受理后长期停留在 staged 状态从未提交（读路径 404、重发 `EPUBLISHCONFLICT: previously staged`），版本号永久不可安装——**安装请用 0.18.11**（内容 = 0.18.10 全部 + dock 注册诊断 `__dshBrowserCdpDeco` + locale 补齐 + 点选卡片正则放宽）。0.18.5 同前例。
 
+## [1.2.0] - 2026-10-15 — 工具分级注入（默认 lazy）+ 设置开关胶囊化与乐观锁写入
+
+> **升级影响（从 1.1.5）**：默认档从「挂载即注册 38 个」变为 **`lazy`**——不碰浏览器的会话只常驻 6 个核心工具，首次 `bcdp_*` 调用后按开关注入。工具**名字与签名零改动**，只改出现时机；若你有脚本期望任一 `bcdp_*` 无条件在场，把设置页 `toolInjection` 改回 `always` 即可（volatile 热更，不需重启）。另外评审级（`bcdp_jev_*` 5 件）现在额外要求配了 JEV/Laya Key 才注入——没 Key 它们本来也只能回答「未配置」。
+
+### 新增：工具分级注入
+- **`src/toolTiers.ts`**：把「哪个工具在什么条件下允许注册」收成一处纯函数策略，附 `createTierInjector` 控制器（`offer`/`reapply`/`surface`），只接一个 `register` 回调、不依赖 Cordis，可脱离宿主单测。四级：**core**（6：`status`/`doctor`/`help`/`space_open`/`navigate`/`snapshot`，常驻不可封印——否则 lazy 连解锁入口都没有）/ **browse**（14）/ **extended**（13）/ **judge**（5）。
+- **一级一个封印开关**（学 prime-memory 的「工具封印」同形同极性）：`toolInjection`（`lazy` 默认 / `always`）、`toolBrowse`、`toolExtended`、`toolJudge`，全部 volatile + schema `.default()`；ON = 开放注册、OFF = 封印（反注册，从模型工具列表消失，不是执行期拒绝）。封一级不波及别级。
+- **活动驱动注入**：解锁信号挂在 `markEgoToolCall()` 的模块级 fan-out（新 `onEgoActivity()`）上，九个工具体零改动；`bcdp_status`/`bcdp_help`/`bcdp_doctor` 走独立 `pulse`（不借 `markEgoToolCall`，那会顺带弹开侧栏观察面板）。`bridge.onChange(() => tiers.reapply())` 让设置页翻开关当场重算注入面。
+- **闲置自动收回**：`lazy` + `idleTimeoutMin > 0` 时，reaper 停掉后台浏览器的同一刻收回扩展面，下次活动重新铺开。
+- **`bcdp_doctor` 首行报注入面**：`tool injection: mode=lazy browse=open extended=open judge=open judgeKey=none active=no → live 6 / sealed 32`；`bcdp_help` 新增 `topic=injection`（含「工具不在列表里就先跑 status/doctor，别猜不存在的工具名」）。
+- 设置面：GUI 卡片新增首位分块「工具封印」（原在「基础」背后），TUI `SettingsSection` 四字段同样排到 `fields` 最前。
+
+### 新增：设置卡开关形态与写路径
+- **胶囊开关 `FamSwitch`**：布尔项不再用原生 `type='checkbox'`，改为 38×22 主题令牌胶囊（`--dsw-alias-bg-brand` / `--dsw-alias-bg-module-platform`，带 fallback），旋钮 `translateX(16px)` + 0.16s 过渡；用原生 `<button role="switch" aria-checked>` 自带聚焦与回车/空格。卡内三处裸 checkbox（links 行启用 / CLI sdk 路径 / auto 回落许可）一并换形。
+- **`FamBoolRow` 乐观态**：点下去先本地翻转（pending 半透、锁重复点击），宿主快照追上来才清 pending；重试预算用尽则**弹回宿主真值 + 亮一行提示**（中英双语）——开关停在「看起来改了其实没改」是最坑的状态。
+- **乐观锁写入 `src/client/fam-write.ts`**：`commitField(scope, field, value)` 默认 3 次尝试、间隔 300ms；`set` 同步抛 / reject / 返回 false 三条失败路径同等处理，异常不漏进 React 事件回调。卡内 14 个写入点全部收口，`scope.set(` 裸调用清零。
+
+### 修复
+- **`src/settings.ts` 崩溃**：`installSettingsAuto` 对 `createRequire('@deepseek-ai/dsh-settings')` 的返回值直接解引用（`typeof legacyModule.installSettingsSection`）——该包不在宿主 `node_modules` 时（TUI/headless/测试）`legacyModule` 为 `undefined`，整个 `apply()` 抛 `TypeError`。改为可选链。由新挂载测试暴露。
+- **桥轨拒写先重读再报失败**：`makeBridgeScope().set` 以前在 `settings-conflict` 时 `void refresh()` 后立即 `return false`，手里 `revision` 还是陈的，上层重试等于白重。现在把 `describe` 等到底再交回失败（网络异常同路）。
+
+### 不变量
+- 38 个工具的名字、`description`、`parameters` 签名**零改动**——只改出现时机，不改手感。窄工具（一个动作一个工具）是模型写对参数、少重试的护栏，合并成脚本逃生舱不划算。
+- `runtime/` 零改动；`Browser.close` 不发目标端点等既有守卫不变。
+- 重试不会丢更新：宿主 `settings.mutate(ns, ops, expectedRevision)` 在 revision 不匹配时**拒写而不是覆盖**，所以重放的是自己这一次改动。
+
+### 测试
+- 新增 39 条：`tests/tool-tiers.test.ts`（17：分级表与源码 38 个 `name: 'bcdp_*'` 双向对齐的漂移守卫、四道闸矩阵、控制器幂等与单级封印）、`tests/tier-mount.test.ts`（9：最小宿主替身真走一遍 `apply()`，验默认 6 / `always` 33 / `always`+Key 38 / 活动后 33 / 单封 extended 后 20 / 配 Key 当场出现 / `ego_*` 别名跟随本体 / 卸载归零）、`tests/fam-write.test.ts`（6）、`tests/client-switch.test.ts`（4 条源码契约）。
+- `tests/fam-links.contract.test.ts` 三处钉住旧 `scope.set(...)` 形态的契约断言同步换为 `commitField(scope, …)`。
+
+### 验证
+- 全测 **749 passed / 12 skipped**；两套 `tsc` 通过；`tsdown` build 过；`npm pack` 走 `prepack` 重建，包内 `lib` 与仓库逐字节一致（V6a）。
+
+> 本机验证迭代 1.1.6-local.1 / 1.1.7-local.1 / 1.1.8-local.1 已折叠进上面的 1.2.0，未单独发布（那三个号只存在于本地 tgz 与 desktop profile 的 `file:` 指针）。
+
 ## [0.18.21] - 2026-10-04 — Lightpanda 受管行类型：按系统拉起 serve，有头/无头分型，顺序即优先级（同 0.17.25 同源）
 
 ### 新增

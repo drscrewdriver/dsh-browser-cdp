@@ -21,9 +21,16 @@ const pluginJson = JSON.parse(await readFile(new URL("../dsh-plugin.json", impor
 const DSH_PEERS = Object.keys(pkg.peerDependencies).filter((k: string) => /^@deepseek-ai\/dsh-/.test(k));
 const RANGES = DSH_PEERS.map((k: string) => pkg.peerDependencies[k]);
 const RANGE = RANGES[0];
-// Shared range lower bound, e.g. ">=0.2.0-rc.1 <0.2.1-0", ">=0.1.2-rc.1" or
-// ">=0.1.0-0 <0.3.0-0" -> "0.2.0" / "0.1.2" / "0.1.0".
-const LINE = (RANGE.match(/^>=(\d+\.\d+\.\d+)/) || [])[1] as string | undefined;
+// Exact-rc-enumeration strategy (双清单同串精确枚举纪律): the shared range is a
+// `||`-joined list of explicit `X.Y.Z-rc.N` terms rather than a `>=…<…` window.
+const ENUM_TERMS = RANGE.split("||").map((t) => t.trim());
+const EXACT_ENUM =
+  ENUM_TERMS.length > 1 &&
+  ENUM_TERMS.every((t) => /^\d+\.\d+\.\d+(?:-rc\.\d+)?$/.test(t));
+// Shared range lower bound, e.g. ">=0.2.0-rc.1 <0.2.1-0", ">=0.1.2-rc.1",
+// ">=0.1.0-0 <0.3.0-0" or the first enum term "0.1.7-rc.1 || …"
+// -> "0.2.0" / "0.1.2" / "0.1.0" / "0.1.7".
+const LINE = (RANGE.match(/^>=(\d+\.\d+\.\d+)/) || RANGE.match(/^(\d+\.\d+\.\d+)/) || [])[1] as string | undefined;
 // Detected range strategy. Segment/master ranges anchor to ONE host rc line;
 // the unified strategy (branch unified/15rc) deliberately spans every line with a
 // wide window so a single build serves them all -- there is no single "this line"
@@ -36,8 +43,12 @@ describe("manifest version-line discipline", () => {
     expect(new Set(RANGES).size).toBe(1);
   });
 
-  it("the shared range is anchored: rc-window (segment era), open-ended (master era) or unified cross-line window", () => {
-    expect(RANGE).toMatch(/^>=(?:\d+\.\d+\.\d+-rc\.\d+(?:\s+<\d+\.\d+\.\d+-0)?|\d+\.\d+\.\d+-0\s+<\d+\.\d+\.\d+-0)$/);
+  it("the shared range is anchored: exact rc enumeration, rc-window (segment era), open-ended (master era) or unified cross-line window", () => {
+    if (EXACT_ENUM) {
+      expect(ENUM_TERMS.every((t) => /^\d+\.\d+\.\d+-rc\.\d+$/.test(t))).toBe(true);
+    } else {
+      expect(RANGE).toMatch(/^>=(?:\d+\.\d+\.\d+-rc\.\d+(?:\s+<\d+\.\d+\.\d+-0)?|\d+\.\d+\.\d+-0\s+<\d+\.\d+\.\d+-0)$/);
+    }
     expect(LINE).toBeTruthy();
   });
 
@@ -84,7 +95,7 @@ describe("manifest version-line discipline", () => {
       return;
     }
     expect(description).toContain(LINE);
-    if (/\[DSH [^\]]*line:/.test(description)) {
+    if (/\[DSH [^\]]*\bline\b/.test(description)) {
       expect(description).toMatch(/use the \d+\.\d+\.x line/);
     }
   });

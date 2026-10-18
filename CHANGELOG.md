@@ -1,3 +1,7 @@
+## 1.2.2 (2026-10-18)
+
+- hosts: 追加 0.2.1-rc.2 声明面枚举（34/34 @deepseek-ai/* 宿主 peer 逐包 npm 实测 rc.2 在版；本插件不触 ctx.web provider 与 conversation.input.model.label 槽，代码零改动，纯元数据发版；农场 rc.2 格挂账待命）
+
 > ⚠️ **0.18.10 已被 registry 烧号**：npmjs 受理后长期停留在 staged 状态从未提交（读路径 404、重发 `EPUBLISHCONFLICT: previously staged`），版本号永久不可安装——**安装请用 0.18.11**（内容 = 0.18.10 全部 + dock 注册诊断 `__dshBrowserCdpDeco` + locale 补齐 + 点选卡片正则放宽）。0.18.5 同前例。
 
 ## [1.2.0] - 2026-10-15 — 工具分级注入（默认 lazy）+ 设置开关胶囊化与乐观锁写入

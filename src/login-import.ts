@@ -196,13 +196,35 @@ async function connectCdp(wsUrl: string, timeoutMs: number): Promise<{ client: C
   return { client: new CdpClient(ws as never), close: () => { try { ws.close() } catch { /* ignore */ } } }
 }
 
-async function browserWsUrl(port: number): Promise<string> {
-  const r = await fetch(`http://127.0.0.1:${port}/json/version`, { signal: AbortSignal.timeout(3000) })
-  if (!r.ok) throw new Error(`/json/version HTTP ${r.status} on port ${port}`)
-  const j = (await r.json()) as { webSocketDebuggerUrl?: string }
-  if (!j.webSocketDebuggerUrl) throw new Error('browser did not expose webSocketDebuggerUrl')
-  return j.webSocketDebuggerUrl
+async function browserWsUrl(port: number, retries = 2): Promise<string> {
+  // Error typing (issue #1-②): undici collapses every connect failure into a
+  // bare "fetch failed". Translate it into something an operator can act on,
+  // and retry the connect-refused/timeout case: DevToolsActivePort can be
+  // published a beat before the HTTP server actually answers, and an instance
+  // that dies right after writing the port must not surface as "fetch failed".
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const r = await fetch(`http://127.0.0.1:${port}/json/version`, { signal: AbortSignal.timeout(3000) })
+      if (!r.ok) throw new Error(`/json/version HTTP ${r.status} on port ${port}`)
+      const j = (await r.json()) as { webSocketDebuggerUrl?: string }
+      if (!j.webSocketDebuggerUrl) throw new Error('browser did not expose webSocketDebuggerUrl')
+      return j.webSocketDebuggerUrl
+    } catch (err) {
+      const nm = (err as Error | null)?.name
+      const timedOut = nm === 'TimeoutError' || nm === 'AbortError'
+      const refused = err instanceof TypeError // undici connect failure — "fetch failed"
+      if ((timedOut || refused) && attempt < retries) {
+        await sleep(500)
+        continue
+      }
+      if (timedOut) throw new Error(`/json/version on port ${port} timed out after ${retries + 1} attempts`)
+      if (refused) throw new Error(`DevTools HTTP endpoint unreachable on port ${port} after ${retries + 1} attempts (connection refused — the browser may have exited right after publishing the port)`)
+      throw err
+    }
+  }
 }
+/** Exported for issue #1-② error-typing regression tests (no other consumer). */
+export { browserWsUrl }
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -387,8 +409,13 @@ interface SpawnLike {
     env?: NodeJS.ProcessEnv
     stdio: { stdin: { data: string }; stdout: { maxBytes: number }; stderr: { maxBytes: number } }
     graceMs: number
-  }): { done: Promise<{ exitCode: number | null; signal: NodeJS.Signals | null }> }
+  }): {
+    done: Promise<{ exitCode: number | null; signal: NodeJS.Signals | null }>
+    /** Host buffer readers (types.ts SubprocessHandle.collected); optional surface — old shells may not carry it. */
+    collected?: { stdout?: { readFrom(offset: number): { text: string } }; stderr?: { readFrom(offset: number): { text: string } } }
+  }
 }
+type SpawnHandle = ReturnType<SpawnLike['spawn']>
 
 const BATCH = 200
 
@@ -427,7 +454,10 @@ export async function importLoginCookies(opts: LoginImportOptions, deps: { subpr
   // instance on the default profile (the ego agent browser uses its own
   // --user-data-dir and never conflicts).
   let closedSource = false
-  let srcHandle: { done: Promise<{ exitCode: number | null; signal: NodeJS.Signals | null }> } | null = null
+  let srcHandle: SpawnHandle | null = null
+  // Set by the spawn done-callback when the headless source instance exits
+  // BEFORE a DevTools port showed up — early-exit forensics (issue #1-②).
+  let exited: { exitCode: number | null; signal: NodeJS.Signals | null } | null = null
   let tempCdp: { client: CdpClient; close: () => void } | null = null
   let egoCdp: { client: CdpClient; close: () => void } | null = null
   let linkDir: string | null = null
@@ -502,8 +532,10 @@ export async function importLoginCookies(opts: LoginImportOptions, deps: { subpr
     // Back-to-back imports race the PREVIOUS instance's drain (cookie-store
     // flush can outlive the 12s drain window): a spawn while it still holds
     // the profile singleton forwards and never opens a port. Retry once with
-    // a fresh junction after a longer drain.
-    for (let attempt = 0; attempt < 2 && port === null; attempt++) {
+    // a fresh junction after a longer drain. An EARLY EXIT is a deterministic
+    // failure (issue #1-②) — no second attempt, go straight to the forensic
+    // report below.
+    for (let attempt = 0; attempt < 2 && port === null && exited === null; attempt++) {
       if (attempt > 0) {
         await sleep(6000)
         try { await rm(linkDir, { force: true }) } catch { /* ignore */ }
@@ -532,15 +564,32 @@ export async function importLoginCookies(opts: LoginImportOptions, deps: { subpr
         graceMs: 8_000,
       })
       srcHandle.done.catch(() => null)
+      exited = null
+      srcHandle.done.then(
+        (r) => { exited = r },
+        () => { exited = { exitCode: null, signal: null } },
+      )
 
       const deadline = Date.now() + timeoutMs
-      while (Date.now() < deadline) {
+      while (Date.now() < deadline && port === null) {
+        if (exited !== null) break
         try {
           port = parseDevToolsActivePort(await readFile(portFile, 'utf8'))
           if (port !== null) break
         } catch { /* not written yet */ }
         await sleep(250)
       }
+    }
+    // Read through a local: the exit info is written from a done-callback, so
+    // control-flow analysis alone would narrow `exited` to null/never here.
+    const earlyExit = exited as { exitCode: number | null; signal: NodeJS.Signals | null } | null
+    if (port === null && earlyExit !== null) {
+      let tail = ''
+      try {
+        tail = srcHandle?.collected?.stderr?.readFrom(0).text ?? ''
+      } catch { /* no collected surface on this shell */ }
+      tail = tail.slice(-500)
+      return { ok: false, closedSource, error: `${browser.label} headless instance exited early (code=${earlyExit.exitCode ?? 'null'}, signal=${earlyExit.signal ?? 'none'})${tail ? `: ${tail}` : ''} — a lingering background instance may have swallowed the throwaway debug port` }
     }
     if (port === null) return { ok: false, closedSource, error: `${browser.label} headless instance did not expose a DevTools port within ${timeoutMs}ms (another instance may be holding the profile)` }
 

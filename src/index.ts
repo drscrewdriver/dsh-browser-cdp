@@ -1525,6 +1525,10 @@ function registerLoginImport(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
             matched: { type: 'integer' },
             written: { type: 'integer' },
             domains: { type: 'json' },
+            /** Set when the tool gracefully quit the running source browser first (issue #1-①: was returned but undeclared). */
+            closedSource: { type: 'boolean' },
+            /** Set when the source cookie store lost rows during the session and was restored from the pre-boot backup. */
+            restoredFromBackup: { type: 'boolean' },
             error: { type: 'string' },
           },
         },
@@ -2422,6 +2426,7 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
         body: { type: 'string', description: 'Request body (for POST/PUT).' },
         timeout: { type: 'number', description: 'Timeout in ms (default 20000).' },
         mode: { type: 'string', description: "'browser' (default) runs via the page context; 'server' uses Node-side fetch.server." },
+        credentials: { type: 'string', description: "Browser mode only: 'include' attaches the page profile's cookies even cross-origin (reuse login state on API endpoints); 'omit' / 'same-origin' also accepted. Omitted = engine default (cross-origin credentials not sent). Ignored in server mode." },
         space: spaceParam,
       },
       buildScript: (args) => {
@@ -2432,6 +2437,11 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
         }
         if (str(args.body, '') !== '') opts.body = str(args.body, '')
         const mode = str(args.mode, 'browser')
+        // issue #1 (feature ask): let browser-mode requests carry the profile's
+        // login cookies cross-origin. Whitelisted values only — anything else
+        // stays exactly the pre-existing behavior (field absent = engine default).
+        const cred = str(args.credentials, '')
+        if (mode !== 'server' && (cred === 'include' || cred === 'omit' || cred === 'same-origin')) opts.credentials = cred
         const pre = mode === 'server' ? '' : `${useSpace(str(args.space, cfg.defaultSpace))}${ensureRealTab()}`
         return (
           `${pre}${SAFE_FN}` +

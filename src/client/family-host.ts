@@ -31,6 +31,8 @@ export interface FamilyHostSlots {
   register: (options: Record<string, unknown>, component: unknown) => unknown
   entries: (name: string) => readonly Record<string, unknown>[]
   subscribe?: (name: string, fn: () => void) => () => void
+  /** 宿主槽位版本计数（uSES 配对用，每次条目变更 +1）；旧壳可能没有。 */
+  getVersion?: (name: string) => number
 }
 
 /** 家族节固定 id 与子席位 key（与 thinking-levels 的声明严格一致）。 */
@@ -65,12 +67,25 @@ interface MountableEntry {
 
 export interface FamilyHostSectionProps {
   renderSlot?: (key: 'dsh-family.tab', owner?: object, opts?: { only?: string; fallback?: JSX.Element | null }) => JSX.Element | null
-  useTabs?: <S>(selector: (value: readonly FamilyTabEntry[]) => S) => S
+  useTabs?: <S>(selector: (value: readonly FamilyTabEntry[]) => S, eq?: (a: S, b: S) => boolean) => S
   hooks?: { tabs: HostObservable<readonly FamilyTabEntry[]> }
   renderContributor?: (id: string) => JSX.Element | null
 }
 
 const NO_TABS: readonly FamilyTabEntry[] = []
+
+/**
+ * uSES 浅比较（issue #2 的 C 案加固）：引用不同但行内容一致时视为未变。
+ * 主修法是按 getVersion 缓存快照（引用稳定），这里只兑底宿主绑定语义再变的情形。
+ */
+export function eqRows(a: readonly FamilyTabEntry[], b: readonly FamilyTabEntry[]): boolean {
+  if (a === b) return true
+  if (a.length !== b.length) return false
+  return a.every((row, i) => {
+    const other = b[i]
+    return other !== undefined && row.id === other.id && row.order === other.order && row.label === other.label
+  })
+}
 
 /** 通用容器渲染：按 order 依次画出账本里每张贡献卡，不含任何"本插件特例"。 */
 export function FamilyHostSection(props: FamilyHostSectionProps): JSX.Element {
@@ -80,7 +95,7 @@ export function FamilyHostSection(props: FamilyHostSectionProps): JSX.Element {
     if (props.useTabs !== undefined || raw === undefined) return
     return raw.subscribe(() => setPolled(raw.getSnapshot()))
   })
-  const tabs = props.useTabs !== undefined ? props.useTabs(value => value) : polled
+  const tabs = props.useTabs !== undefined ? props.useTabs(value => value, eqRows) : polled
   return createElement(
     'div',
     { style: { display: 'grid', gap: '12px' } },
@@ -151,8 +166,21 @@ export function claimFamilyHostIfOrphaned(
   const timer = setTimeout(() => {
     // 有人持有声明（我们的工厂被跑过）或账本已有卡 → 只做成员，不上位。
     if (isHeld()) return
+    // uSES 契约：快照必须在两次变更之间保持引用稳定，否则宿主的
+    // bindSnapshotSelector 会认为数据每帧都在变 → 无限重渲染 React #185（issue #2）。
+    // 宿主的 per-key 版本计数是权威的变更信号；拿不到版本（旧壳/无方法）时
+    // 退回逐次投影，行为与修复前一致。
+    let cachedVersion = -1
+    let cachedRows: readonly FamilyTabEntry[] = NO_TABS
     const ledger: HostObservable<readonly FamilyTabEntry[]> = {
-      getSnapshot: () => projectLedger(slots),
+      getSnapshot: () => {
+        const v = typeof slots.getVersion === 'function' ? slots.getVersion(FAMILY_CHILD_KEY) : Number.NaN
+        if (v !== cachedVersion || Number.isNaN(v)) {
+          cachedRows = projectLedger(slots)
+          cachedVersion = v
+        }
+        return cachedRows
+      },
       subscribe: listener => (slots.subscribe ? slots.subscribe(FAMILY_CHILD_KEY, listener) : () => undefined),
     }
     /** ≤0.1.5 壳没有 renderSlot：从账本条目现挂组件，失败一律 null。 */

@@ -23,10 +23,10 @@ const RANGES = DSH_PEERS.map((k: string) => pkg.peerDependencies[k]);
 const RANGE = RANGES[0];
 // Exact-rc-enumeration strategy (双清单同串精确枚举纪律): the shared range is a
 // `||`-joined list of explicit `X.Y.Z-rc.N` terms rather than a `>=…<…` window.
-const ENUM_TERMS = RANGE.split("||").map((t) => t.trim());
+const ENUM_TERMS = RANGE.split("||").map((t: string) => t.trim());
 const EXACT_ENUM =
   ENUM_TERMS.length > 1 &&
-  ENUM_TERMS.every((t) => /^\d+\.\d+\.\d+(?:-rc\.\d+)?$/.test(t));
+  ENUM_TERMS.every((t: string) => /^\d+\.\d+\.\d+(?:-rc\.\d+)?$/.test(t));
 // Shared range lower bound, e.g. ">=0.2.0-rc.1 <0.2.1-0", ">=0.1.2-rc.1",
 // ">=0.1.0-0 <0.3.0-0" or the first enum term "0.1.7-rc.1 || …"
 // -> "0.2.0" / "0.1.2" / "0.1.0" / "0.1.7".
@@ -45,7 +45,7 @@ describe("manifest version-line discipline", () => {
 
   it("the shared range is anchored: exact rc enumeration, rc-window (segment era), open-ended (master era) or unified cross-line window", () => {
     if (EXACT_ENUM) {
-      expect(ENUM_TERMS.every((t) => /^\d+\.\d+\.\d+-rc\.\d+$/.test(t))).toBe(true);
+      expect(ENUM_TERMS.every((t: string) => /^\d+\.\d+\.\d+-rc\.\d+$/.test(t))).toBe(true);
     } else {
       expect(RANGE).toMatch(/^>=(?:\d+\.\d+\.\d+-rc\.\d+(?:\s+<\d+\.\d+\.\d+-0)?|\d+\.\d+\.\d+-0\s+<\d+\.\d+\.\d+-0)$/);
     }

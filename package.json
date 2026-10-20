@@ -104,6 +104,6 @@
   },
   "publishConfig": {
     "registry": "https://registry.npmjs.org",
-    "tag": "latest"
+    "tag": "dsh-1.1.0"
   }
 }

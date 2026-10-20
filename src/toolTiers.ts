@@ -25,11 +25,11 @@ const CORE = [
   'bcdp_doctor',
   'bcdp_help',
   'bcdp_space_open',
+  'bcdp_space_close',
   'bcdp_navigate',
   'bcdp_snapshot',
 ] as const
 const BROWSE = [
-  'bcdp_space_close',
   'bcdp_click',
   'bcdp_fill',
   'bcdp_key',
@@ -84,6 +84,28 @@ export const TIER_MEMBERS: Readonly<Record<ToolTier, readonly string[]>> = {
 /** 去掉 `bcdp_`/`ego_` 前缀后的裸名，便于策略表保持前缀无关。 */
 export const bareToolName = (name: string): string => name.replace(/^(?:bcdp|ego)_/, '')
 
+// ── 注入批次（Should Pass，见 issues §9.2/§9.3）──────────────────────────────
+//
+// 对外仍是 4 个开关（core 无开关 / browse / extended / judge），内部把
+// `browse` 拆成 act → observe → wait 三批按顺序放行：一次浏览器活动先放出
+// 「能动手」的一批，再放出「能看结果」的一批，最后才是「等待」类。批次只是
+// 注入时机，不是新的用户开关——F5 已论证 act/observe 的使用时机高度重叠，
+// 拆成用户开关只会让用户永远全开。
+export type ToolBatch = 'act' | 'observe' | 'wait'
+
+/** 批次放行顺序（索引即 rank）。 */
+export const BATCH_ORDER: readonly ToolBatch[] = ['act', 'observe', 'wait']
+
+/** `browse` 级工具 → 批次。未登记的名字按 'act' 处理，绝不因缺表而被卡住。 */
+const BROWSE_BATCH: Readonly<Record<string, ToolBatch>> = {
+  click: 'act', fill: 'act', key: 'act', hover: 'act', scroll: 'act', select: 'act', check: 'act',
+  screenshot: 'observe', page_info: 'observe', read_element: 'observe', js: 'observe',
+  wait: 'wait', wait_for_selector: 'wait',
+}
+
+/** 某工具的注入批次（前缀无关）。 */
+export const batchOfTool = (name: string): ToolBatch => BROWSE_BATCH[bareToolName(name)] ?? 'act'
+
 /**
  * 工具所属分级。未登记的名字落到 `extended`（最严的一档：宁可等活动解锁，
  * 也不让新工具悄悄回到常驻面）；调用方应当在启动时打一条 warn，见
@@ -120,6 +142,11 @@ export interface TierPolicy {
   judgeConfigured: boolean
   /** 本插件挂载以来是否发生过浏览器活动（bcdp_* 调用）。 */
   active: boolean
+  /**
+   * `browse` 内部已放行的批次数（0–3，按 act → observe → wait 顺序）。
+   * 缺省 = 全部放行：既有调用方与测试不必感知批次（`always` 模式也忽略它）。
+   */
+  batchDepth?: number
 }
 
 /** 某级开关的当前极性；`core` 恒开放。 */
@@ -148,7 +175,17 @@ export function tierAllowed(tier: ToolTier, p: TierPolicy): boolean {
 }
 
 /** 某工具此刻是否允许注册（名字 → 分级 → 策略）。 */
-export const toolAllowed = (name: string, p: TierPolicy): boolean => tierAllowed(tierOfTool(name), p)
+export function toolAllowed(name: string, p: TierPolicy): boolean {
+  const tier = tierOfTool(name)
+  if (!tierAllowed(tier, p)) return false
+  // 批次闸只作用于 browse 级、且只在 lazy 模式下：always 是「挂载即全量」的
+  // 历史语义，不该被批次拖慢。`batchDepth` 缺省视为全部放行。
+  if (tier === 'browse' && p.injection !== 'always') {
+    const depth = p.batchDepth ?? BATCH_ORDER.length
+    if (BATCH_ORDER.indexOf(batchOfTool(name)) >= depth) return false
+  }
+  return true
+}
 
 // ── 注入控制器 ──────────────────────────────────────────────────────────────
 //

@@ -1,3 +1,25 @@
+## 1.2.4 (2026-10-21)
+
+### 修复（P0）
+- **`--sdk-path` 贯通到工具执行**：此前只有探测路径带 `--sdk-path`，`runEgoScript` 拼 argv 时不带，`ego-cli` + `useSdkPath: true` 下每个脚本首行都崩 `ReferenceError: taskSpaces is not defined`。现在 `AttachState.sdkPath` 记录探测实际用过的 harness，`buildEgoToolArgv()` 统一为探测与执行构造 argv。写入条件带 R-1 守卫（`useSdkPath && probe.warning === undefined`）：CLI 不认该旗标并回退时，执行侧不会强塞一个它不认的参数。
+
+### 修复（P1）
+- **`bcdp_status` 改 facade 探针**：不再 spawn 官方 CLI 不存在的 `--status`，改为与干活同通道的 `nodejs` 探针，检查 `taskSpaces`/`browser`/`page` 三个 facade；输出新增 `facades` 字段，超时 25s → 15s（实测约 300ms）。
+- **就绪探针不再假阳性**：`useSdkPath` 打开时，除 sentinel 外还要求 `taskSpaces`/`browser` 均为 `object`；未打开时保持原判据，vendored runtime 不受影响。
+- **`--open` / `--stop` 按 link kind 门控**：`ego-cli` 下浏览器本就可见，`--open` 直接返回成功；空闲回收与卸载清理**绝不**对用户自己的 ego lite 发 `--stop`（三处均带明确日志）。
+
+### 变更（P2）
+- `bcdp_space_close` 从 browse 归入 core，与 `bcdp_space_open` 配对。
+- **Schema 压缩**：按 AST 实测成本压缩 Top 工具（`login_import` / `jev_ask` / `http` / `download` / `click` / `jev_run` / `jev_attempt` / `wait_for_selector` / `key` / `read_element` / `wait_for_response`），全量 22,836 → 18,834 字符（-17.5%）。测量口径见 `ego-browser-cdp-issues.md` §9.0。
+- **browse 注入批次**：内部按 `act → observe → wait` 顺序放行，对外仍是 4 个开关；`always` 模式不受影响。
+
+### 文档
+- `runtime/skills/ego-browser/SKILL.md` 更新为官方 `ego-browser skill` v2.1.0（550 行，ego lite 0.6.0.16）。
+- README 补 `useSdkPath` / `--sdk-path` 语义与「双 API 面共存风险」（插件 `taskSpaces.*` vs 官方 `taskSpace()`）。
+
+### 验证
+- 全测 **779 passed / 12 skipped**；两套 `tsc` 通过；`tsdown` build 过。
+
 ## 1.2.2 (2026-10-18)
 
 - hosts: 追加 0.2.1-rc.2 声明面枚举（34/34 @deepseek-ai/* 宿主 peer 逐包 npm 实测 rc.2 在版；本插件不触 ctx.web provider 与 conversation.input.model.label 槽，代码零改动，纯元数据发版；农场 rc.2 格挂账待命）

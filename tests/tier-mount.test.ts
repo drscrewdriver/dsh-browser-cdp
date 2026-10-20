@@ -1,6 +1,9 @@
 import { describe, it, expect } from "vitest";
 import { apply } from "../src/index.ts";
-import { TIER_MEMBERS } from "../src/toolTiers.ts";
+import { TIER_MEMBERS, batchOfTool } from "../src/toolTiers.ts";
+
+const browseBatch = (batch: "act" | "observe" | "wait") =>
+  TIER_MEMBERS.browse.filter((n) => batchOfTool(n) === batch);
 
 /**
  * 分级注入的挂载级验证：真的走一遍 `apply()`，用最小宿主替身观察注册面。
@@ -87,28 +90,48 @@ describe("tool tier injection at mount", () => {
     ]));
   });
 
-  it("the first core-tier call widens the surface (bcdp_help needs no browser)", async () => {
+  it("the first core-tier call releases the act batch (bcdp_help needs no browser)", async () => {
     const m = mount();
     expect(m.live.length).toBe(TIER_MEMBERS.core.length);
     await m.handles.get("bcdp_help").execute({ topic: "navigate" }, {});
+    // 批次模型：一次活动只放出 browse 的 act 批；observe/wait 仍封印。
+    expect(sorted(m.live)).toEqual(sorted([
+      ...TIER_MEMBERS.core, ...browseBatch("act"), ...TIER_MEMBERS.extended,
+    ]));
+    expect(m.live).toContain("bcdp_click");
+    expect(m.live).not.toContain("bcdp_screenshot");
+    expect(m.live).not.toContain("bcdp_wait");
+    // 活动之后仍未配 Key：评审级依旧不来。
+    expect(m.live).not.toContain("bcdp_jev_ask");
+  });
+
+  it("each further activity releases the next browse batch (act → observe → wait)", async () => {
+    const m = mount();
+    const help = m.handles.get("bcdp_help");
+    await help.execute({}, {});
+    expect(m.live).not.toContain("bcdp_screenshot");
+    await help.execute({}, {}); // depth 2
+    expect(m.live).toContain("bcdp_screenshot");
+    expect(m.live).not.toContain("bcdp_wait");
+    await help.execute({}, {}); // depth 3
+    expect(m.live).toContain("bcdp_wait");
     expect(sorted(m.live)).toEqual(sorted([
       ...TIER_MEMBERS.core, ...TIER_MEMBERS.browse, ...TIER_MEMBERS.extended,
     ]));
-    // 活动之后仍未配 Key：评审级依旧不来。
-    expect(m.live).not.toContain("bcdp_jev_ask");
   });
 
   it("one tier can be sealed alone, live, without touching the others", async () => {
     const config: Record<string, unknown> = { toolInjection: "lazy" };
     const m = mount(config);
     const report = await m.handles.get("bcdp_doctor").execute({}, {});
-    expect(m.live.length).toBe(33);
+    // depth 1: core + act batch + extended.
+    expect(m.live.length).toBe(TIER_MEMBERS.core.length + browseBatch("act").length + TIER_MEMBERS.extended.length);
     // 开关状态必须在 doctor 里可见，否则用户不知道自己被封印了什么。
     expect(String(report.report)).toMatch(/tool injection: mode=lazy browse=open extended=open judge=open/);
     config.toolExtended = false;
     m.emitVolatileUpdate();
-    // extended 被收，browse 仍在——一级一个开关。
-    expect(sorted(m.live)).toEqual(sorted([...TIER_MEMBERS.core, ...TIER_MEMBERS.browse]));
+    // extended 被收，browse 的 act 批仍在——一级一个开关，批次不另设开关。
+    expect(sorted(m.live)).toEqual(sorted([...TIER_MEMBERS.core, ...browseBatch("act")]));
     expect(m.live).toContain("bcdp_click");
     expect(m.live).not.toContain("bcdp_drag");
   });

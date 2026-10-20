@@ -45,7 +45,7 @@ import { EGO_HELP_INDEX } from './help.ts'
 import { HUMAN_CHECK_PROBE } from './captcha.ts'
 import { Config as ConfigSchema, resolveConfig, judgeSettingsOf, EGO_CLI_BLOCKED, CHROME_BLOCKED, filterArgs } from './config.ts'
 import { installSettingsAuto, registerSettingsBridge } from './settings.ts'
-import { createTierInjector, judgeConfigured, unknownTieredTools, type TierInjector } from './toolTiers.ts'
+import { BATCH_ORDER, createTierInjector, judgeConfigured, unknownTieredTools, type TierInjector } from './toolTiers.ts'
 import { getSharedFfmpegInstallationManager } from './ffmpeg-installation.ts'
 import { SENTINEL, j, str, num, bool, readAll, SAFE_FN } from './util.ts'
 import {
@@ -528,6 +528,14 @@ async function openAgentWindow(ctx: EgoContext, cfg: EgoRuntimeConfig): Promise<
   try {
     const gate = cdpAttachError(cfg)
     if (gate) return { ok: false, error: gate }
+    // R4/F11 — an `ego-cli` link drives the ego lite window the user already
+    // has open and can see. There is no headless instance to pop out, and the
+    // native CLI does not implement `--open`. Succeed explicitly (with a log)
+    // instead of spawning a command that would fail.
+    if (defaultAttachCache.get().linkKind === EGO_CLI_KIND) {
+      ctx.logger?.info?.('dsh-browser-cdp: ego-cli: browser already visible, skipping --open')
+      return { ok: true }
+    }
     const handle = ctx.subprocess.spawn({
       argv: [...cfg.egoArgvPrefix, '--open'],
       cwd: process.cwd(),
@@ -573,6 +581,43 @@ function parseSentinel(stdout: string): Record<string, unknown> | undefined {
     const payload = lines[i]!.slice(idx + SENTINEL.length).trim()
     try {
       return JSON.parse(payload) as Record<string, unknown>
+    } catch {
+      return undefined
+    }
+  }
+  return undefined
+}
+
+/** R2/R3 — sentinel + payload for the `bcdp_status` facade probe. @internal exported for tests */
+export const STATUS_FACADE_SENTINEL = '__BCDP_STATUS__'
+/** @internal exported for tests — the exact heredoc the status probe runs. */
+export const STATUS_FACADE_SCRIPT =
+  `console.log(${JSON.stringify(STATUS_FACADE_SENTINEL)} + JSON.stringify({ ` +
+  'taskSpaces: typeof taskSpaces, browser: typeof browser, page: typeof page }))\n'
+
+export interface StatusFacades {
+  taskSpaces: string
+  browser: string
+  page: string
+}
+
+/**
+ * Parse the facade payload the status probe prints; `undefined` if absent.
+ * @internal exported for tests
+ */
+export function parseStatusFacades(stdout: string): StatusFacades | undefined {
+  const lines = stdout.split('\n')
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const idx = lines[i]!.indexOf(STATUS_FACADE_SENTINEL)
+    if (idx === -1) continue
+    const payload = lines[i]!.slice(idx + STATUS_FACADE_SENTINEL.length).trim()
+    try {
+      const parsed = JSON.parse(payload) as Partial<StatusFacades>
+      return {
+        taskSpaces: typeof parsed.taskSpaces === 'string' ? parsed.taskSpaces : 'undefined',
+        browser: typeof parsed.browser === 'string' ? parsed.browser : 'undefined',
+        page: typeof parsed.page === 'string' ? parsed.page : 'undefined',
+      }
     } catch {
       return undefined
     }
@@ -693,17 +738,37 @@ interface TierView {
   surface: () => { live: string[]; sealed: string[] }
 }
 
+/**
+ * R1 — argv for one tool run. Single source of truth for the `--sdk-path`
+ * injection: `bcdp_status` and `runEgoScript` must probe/run under the exact
+ * same conditions, otherwise "available" and "actually works" diverge again.
+ * @internal exported for tests
+ */
+export function buildEgoToolArgv(
+  prefix: readonly string[],
+  attach: { linkKind?: string; sdkPath?: string },
+  runtimeArgs: string,
+): string[] {
+  const extraCliArgs = filterArgs(runtimeArgs, EGO_CLI_BLOCKED)
+  // Only an `ego-cli` link that proved the flag works has a non-empty sdkPath
+  // (see the R-1 guard in cdp-targets); empty always means "do not inject".
+  const sdkArgs =
+    attach.linkKind === EGO_CLI_KIND && (attach.sdkPath ?? '') !== ''
+      ? ['--sdk-path', attach.sdkPath as string]
+      : []
+  return [...prefix, 'nodejs', ...sdkArgs, ...extraCliArgs]
+}
+
 async function runEgoScript(subprocess: SubprocessService, script: string, exec: ExecLike, cfg: EgoRuntimeConfig, graceOverrideMs?: number): Promise<WarmupResult> {
   let handle
   try {
-    // User-configured extra ego-browser CLI args (settings field `runtimeArgs`).
-    // Filtered against EGO_CLI_BLOCKED so a saved value with a mutually-
-    // exclusive subcommand (--status/--stop/--help/...) cannot break every
-    // bcdp_* call by exiting before the heredoc runs.
-    const extraCliArgs = filterArgs(cfg.runtimeArgs ?? '', EGO_CLI_BLOCKED)
+    // R1 — an `ego-cli` link that opted into `useSdkPath` must get the same
+    // `--sdk-path` injection the probe used. Without it the native CLI has no
+    // `taskSpaces`/`browser`/`page` facade and every script dies on line 1.
+    const attach = defaultAttachCache.get()
     handle = subprocess.spawn({
       // Run through the node interpreter so the vendored CLI needs no +x bit.
-      argv: [...cfg.egoArgvPrefix, 'nodejs', ...extraCliArgs],
+      argv: buildEgoToolArgv(cfg.egoArgvPrefix, attach, cfg.runtimeArgs ?? ''),
       cwd: process.cwd(),
       env: resolveEgoEnv(cfg),
       stdio: {
@@ -988,6 +1053,9 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
   // 控制器执行：封印 = 反注册（从工具列表消失），不是执行期拒绝——与
   // prime-memory 的工具组封印同式。
   let browserActive = false
+  // browse 内部批次深度：0 = 尚未放行，1 = act，2 = +observe，3 = +wait。
+  // 每次浏览器活动推进一批；到顶后不再变化（幂等）。
+  let browseBatchDepth = 0
   const tiers: TierInjector = createTierInjector({
     register: (tool) => {
       const dispose = ctx.tools.register(tool) as unknown as () => void
@@ -1002,14 +1070,19 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
       toolJudge: cfg.toolJudge,
       judgeConfigured: judgeConfigured({ jevKey: cfg.jevKey, layaKey: cfg.layaKey }),
       active: browserActive,
+      batchDepth: browseBatchDepth,
     }),
     logger: ctx.logger,
   })
-  /** 活动信号：只翻一次牌，重复调用零成本。 */
+  /**
+   * 活动信号：每次 bcdp_* 调用推进 browse 批次（act → observe → wait），
+   * 到顶即止。只有注入面真的变了才 reapply。
+   */
   const pulseActivity = (): void => {
-    if (browserActive) return
+    const before = browseBatchDepth
     browserActive = true
-    tiers.reapply()
+    browseBatchDepth = Math.min(BATCH_ORDER.length, browseBatchDepth + 1)
+    if (before !== browseBatchDepth) tiers.reapply()
   }
   // markEgoToolCall() 是所有 bcdp_* 调用的公共出口（也是 idle reaper 的活动时钟），
   // 分级解锁挂在同一个信号上：工具体不需要知道 tiers 存在。
@@ -1024,6 +1097,7 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
   const sealAfterReap = (): void => {
     if (cfg.toolInjection !== 'lazy' || !browserActive) return
     browserActive = false
+    browseBatchDepth = 0
     tiers.reapply()
   }
   /**
@@ -1234,6 +1308,15 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
           const last = getLastEgoActivity()
           if (!shouldReapBrowser(Date.now(), last, cfg.idleTimeoutMin)) return
           if (last <= reapedFor) return // already reaped for this idle stretch
+          // R4/F3 — NEVER send `--stop` to an `ego-cli` link: that browser is
+          // the user's own daily instance, not an agent-owned one. The command
+          // is currently an unknown no-op on the native CLI, but "fixing" it
+          // would kill the user's browser — an explicit non-goal, not a TODO.
+          if (defaultAttachCache.get().linkKind === EGO_CLI_KIND) {
+            reapedFor = last
+            ctx.logger?.info?.('dsh-browser-cdp: idle reaper skipped: ego-cli owns the user\'s browser (never --stop it)')
+            return
+          }
           // T2.14 — a locally launched managed browser reaps by pid, not CLI.
           try {
             const { localBrowserInfo, stopLocalBrowser } = await import('./cdp/launcher.ts')
@@ -1294,6 +1377,12 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
   // close, and bcdp_auth_flush exists for explicit persistence.
   ctx.effect?.(() => {
     try {
+      // R4/F3 — teardown must not stop an `ego-cli` link's browser either: it
+      // is the user's own ego lite instance and outlives this plugin.
+      if (defaultAttachCache.get().linkKind === EGO_CLI_KIND) {
+        ctx.logger?.info?.('dsh-browser-cdp: teardown skipped --stop: ego-cli owns the user\'s browser')
+        return
+      }
       const handle = ctx.subprocess.spawn({
         argv: [process.execPath, cfg.egoBin, '--stop'],
         cwd: process.cwd(),
@@ -1321,13 +1410,13 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
     `dsh-browser-cdp: mounted (egoBin=${cfg.egoBin}, defaultSpace=${cfg.defaultSpace})`,
   )
 }
-/** `bcdp_status` probes CLI availability by running the real `--status` path. */
+/** `bcdp_status` probes the SAME channel work uses: a `nodejs` heredoc. */
 function registerEgoStatus(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool: ToolHandle) => void, tiers: TierView): void {
   reg(
     defineTool({
       name: 'bcdp_status',
       description:
-        'Check whether the ego-browser CLI is usable (runs `ego-browser --status`). Use this first when other bcdp_* tools report "CLI not found".',
+        'Check whether the ego-browser CLI can actually run bcdp_* tools (probes the taskSpaces/browser/page facade over the nodejs channel). Use this first when other bcdp_* tools report "CLI not found".',
       parameters: {},
       output: {
         schema: {
@@ -1338,15 +1427,24 @@ function registerEgoStatus(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool: T
             available: { type: 'boolean', required: true },
             path: { type: 'string' },
             exitCode: { type: 'integer' },
+            facades: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                taskSpaces: { type: 'string' },
+                browser: { type: 'string' },
+                page: { type: 'string' },
+              },
+            },
           },
         },
         render: renderText,
       },
-      // Chrome cold-start can exceed the runtime's own 20s DevTools window on
-      // a first launch (root/CI boxes in particular). Give --status a generous
-      // budget so it does not report "unavailable" merely because the backing
-      // browser was still warming up.
-      timeoutMs: 25_000,
+      // facade probe only inspects the globals the SDK harness injects
+      // (taskSpaces/browser/page); it neither starts nor waits for a browser.
+      // Measured ~300ms, so 15s is already a generous ceiling. Do NOT raise it
+      // for browser cold-start — that concern does not apply to this probe.
+      timeoutMs: 15_000,
       execute: async () => {
         // 分级注入：常驻级的探测/指南/诊断被调用 = 用户或模型已经在关
         // 注浏览器，把其余分级按当前深度铺开来（幂等）。不借
@@ -1354,24 +1452,31 @@ function registerEgoStatus(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool: T
         tiers.pulse()
         return withEgoLock(async () => {
           try {
+            const attach = defaultAttachCache.get()
+            // R1 — probe with the exact argv real tool runs use, so "available"
+            // means "a bcdp_* call would work", not "some other command worked".
             const handle = ctx.subprocess.spawn({
-              argv: [...cfg.egoArgvPrefix, '--status'],
+              argv: buildEgoToolArgv(cfg.egoArgvPrefix, attach, cfg.runtimeArgs ?? ''),
               cwd: process.cwd(),
               env: resolveEgoEnv(cfg),
               stdio: {
-                stdin: { data: '' },
+                stdin: { data: STATUS_FACADE_SCRIPT },
                 stdout: { maxBytes: 4096 },
                 stderr: { maxBytes: 4096 },
               },
-              graceMs: 25_000,
+              graceMs: 15_000,
             })
             const outcome = await handle.done
-            const out = readAll(handle.collected.stdout).trim()
+            const facades = parseStatusFacades(readAll(handle.collected.stdout))
             return {
               ok: true,
-              available: outcome.exitCode === 0 && out !== '',
-              path: cfg.egoBin,
+              available:
+                outcome.exitCode === 0 &&
+                facades?.taskSpaces === 'object' &&
+                facades?.browser === 'object',
+              path: attach.cliPath ?? cfg.egoBin,
               exitCode: outcome.exitCode,
+              ...(facades ? { facades } : {}),
             }
           } catch (err) {
             return {
@@ -1487,30 +1592,13 @@ function registerLoginImport(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
     defineTool({
       name: 'bcdp_login_import',
       description:
-        'Import login cookies from the system browser (Chrome/Edge/Brave) into the agent browser, so sites open already logged in. Works via a throwaway headless instance of the REAL system browser (CDP passthrough — no offline decryption; survives Chrome App-Bound Encryption). Run with dryRun=true first to see what is importable, then import with an explicit domains list (e.g. ["bilibili.com"]). The agent browser must be running (call bcdp_status first). Imported logins persist in the on-disk profile across restarts. Cookie values are never shown — only domain names and counts.',
+        'Import login cookies from the system browser (Chrome/Edge/Brave) into the agent browser via CDP passthrough, so sites open logged in. Run dryRun first, then import explicit domains; logins persist in the profile. Cookie values are never shown.',
       parameters: {
-        source: {
-          type: 'string',
-          description: 'chrome | edge | brave | auto (default: auto = first detected browser).',
-        },
-        domains: {
-          type: 'json',
-          description:
-            'Optional array of domains to import, e.g. ["bilibili.com","zhihu.com"] (subdomains included). Omit = ALL cookies — prefer an explicit list.',
-        },
-        profile: {
-          type: 'string',
-          description: 'Source browser profile directory name, e.g. "Default" or "Profile 1" (default: the first profile).',
-        },
-        closeSource: {
-          type: 'boolean',
-          description:
-            'A running source browser holds an exclusive lock on its cookie store (Windows). true = gracefully close it first (its windows/tabs restore on next launch). false (default) = return an actionable error instead.',
-        },
-        dryRun: {
-          type: 'boolean',
-          description: 'true = only report what would be imported (domains + cookie counts), write nothing.',
-        },
+        source: { type: 'string', description: 'chrome | edge | brave | auto (default auto).' },
+        domains: { type: 'json', description: 'Domains to import, e.g. ["bilibili.com"] (subdomains included). Omit = all cookies; prefer an explicit list.' },
+        profile: { type: 'string', description: 'Source profile dir, e.g. "Default" (default: first profile).' },
+        closeSource: { type: 'boolean', description: 'true = gracefully close a running source browser first (tabs restore); false = return an actionable error (default).' },
+        dryRun: { type: 'boolean', description: 'true = report what would be imported; write nothing.' },
       },
       output: {
         schema: {
@@ -1734,31 +1822,13 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
     t({
       name: 'bcdp_click',
       description:
-        'Click an element in the current page. Target with a CSS selector, an xpath=.../loc=.../ref=N value from bcdp_snapshot, or viewport coordinates.',
+        'Click an element: CSS/xpath/loc/ref selector, or viewport x+y coordinates.',
       parameters: {
-        selector: {
-          type: 'string',
-          description:
-            'CSS selector, xpath=..., loc=..., or ref=N from the snapshot. Required unless x/y are given.',
-        },
-        x: {
-          type: 'number',
-          description: 'Viewport x coordinate for a coordinate click.',
-        },
-        y: {
-          type: 'number',
-          description: 'Viewport y coordinate for a coordinate click.',
-        },
-        label: {
-          type: 'string',
-          description:
-            'Short human label for the action, e.g. "click submit button".',
-        },
-        double: {
-          type: 'boolean',
-          description:
-            'Double-click instead of single-click. Useful for opening files/rows or triggering dblclick handlers.',
-        },
+        selector: { type: 'string', description: 'CSS/xpath/loc/ref=N from bcdp_snapshot; required unless x,y.' },
+        x: { type: 'number', description: 'Viewport x for a coordinate click.' },
+        y: { type: 'number', description: 'Viewport y for a coordinate click.' },
+        label: { type: 'string', description: 'Short action label, e.g. "click submit".' },
+        double: { type: 'boolean', description: 'Double-click instead of single.' },
         space: spaceParam,
       },
       buildScript: (args) => {
@@ -1947,23 +2017,11 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
     t({
       name: 'bcdp_wait_for_selector',
       description:
-        "Wait until an element matching a CSS selector appears (state=visible, default) or disappears (state=hidden). Use instead of a blind fixed wait when a page renders asynchronously.",
+        "Wait until a CSS selector appears (state=visible, default) or disappears (state=hidden). Use instead of a fixed wait for async pages.",
       parameters: {
-        selector: {
-          type: 'string',
-          required: true,
-          description:
-            "CSS selector of the element to wait for, e.g. '.results' or '[data-id=done]'.",
-        },
-        state: {
-          type: 'string',
-          description:
-            "Target state: 'visible' (default) | 'attached' | 'hidden' | 'detached'.",
-        },
-        timeout: {
-          type: 'number',
-          description: 'How long to wait in ms (default 10000).',
-        },
+        selector: { type: 'string', required: true, description: "CSS selector to wait for, e.g. '.results' or '[data-id=done]'." },
+        state: { type: 'string', description: "'visible' (default) | 'attached' | 'hidden' | 'detached'." },
+        timeout: { type: 'number', description: 'Wait in ms (default 10000).' },
         space: spaceParam,
       },
       buildScript: (args) => {
@@ -2020,23 +2078,11 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
     t({
       name: 'bcdp_wait_for_response',
       description:
-        'Wait for a network response matching a URL/glob/regex and return it. Optionally return the body (text or JSON) — ideal for scraping API responses or confirming a submission.',
+        'Wait for a network response matching a URL/glob/regex and return it; optionally return the body (text or JSON).',
       parameters: {
-        url: {
-          type: 'string',
-          required: true,
-          description:
-            "URL/glob/regex to match, e.g. '/api/search' or 'https://*.com/data'.",
-        },
-        timeout: {
-          type: 'number',
-          description: 'How long to wait in ms (default 10000).',
-        },
-        body: {
-          type: 'string',
-          description:
-            "Return the response body: 'none' (default) | 'text' | 'json'.",
-        },
+        url: { type: 'string', required: true, description: "URL/glob/regex, e.g. '/api/search' or 'https://*.com/data'." },
+        timeout: { type: 'number', description: 'Wait in ms (default 10000).' },
+        body: { type: 'string', description: "'none' (default) | 'text' | 'json'." },
         space: spaceParam,
       },
       buildScript: (args) => {
@@ -2059,18 +2105,10 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
     t({
       name: 'bcdp_key',
       description:
-        "Press a keyboard key or shortcut combination on the current page, e.g. 'Enter', 'Tab', 'Control+a', 'Escape', 'ArrowDown'. Useful for forms, shortcuts and navigation. Pass `text` to type a string of characters instead (keyboard.type).",
+        "Press a key/combo ('Enter', 'Tab', 'Control+a', 'Escape') or type text character-by-character.",
       parameters: {
-        key: {
-          type: 'string',
-          description:
-            "Key or combo: 'Enter', 'Tab', 'Control+c', 'Meta+v', 'ArrowDown', 'Escape', 'F5', etc. (ignored when `text` is given).",
-        },
-        text: {
-          type: 'string',
-          description:
-            'Type this text character-by-character (keyboard.type). Use instead of `key` for typing words into the focused element.',
-        },
+        key: { type: 'string', description: "Key/combo: 'Enter', 'Control+c', 'ArrowDown', 'F5' (ignored when text is given)." },
+        text: { type: 'string', description: 'Type this text instead (keyboard.type).' },
         space: spaceParam,
       },
       buildScript: (args) => {
@@ -2126,22 +2164,11 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
     t({
       name: 'bcdp_read_element',
       description:
-        "Read a single element (by selector): its text, HTML, input value, an attribute, or visibility/enabled/count. Cheaper and more precise than a full-page snapshot.",
+        'Read one element: text, HTML, value, an attribute, or visible/enabled/count.',
       parameters: {
-        selector: {
-          type: 'string',
-          required: true,
-          description: 'CSS selector of the target element.',
-        },
-        what: {
-          type: 'string',
-          description:
-            "What to read: 'text' (default) | 'html' | 'value' | 'attribute' | 'visible' | 'enabled' | 'count'.",
-        },
-        attribute: {
-          type: 'string',
-          description: 'Attribute name when what=attribute.',
-        },
+        selector: { type: 'string', required: true, description: 'CSS selector of the target.' },
+        what: { type: 'string', description: "'text' (default) | 'html' | 'value' | 'attribute' | 'visible' | 'enabled' | 'count'." },
+        attribute: { type: 'string', description: 'Attribute name when what=attribute.' },
         space: spaceParam,
       },
       buildScript: (args) => {
@@ -2308,27 +2335,12 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
     t({
       name: 'bcdp_download',
       description:
-        'Wait for a file download triggered by the current action, then return its saved path. Provide `triggerSelector` (a download button/link to click) or `triggerScript` (arbitrary JS that triggers the download). The file is captured into a temp dir and (optionally) copied to `savePath`. Returns { path, suggestedFilename, url }.',
+        'Wait for a download triggered by the current action, then return its saved path. Trigger with triggerSelector or triggerScript; optionally copy to savePath.',
       parameters: {
-        triggerSelector: {
-          type: 'string',
-          description:
-            'CSS selector of the element (button/link) whose click starts the download.',
-        },
-        triggerScript: {
-          type: 'string',
-          description:
-            'Full JS snippet that triggers the download (e.g. window.open() or a fetch-to-blob download); runs in the page before waiting for the download.',
-        },
-        savePath: {
-          type: 'string',
-          description:
-            'Optional absolute destination path to also copy the downloaded file to. Otherwise only the temp-captured path is returned.',
-        },
-        timeout: {
-          type: 'number',
-          description: 'How long to wait for the download in ms (default 30000).',
-        },
+        triggerSelector: { type: 'string', description: 'CSS selector of the button/link whose click starts the download.' },
+        triggerScript: { type: 'string', description: 'JS snippet that triggers the download (runs before waiting).' },
+        savePath: { type: 'string', description: 'Absolute path to also copy the file to.' },
+        timeout: { type: 'number', description: 'Wait timeout in ms (default 30000).' },
         space: spaceParam,
       },
       // Lightpanda backend — the engine never fires Page.downloadWillBegin/
@@ -2418,15 +2430,15 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
     t({
       name: 'bcdp_http',
       description:
-        "Make an HTTP request and return status + body. Default runs in the agent page's browser context (cross-origin allowed when the server's CORS permits); set `mode: server` to use Node-side fetch.server. Use to scrape an API, POST data, or hit a service. (Note: on the vendored ego-linux Windows runtime, fetch.server can hit a libuv crash, so prefer the default browser mode there.)",
+        "Make an HTTP request and return status + body. Default runs in the page's browser context; mode=server uses Node-side fetch.server (may crash on the vendored ego-linux Windows runtime, so prefer browser mode).",
       parameters: {
         url: { type: 'string', required: true, description: 'Absolute URL to request.' },
-        method: { type: 'string', description: 'HTTP method, default GET.' },
+        method: { type: 'string', description: 'HTTP method (default GET).' },
         headers: { type: 'object', additionalProperties: true, description: "Request headers, e.g. { 'Content-Type': 'application/json' }." },
-        body: { type: 'string', description: 'Request body (for POST/PUT).' },
+        body: { type: 'string', description: 'Request body (POST/PUT).' },
         timeout: { type: 'number', description: 'Timeout in ms (default 20000).' },
-        mode: { type: 'string', description: "'browser' (default) runs via the page context; 'server' uses Node-side fetch.server." },
-        credentials: { type: 'string', description: "Browser mode only: 'include' attaches the page profile's cookies even cross-origin (reuse login state on API endpoints); 'omit' / 'same-origin' also accepted. Omitted = engine default (cross-origin credentials not sent). Ignored in server mode." },
+        mode: { type: 'string', description: "'browser' (default) or 'server' (Node-side fetch)." },
+        credentials: { type: 'string', description: "Browser mode: 'include' sends the profile's cookies cross-origin; 'omit'/'same-origin' also accepted. Default: engine default." },
         space: spaceParam,
       },
       buildScript: (args) => {
@@ -2970,25 +2982,18 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
     defineTool({
       name: 'bcdp_jev_ask',
       description:
-        'Assemble the JEV/Laya judgement request for the CURRENT page plus an intent, and either return the assembled request body (dryRun, default) or send it and return the answer. Use dryRun to inspect exactly what would be sent.',
+        'Assemble the JEV/Laya judgement request for the current page + intent; return it (dryRun) or send it.',
       parameters: {
-        goal: { type: 'string', required: true, description: 'What we are trying to accomplish, in your own words.' },
-        kind: {
-          type: 'string',
-          description: "Intent kind: navigate | extract | fill | click | verify | other (default other).",
-        },
-        hints: { type: 'string', description: 'One target hint per line. Hints only — never a CSS selector.' },
-        successCriteria: { type: 'string', description: 'One observable success condition per line.' },
-        stopConditions: { type: 'string', description: 'One stop condition per line, e.g. "a captcha appears".' },
+        goal: { type: 'string', required: true, description: 'What we are trying to accomplish.' },
+        kind: { type: 'string', description: 'navigate | extract | fill | click | verify | other.' },
+        hints: { type: 'string', description: 'Target hint per line; never a selector.' },
+        successCriteria: { type: 'string', description: 'Success condition per line.' },
+        stopConditions: { type: 'string', description: 'Stop condition per line.' },
         dryRun: { type: 'boolean', description: 'Assemble only, do not send (default true).' },
-        includeImage: { type: 'boolean', description: 'Also return the base64 frame image (default false).' },
-        maxCandidates: { type: 'integer', description: 'Override the candidate ceiling for this call.' },
-        round: {
-          type: 'string',
-          description:
-            "Which round to assemble: 'control' (should we act), 'chapter' (which part of the page), or 'pick' (which numbered candidate). Default control.",
-        },
-        chapter: { type: 'string', description: "Chapter key to restrict a 'pick' round to, e.g. form#1. From the chapter round's options." },
+        includeImage: { type: 'boolean', description: 'Also return the base64 frame (default false).' },
+        maxCandidates: { type: 'integer', description: 'Candidate ceiling for this call.' },
+        round: { type: 'string', description: "'control' | 'chapter' | 'pick' (default control)." },
+        chapter: { type: 'string', description: "Chapter key for a 'pick' round, e.g. form#1." },
       },
       output: {
         schema: {
@@ -3183,15 +3188,15 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
     defineTool({
       name: 'bcdp_jev_run',
       description:
-        'Run the JEV judgement loop against the current page for one goal: capture a frame, ask the judge, act, verify. Stops on done (VERIFIED against successCriteria), blocked, exhausted, stuck, unavailable or error. Returns a per-step trace.',
+        'Run the JEV loop for one goal; returns a step trace.',
       parameters: {
         goal: { type: 'string', required: true, description: 'The goal, in your own words.' },
         kind: { type: 'string', description: 'navigate | extract | fill | click | verify | other.' },
-        hints: { type: 'string', description: 'One target hint per line (never a selector).' },
-        successCriteria: { type: 'string', description: 'One observable success condition per line. REQUIRED for a trustworthy `done`.' },
-        stopConditions: { type: 'string', description: 'One stop condition per line.' },
-        stepBudget: { type: 'integer', description: 'Judgement rounds allowed (default from settings).' },
-        wallMs: { type: 'integer', description: 'Wall-clock ceiling in ms (default from settings).' },
+        hints: { type: 'string', description: 'Target hint per line (never a selector).' },
+        successCriteria: { type: 'string', description: 'Success condition per line; required for done.' },
+        stopConditions: { type: 'string', description: 'Stop condition per line.' },
+        stepBudget: { type: 'integer', description: 'Max judgement rounds (default settings).' },
+        wallMs: { type: 'integer', description: 'Wall-clock ceiling in ms (default settings).' },
       },
       output: {
         schema: {
@@ -3261,12 +3266,12 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
     defineTool({
       name: 'bcdp_jev_attempt',
       description:
-        'Open a URL and let the decision model (laya/jev) ATTEMPT one goal on it: every round the option table is the page\'s DOM candidates plus an `end` option; the model spends up to N actions (default 5) or picks `end` by itself, then a receipt comes back. The judge context is the DOM tree only (the model cannot read the screenshot). Verify the result yourself afterwards via bcdp_cdp / bcdp_screenshot using the returned targetId — the receipt is a report, not a proof.',
+        "Open a URL and let the decision model attempt one goal: each round it picks from the page's DOM candidates plus `end`, up to N actions. Returns a receipt; verify yourself via bcdp_cdp/bcdp_screenshot (a receipt is a report, not proof).",
       parameters: {
-        url: { type: 'string', required: true, description: 'Absolute URL to open, e.g. https://example.com/path.' },
+        url: { type: 'string', required: true, description: 'Absolute URL to open.' },
         goal: { type: 'string', required: true, description: 'The goal, in your own words.' },
-        successCriteria: { type: 'string', description: 'One observable success condition per line. Helps the model decide when to pick `end`.' },
-        maxActions: { type: 'integer', description: 'Action budget for the decision model (default 5, capped at 20).' },
+        successCriteria: { type: 'string', description: 'Success condition per line; helps the model decide when to stop.' },
+        maxActions: { type: 'integer', description: 'Action budget (default 5, max 20).' },
       },
       output: {
         schema: {

@@ -349,6 +349,12 @@ export interface AttachState {
   /** R7 — `ego-cli` only: the resolved CLI path / spawn shape, for the doctor. */
   cliPath?: string
   cliShape?: string
+  /**
+   * R1 — `ego-cli` only: the harness path to inject with `--sdk-path` on every
+   * tool run. `''`/absent = do not inject (vendored runtime or a CLI that
+   * rejected the flag during probing). See the guard in `refreshCliAttach`.
+   */
+  sdkPath?: string
 }
 
 export function emptyAttachState(): AttachState {
@@ -622,6 +628,13 @@ async function refreshCliAttach(
       : 'local ego CLI ready'),
     cliPath: probe.cliPath,
     cliShape: probe.shape,
+    // R1/R-1 — only record the SDK path when the probe actually used it. If the
+    // CLI rejected `--sdk-path` the probe retried with the CLI's own harness and
+    // set `warning`; tool execution has NO such retry, so injecting the flag
+    // then would crash every call — exactly the P0 this change fixes.
+    sdkPath: link.useSdkPath === true && probe.warning === undefined
+      ? (input.sdkPath ?? '')
+      : '',
     latencyMs: probe.latencyMs,
     resolvedAt: now(),
   })

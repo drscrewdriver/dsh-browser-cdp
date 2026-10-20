@@ -161,8 +161,12 @@ dshx list                                                # 应显示：[on] dsh-
 
 两个默认值值得知道：
 
-- **`--sdk-path` 默认关闭**：默认用 CLI 自带的 harness（官方配对的那套）；打开后才注入本插件的 harness 包。若 CLI 不认这个旗标，插件会记一条提示并**自动重试一次不带它**——不会因此废掉整条链路。
-- **就绪探测会走一次真实的 heredoc**（与我们干活用的是同一条通道），所以它**不是免费的**：探测可能冷启动后端浏览器（实测内置移植版约 1.3 s）。
+- **`useSdkPath` 默认关闭**：关闭时用 CLI 自带的 harness（官方配对的那套）；打开后，**探测与每一次工具执行**都会注入 `--sdk-path <插件内置 harness>`。这一点很关键：只在探测时带、执行时不带，脚本首行就会崩 `ReferenceError: taskSpaces is not defined`（1.2.4 修复的 P0）。若 CLI 不认这个旗标，探测会记一条提示并**自动重试一次不带它**；此时只有 CLI 自带的 harness 确实暴露 `taskSpaces` / `browser` 门面才算就绪，否则显式判失败并给出缺失的门面名——不再假阳性。
+- **就绪探测是 `nodejs` 通道上的 facade 探针**（与干活同一条通道）：只检查注入后的 `taskSpaces` / `browser` / `page` 全局，不启动也不等待浏览器，实测约 300 ms；`bcdp_status` 走同一判据。
+
+### 双 API 面共存风险
+
+本插件通过注入 SDK 使用 `taskSpaces.*`（插件侧 API），而官方 `ego-browser skill` 脚本使用原生 `taskSpace()`（app 侧 API）。二者驱动的是**同一个** ego lite，task space 也是共享的：同时用插件工具和官方 skill 脚本操作同一空间，可能互相抢控制权。**建议二选一，以插件为准**；确需跑官方脚本时，先停用本插件的 ego-cli link。
 
 与其它开关的关系：
 

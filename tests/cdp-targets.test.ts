@@ -306,6 +306,7 @@ function cliIo(options: {
   cliFile?: string;
   status?: string;
   heredoc?: { exitCode: number | null; stdout?: string; stderr?: string; spawnErrorCode?: string; timedOut?: boolean };
+  heredocFor?: (argv: readonly string[]) => { exitCode: number | null; stdout?: string; stderr?: string };
   spawnCode?: string;
 } = {}) {
   const cliFile = options.cliFile ?? "/usr/local/bin/ego-browser";
@@ -323,8 +324,8 @@ function cliIo(options: {
       if (request.stdin === "") {
         return { exitCode: 0, stdout: options.status ?? JSON.stringify({ running: true }), stderr: "", latencyMs: 2 };
       }
-      const h = options.heredoc ?? { exitCode: 0, stdout: `${CLI_READY}\n` };
-      return { exitCode: h.exitCode, stdout: h.stdout ?? "", stderr: h.stderr ?? "", latencyMs: 3, ...(h.timedOut ? { timedOut: true } : {}), ...(h.spawnErrorCode ? { spawnErrorCode: h.spawnErrorCode } : {}) };
+      const h = options.heredocFor ? options.heredocFor(request.argv) : (options.heredoc ?? { exitCode: 0, stdout: `${CLI_READY}\n` });
+      return { exitCode: h.exitCode, stdout: h.stdout ?? "", stderr: h.stderr ?? "", latencyMs: 3, ...((h as { timedOut?: boolean }).timedOut ? { timedOut: true } : {}), ...((h as { spawnErrorCode?: string }).spawnErrorCode ? { spawnErrorCode: (h as { spawnErrorCode?: string }).spawnErrorCode } : {}) };
     },
   };
   return { io, calls };
@@ -348,6 +349,39 @@ describe("R7 refreshAttach — ego-cli link", () => {
     expect(out.endpoint).toBe("");
     expect(out.cliPath).toBe("/usr/local/bin/ego-browser");
     expect(out.cliShape).toBe("direct");
+    // R1 — no opt-in, no injection.
+    expect(out.sdkPath).toBe("");
+  });
+
+  // R1 — the P0 fix: the path the probe used must survive into AttachState so
+  // `runEgoScript` can pass the same `--sdk-path` on every tool call.
+  it("records sdkPath when the opt-in probe actually used it (R1)", async () => {
+    const cache = createAttachCache();
+    const { io: ioImpl } = cliIo({ heredoc: { exitCode: 0, stdout: `${CLI_READY} object object\n` } });
+    const out = await refreshAttach({
+      targets: [cliLink({ useSdkPath: true })], activeTargetId: "cli", mode: "auto", cache,
+      cliIo: ioImpl as never, sdkPath: "/plugin/harness.js", now: () => 0,
+    });
+    expect(out.status).toBe("ready");
+    expect(out.sdkPath).toBe("/plugin/harness.js");
+  });
+
+  // R-1 — the probe fell back to the CLI's own harness (flag rejected), so the
+  // tool path must NOT inject a flag the CLI does not accept.
+  it("leaves sdkPath empty when the CLI rejects --sdk-path and the probe falls back (R-1)", async () => {
+    const cache = createAttachCache();
+    const { io: ioImpl } = cliIo({
+      heredocFor: (argv) => (argv.includes("--sdk-path")
+        ? { exitCode: 2, stdout: "", stderr: "unknown option '--sdk-path'" }
+        : { exitCode: 0, stdout: `${CLI_READY} object object\n` }),
+    });
+    const out = await refreshAttach({
+      targets: [cliLink({ useSdkPath: true })], activeTargetId: "cli", mode: "auto", cache,
+      cliIo: ioImpl as never, sdkPath: "/plugin/harness.js", now: () => 0,
+    });
+    expect(out.status).toBe("ready");
+    expect(out.message).toContain("does not support --sdk-path");
+    expect(out.sdkPath).toBe("");
   });
 
   it("tags cli-launch when the CLI answers but its browser is down", async () => {

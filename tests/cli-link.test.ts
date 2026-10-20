@@ -21,6 +21,11 @@ const OK_STATUS = (running: boolean): CliRunResult => ({
   exitCode: 0, stdout: JSON.stringify({ running, port: 9222 }), stderr: "", latencyMs: 5,
 });
 const READY: CliRunResult = { exitCode: 0, stdout: `${CLI_READY_SENTINEL}\n`, stderr: "", latencyMs: 7 };
+// R3 — an opt-in SDK probe must also expose the facade types, otherwise the
+// sentinel only proves "the CLI ran", not "a bcdp_* tool would work".
+const READY_FACADES: CliRunResult = {
+  exitCode: 0, stdout: `${CLI_READY_SENTINEL} object object\n`, stderr: "", latencyMs: 7,
+};
 
 function fakeIo(options: {
   platform?: NodeJS.Platform;
@@ -200,7 +205,7 @@ describe("R7 probeCliLink", () => {
   });
 
   // A26 — `--sdk-path` is a capability, not a requirement: report it, drop it,
-  // retry once, and still succeed.
+  // retry once, and succeed *if the CLI's own harness exposes the facade*.
   it("drops --sdk-path and retries once when the CLI refuses the flag (A26)", async () => {
     const f = fakeIo({
       files: [bundled],
@@ -209,7 +214,7 @@ describe("R7 probeCliLink", () => {
         if (req.argv.includes("--sdk-path")) {
           return { exitCode: 2, stdout: "", stderr: "unknown option '--sdk-path'", latencyMs: 2 };
         }
-        return READY;
+        return READY_FACADES;
       },
     });
     const out = await probeCliLink({ bundled, useSdkPath: true, sdkPath: "/plugin/harness.js" }, f.io);
@@ -221,8 +226,34 @@ describe("R7 probeCliLink", () => {
     expect(heredocs[1]!.argv).not.toContain("--sdk-path");
   });
 
+  // R3/F1b — the retry-without-flag path is only usable if the CLI's own
+  // harness has the facade. A sentinel with `undefined` facades must FAIL,
+  // otherwise the probe reports ready and every tool crashes on line 1.
+  it("fails the opt-in probe when the fallback harness has no facade (R3)", async () => {
+    const f = fakeIo({
+      files: [bundled],
+      defaultRun: (req) => {
+        if (req.argv.includes("--status")) return OK_STATUS(true);
+        if (req.argv.includes("--sdk-path")) {
+          return { exitCode: 2, stdout: "", stderr: "unknown option '--sdk-path'", latencyMs: 2 };
+        }
+        return READY;
+      },
+    });
+    const out = await probeCliLink({ bundled, useSdkPath: true, sdkPath: "/plugin/harness.js" }, f.io);
+    expect(out).toMatchObject({ ok: false, code: "cli-probe-failed" });
+    expect(out.message).toContain("facade");
+    expect(out.message).toContain("taskSpaces=undefined");
+  });
+
+  it("keeps the sentinel-only criterion when useSdkPath is off (vendored runtime)", async () => {
+    const f = fakeIo({ files: [bundled], defaultRun: () => READY });
+    const out = await probeCliLink({ bundled }, f.io);
+    expect(out).toMatchObject({ ok: true, code: "" });
+  });
+
   it("passes --sdk-path through when the CLI accepts it", async () => {
-    const f = fakeIo({ files: [bundled], defaultRun: (req) => (req.argv.includes("--status") ? OK_STATUS(true) : READY) });
+    const f = fakeIo({ files: [bundled], defaultRun: (req) => (req.argv.includes("--status") ? OK_STATUS(true) : READY_FACADES) });
     const out = await probeCliLink({ bundled, useSdkPath: true, sdkPath: "/plugin/harness.js" }, f.io);
     expect(out.warning).toBeUndefined();
     expect(f.calls.filter((c) => c.stdin !== "")[0]!.argv).toEqual([process.execPath, bundled, "nodejs", "--sdk-path", "/plugin/harness.js"]);

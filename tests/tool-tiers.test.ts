@@ -1,9 +1,11 @@
 import { describe, it, expect } from "vitest";
 import { readFile } from "node:fs/promises";
 import {
+  BATCH_ORDER,
   TIER_MEMBERS,
   TIER_OF_TOOL,
   bareToolName,
+  batchOfTool,
   createTierInjector,
   judgeConfigured,
   tierAllowed,
@@ -37,7 +39,7 @@ describe("tier table coverage", () => {
     const all = Object.values(TIER_MEMBERS).flat();
     expect(new Set(all).size).toBe(all.length);
     expect(TIER_MEMBERS.core).toEqual([
-      "bcdp_status", "bcdp_doctor", "bcdp_help", "bcdp_space_open", "bcdp_navigate", "bcdp_snapshot",
+      "bcdp_status", "bcdp_doctor", "bcdp_help", "bcdp_space_open", "bcdp_space_close", "bcdp_navigate", "bcdp_snapshot",
     ]);
   });
 
@@ -189,6 +191,44 @@ describe("tier injector controller", () => {
     for (const n of [...TIER_OF_TOOL.keys()]) h.offer(n);
     expect(h.injector.surface().sealed).toEqual([]);
     expect(h.live.length).toBe(TIER_OF_TOOL.size);
+  });
+});
+
+describe("browse injection batches (act → observe → wait)", () => {
+  it("releases browse in batch order as activity depth grows", () => {
+    const at = (batchDepth: number) => P({ active: true, batchDepth });
+    // depth 0: nothing above core, even though activity is on.
+    expect(toolAllowed("bcdp_click", at(0))).toBe(false);
+    // depth 1: act only.
+    expect(toolAllowed("bcdp_click", at(1))).toBe(true);
+    expect(toolAllowed("bcdp_screenshot", at(1))).toBe(false);
+    expect(toolAllowed("bcdp_wait", at(1))).toBe(false);
+    // depth 2: + observe.
+    expect(toolAllowed("bcdp_screenshot", at(2))).toBe(true);
+    expect(toolAllowed("bcdp_read_element", at(2))).toBe(true);
+    expect(toolAllowed("bcdp_wait", at(2))).toBe(false);
+    // depth 3: + wait.
+    expect(toolAllowed("bcdp_wait", at(3))).toBe(true);
+    expect(toolAllowed("bcdp_wait_for_selector", at(3))).toBe(true);
+  });
+
+  it("leaves core and extended untouched by the browse batch gate", () => {
+    const shallow = P({ active: true, batchDepth: 1, toolExtended: true });
+    expect(toolAllowed("bcdp_status", shallow)).toBe(true);
+    expect(toolAllowed("bcdp_drag", shallow)).toBe(true);
+  });
+
+  it("always mode ignores batch depth (historical mount-all semantics)", () => {
+    const p = P({ injection: "always", active: false, batchDepth: 0 });
+    expect(toolAllowed("bcdp_wait", p)).toBe(true);
+  });
+
+  it("batchOfTool is prefix-agnostic and defaults unknown names to act", () => {
+    expect(batchOfTool("bcdp_click")).toBe("act");
+    expect(batchOfTool("ego_click")).toBe("act");
+    expect(batchOfTool("bcdp_screenshot")).toBe("observe");
+    expect(batchOfTool("bcdp_wait_for_selector")).toBe("wait");
+    expect(batchOfTool("bcdp_unlisted")).toBe("act");
   });
 });
 

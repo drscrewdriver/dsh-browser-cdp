@@ -90,6 +90,28 @@ describe("parseSentinel bare-JSON fallback (1.3.1)", () => {
     expect(parseSentinel(merged)).toEqual({ n: 2 });
   });
 
+  // Pretty-printed output is the most natural thing to write
+  // (console.log(JSON.stringify(x, null, 2))) and spans many lines.
+  it("accepts a MULTI-LINE bare JSON object", () => {
+    const pretty = ["{", '  "ok": true,', '  "n": 1', "}"].join("\n");
+    expect(parseSentinel(pretty)).toEqual({ ok: true, n: 1 });
+  });
+
+  it("accepts nested multi-line JSON (the shape a facade probe returns)", () => {
+    const pretty = ["{", '  "probe": {', '    "a": "function"', "  }", "}"].join("\n");
+    expect(parseSentinel(pretty)).toEqual({ probe: { a: "function" } });
+  });
+
+  it("is not fooled by braces inside a string value", () => {
+    const json = '{"tpl":"a {b} c","ok":true}';
+    expect(parseSentinel(json)).toEqual({ tpl: "a {b} c", ok: true });
+  });
+
+  it("finds the payload after multi-line log noise", () => {
+    const text = ['[warn] start', '[warn] {not json}', '{"ok":true,"n":2}'].join("\n");
+    expect(parseSentinel(text)).toEqual({ ok: true, n: 2 });
+  });
+
   it("ignores JSON arrays, bare scalars, and prose", () => {
     expect(parseSentinel("[1,2,3]")).toBeUndefined();
     expect(parseSentinel("42")).toBeUndefined();

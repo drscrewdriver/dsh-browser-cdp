@@ -221,7 +221,9 @@ dshx list                                                # 应显示：[on] dsh-
 
 ## 工具注入分级（懒注册 / 分级 / 锁定）
 
-38 个工具全量注册时，**每个会话每一轮**都要为它们的 schema 付费（AST 实测 `description` + `parameters` ≈ 18.8K 字符 ≈ 5.4K token），而不碰浏览器的会话一个也用不上。插件因此把「谁能出现在模型面前」收成一处策略（`src/toolTiers.ts`），分**八批**注入：
+38 个工具全量注册时，**每个会话每一轮**都要为它们的 schema 付费（AST 实测 `description` + `parameters` ≈ 19.3K 字符 ≈ 5.5K token），而不碰浏览器的会话一个也用不上。插件因此把「谁能出现在模型面前」收成一处策略（`src/toolTiers.ts`），分**八批**注入。
+
+> **8 批 ≠ 8 个开关**。批次是*注入时机*，开关是*用户面*（§9.3「开关与批次解耦」）。当前 4 个开关管 8 批：`toolBrowse` 管 act+observe+wait 三批并按波次放行，`toolExtended` 管 power+session，`toolEscape`、`toolJudge` 各管一批。所以「`toolBrowse` = 16 个」指的是**并集上限**，实际第一波只放 8 个。
 
 | 批次 | 成员 | schema | 何时出现 |
 |---|---|---:|---|
@@ -231,8 +233,9 @@ dshx list                                                # 应显示：[on] dsh-
 | **wait** 等待（4） | wait / wait_for_selector / wait_for_url / wait_for_response | 1,695 | 第三次活动 |
 | **power** 重量级（5） | raw CDP / http / upload / download / dialog | 2,947 | 首次活动（同 `toolExtended`） |
 | **session** 登录态（3） | captcha / auth_flush / login_import | 1,689 | 首次活动（同 `toolExtended`） |
-| **escape** 逃生舱（2） | cli / script | 1,224 | **冷启动即在**，不吃活动闸（见下） |
+| **escape** 逃生舱（2） | cli / script | 1,677 | **冷启动即在**，不吃活动闸（见下） |
 | **judge** 评审链（5） | `bcdp_jev_*` | 3,183 | 除解锁外，**还要求配了 JEV 或 Laya Key** |
+| **合计** | 38 | **19,287** | — |
 
 设置项在插件设置页**最上方**的「工具封印」分块（全部 volatile，翻完当场生效，不重启插件）——一个开关管一组批次，形状照 dsh-prime-memory 的「工具封印」：
 
@@ -247,7 +250,8 @@ dshx list                                                # 应显示：[on] dsh-
 - **闲置自动收回**：`lazy` + `idleTimeoutMin > 0` 时，空闲回收把后台浏览器停掉的同一刻收回扩展面；下次活动重新铺开。`always` 模式不受影响。
 - `legacyEgoToolNames` 的 `ego_*` 别名跟随其 `bcdp_*` 本体的级别。
 - 当前注入面写在 `bcdp_doctor` 报告首行（`tool injection: mode=lazy browse=open extended=open escape=open judge=open judgeKey=none active=no → live 9 / sealed 29`），不用猜。
-- 默认档下不碰浏览器的会话只有 **9** 个工具在场（core 7 + escape 2 ≈ 3.8K 字符，−79.6%）；要回到历史行为把 `toolInjection` 改成 `always`（38 件全在场需再配一个评审 Key）。
+- 默认档下不碰浏览器的会话只有 **9** 个工具在场（core 7 + escape 2 = 4,287 字符 ≈ 1,225 token，−77.8%）；要回到历史行为把 `toolInjection` 改成 `always`（38 件全在场需再配一个评审 Key）。
+- **各档实测注入面**（AST 口径，1.3.1）：默认 9 个 / 1,225 tok → 首次活动 25 个 / 3,642 tok → 第 2 波 29 个 / 4,117 tok → 第 3 波 33 个 / 4,601 tok → 全量 38 个 / 5,511 tok。工具**个数**在每一档都不高于 1.2.5（默认 7→9 是 escape 常驻的代价，首次活动 27→25 反而更小）。
 - 五个字段都带 schema `.default()`：volatile 字段的表单描述符直接拿 schema 默认值，不写默认会出现「面板显示 A、运行时用 B」。
 
 > 取舍提醒：窄工具（一个动作一个工具）是模型写对参数、少重试的护栏。把交互原子合并成脚本逃生舱会省上下文，但代价是模型要自己写 heredoc、出错率上升——本插件保持全部 38 个工具的签名不变，只改**出现时机**。

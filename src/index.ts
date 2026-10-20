@@ -597,20 +597,64 @@ export function parseSentinel(stdout: string): Record<string, unknown> | undefin
       return undefined
     }
   }
-  // Sentinel absent (or its line was malformed): accept a bare JSON object line.
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const text = lines[i]!.trim()
-    if (text.length < 2 || text[0] !== '{' || text[text.length - 1] !== '}') continue
+  // Sentinel absent (or its line was malformed): accept a bare JSON object.
+  // Depth-scanned rather than line-scanned, because console.log(JSON.stringify(x,
+  // null, 2)) — the most natural thing to write — spans many lines, and the
+  // earlier line-based fallback silently missed it.
+  return lastJsonObject(stdout)
+}
+
+/**
+ * The last balanced `{...}` run in `text` that parses as a JSON object.
+ *
+ * Tracks double-quoted strings (JSON's only string syntax) so braces inside a
+ * string value do not unbalance the scan. Invalid candidates are skipped, not
+ * fatal: log noise before the payload is common.
+ *
+ * A candidate must begin its own line (leading whitespace is fine). That keeps
+ * pretty-printed payloads working while refusing an object merely mentioned in
+ * prose: `[warn] retrying {"attempt":2}` must not become the result, because a
+ * silently wrong payload is worse than no payload at all.
+ */
+function lastJsonObject(text: string): Record<string, unknown> | undefined {
+  let best: Record<string, unknown> | undefined
+  let depth = 0
+  let start = -1
+  let inString = false
+  let escaped = false
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]!
+    if (inString) {
+      if (escaped) escaped = false
+      else if (c === '\\') escaped = true
+      else if (c === '"') inString = false
+      continue
+    }
+    if (c === '"') { inString = true; continue }
+    if (c === '{') {
+      if (depth === 0) start = i
+      depth += 1
+      continue
+    }
+    if (c !== '}') continue
+    if (depth === 0) continue
+    depth -= 1
+    if (depth !== 0 || start < 0) continue
+    // Only whitespace may sit between the line start and the opening brace.
+    let p = start - 1
+    while (p >= 0 && (text[p] === ' ' || text[p] === '\t' || text[p] === '\r')) p -= 1
+    const atLineStart = p < 0 || text[p] === '\n'
     try {
-      const parsed = JSON.parse(text) as unknown
+      const parsed = atLineStart ? (JSON.parse(text.slice(start, i + 1)) as unknown) : null
       if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        return parsed as Record<string, unknown>
+        best = parsed as Record<string, unknown>
       }
     } catch {
-      /* not this line; keep walking up */
+      /* not a JSON object literal; keep the previous best */
     }
+    start = -1
   }
-  return undefined
+  return best
 }
 
 /** R2/R3 — sentinel + payload for the `bcdp_status` facade probe. @internal exported for tests */

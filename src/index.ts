@@ -58,7 +58,7 @@ import {
   EGO_CLI_KIND,
   LP_KIND,
 } from './cdp-targets.ts'
-import { createSubprocessCliIo, resolveCliBinary, spawnArgvFor, type SpawnShape } from './cdp/cli-link.ts'
+import { createSubprocessCliIo, mergeCliOutput, resolveCliBinary, spawnArgvFor, type SpawnShape } from './cdp/cli-link.ts'
 import { assembleSystemOneBody, buildJudgeRuntime, describeJudge, sendJudge } from './jev/client.ts'
 import { makeJudgeEffects } from './jev/effects.ts'
 import { runAttempt } from './jev/attempt.ts'
@@ -573,7 +573,8 @@ export async function runWithStaleSpaceRetry(  ctx: EgoContext,
   return result
 }
 /** Find the last line carrying the sentinel and JSON-parse its payload. */
-function parseSentinel(stdout: string): Record<string, unknown> | undefined {
+/** @internal exported for tests */
+export function parseSentinel(stdout: string): Record<string, unknown> | undefined {
   const lines = stdout.split('\n')
   for (let i = lines.length - 1; i >= 0; i--) {
     const idx = lines[i]!.indexOf(SENTINEL)
@@ -777,7 +778,10 @@ async function runEgoScript(subprocess: SubprocessService, script: string, exec:
           maxBytes: cfg.maxOutputBytes,
           spill: { maxBytes: cfg.maxOutputBytes },
         },
-        stderr: { maxBytes: 512_000, spill: { maxBytes: 2_000_000 } },
+        stderr: {
+          maxBytes: cfg.maxOutputBytes,
+          spill: { maxBytes: cfg.maxOutputBytes },
+        },
       },
       graceMs: Number.isFinite(graceOverrideMs) && graceOverrideMs! > 0
         ? graceOverrideMs!
@@ -831,11 +835,11 @@ async function runEgoScript(subprocess: SubprocessService, script: string, exec:
       stderr,
     }
   }
-  const value = parseSentinel(stdout)
+  const value = parseSentinel(mergeCliOutput({ stdout, stderr }))
   if (value === undefined) {
     return {
       ok: false,
-      error: `ego-browser finished but no ${SENTINEL} JSON payload was found on stdout${describeStderr(
+      error: `ego-browser finished but no ${SENTINEL} JSON payload was found on stdout/stderr${describeStderr(
         stderr,
       )}`,
       stdout,
@@ -1467,7 +1471,12 @@ function registerEgoStatus(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool: T
               graceMs: 15_000,
             })
             const outcome = await handle.done
-            const facades = parseStatusFacades(readAll(handle.collected.stdout))
+            const facades = parseStatusFacades(
+              mergeCliOutput({
+                stdout: readAll(handle.collected.stdout),
+                stderr: readAll(handle.collected.stderr),
+              }),
+            )
             return {
               ok: true,
               available:
@@ -2492,6 +2501,11 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
               ok: { type: 'boolean', required: true },
               stdout: { type: 'string', required: true },
               stderr: { type: 'string' },
+              output: {
+                type: 'string',
+                description:
+                  'Merged stdout+stderr text of the CLI run. The ego CLI writes script output to stderr on Windows, so read this when `stdout` looks empty.',
+              },
               result: { type: 'json' },
             },
           },
@@ -2502,11 +2516,12 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
           markEgoToolCall(callingSessionId(exec))
           const result = await runWithStaleSpaceRetry(ctx, cfg, exec, () => str(args.script, ''))
           if (!result.ok) throw new Error(result.error)
-          const parsed = parseSentinel(result.stdout)
+          const parsed = parseSentinel(mergeCliOutput(result))
           return {
             ok: true,
             stdout: result.stdout,
             stderr: result.stderr,
+            output: mergeCliOutput(result),
             result: parsed ?? null,
           }
         },
@@ -2560,7 +2575,7 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
           )
           if (!result.ok)
             return { ok: false, detected: false, kind: null, error: result.error }
-          const p = (parseSentinel(result.stdout) || {}) as Record<string, unknown>
+          const p = (parseSentinel(mergeCliOutput(result)) || {}) as Record<string, unknown>
           const hc = p.humanCheck as { detected?: boolean; kind?: string } | undefined
           return {
             ok: true,
@@ -2787,6 +2802,11 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
               ok: { type: 'boolean', required: true },
               stdout: { type: 'string', required: true },
               stderr: { type: 'string' },
+              output: {
+                type: 'string',
+                description:
+                  'Merged stdout+stderr text of the CLI run. The ego CLI writes script output to stderr on Windows, so read this when `stdout` looks empty.',
+              },
               result: { type: 'json' },
               durationMs: { type: 'integer' },
               timedOut: { type: 'boolean' },
@@ -2808,12 +2828,21 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
           const result = await runWithStaleSpaceRetry(ctx, cfg, exec, () => str(args.script, ''), timeoutMs)
           const durationMs = Date.now() - start
           if (!result.ok)
-            return { ok: false, stdout: result.stdout, stderr: result.stderr, durationMs, timedOut: false, error: result.error }
-          const parsed = parseSentinel(result.stdout)
+            return {
+              ok: false,
+              stdout: result.stdout,
+              stderr: result.stderr,
+              output: mergeCliOutput(result),
+              durationMs,
+              timedOut: false,
+              error: result.error,
+            }
+          const parsed = parseSentinel(mergeCliOutput(result))
           return {
             ok: true,
             stdout: result.stdout,
             stderr: result.stderr,
+            output: mergeCliOutput(result),
             result: parsed ?? null,
             durationMs,
             timedOut: false,

@@ -44,4 +44,10 @@ describe("bcdp_status facade probe (R2/R3)", () => {
     }
     expect(STATUS_FACADE_SCRIPT).toContain(STATUS_FACADE_SENTINEL);
   });
+
+  // R4 — the Windows CLI emits CRLF; the payload must survive the trailing \r.
+  it("tolerates CRLF line endings (Windows CLI)", () => {
+    const stdout = `${STATUS_FACADE_SENTINEL}{"taskSpaces":"object","browser":"object","page":"object"}\r\n`;
+    expect(parseStatusFacades(stdout)).toMatchObject({ taskSpaces: "object", browser: "object" });
+  });
 });

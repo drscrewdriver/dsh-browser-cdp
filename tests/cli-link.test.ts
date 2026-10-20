@@ -258,4 +258,43 @@ describe("R7 probeCliLink", () => {
     expect(out.warning).toBeUndefined();
     expect(f.calls.filter((c) => c.stdin !== "")[0]!.argv).toEqual([process.execPath, bundled, "nodejs", "--sdk-path", "/plugin/harness.js"]);
   });
+
+  // R4 — ego-browser 0.6.0.16 on Windows routes the embedded runtime's whole
+  // output (sentinels included) to stderr and leaves stdout empty. The probe
+  // must read both streams or every ego-cli link stays "unreachable".
+  it("reads the readiness sentinel from stderr when stdout is empty (R4)", async () => {
+    const f = fakeIo({
+      files: [bundled],
+      defaultRun: (req) =>
+        req.argv.includes("--status")
+          ? { exitCode: 2, stdout: "", stderr: "unknown option '--status'", latencyMs: 2 }
+          : { exitCode: 0, stdout: "", stderr: `${CLI_READY_SENTINEL} object object\n`, latencyMs: 7 },
+    });
+    const out = await probeCliLink({ bundled, useSdkPath: true, sdkPath: "/plugin/harness.js" }, f.io);
+    expect(out).toMatchObject({ ok: true, code: "" });
+  });
+
+  it("reads --status from stderr too (R4)", async () => {
+    const f = fakeIo({
+      files: [bundled],
+      defaultRun: (req) =>
+        req.argv.includes("--status")
+          ? { exitCode: 0, stdout: "", stderr: JSON.stringify({ running: true }), latencyMs: 2 }
+          : { exitCode: 0, stdout: "", stderr: `${CLI_READY_SENTINEL} object object\n`, latencyMs: 7 },
+    });
+    const out = await probeCliLink({ bundled, useSdkPath: true, sdkPath: "/plugin/harness.js" }, f.io);
+    expect(out).toMatchObject({ ok: true, running: true });
+  });
+
+  it("keeps stdout authoritative when both streams carry the sentinel (R4)", async () => {
+    const f = fakeIo({
+      files: [bundled],
+      defaultRun: (req) =>
+        req.argv.includes("--status")
+          ? { exitCode: 2, stdout: "", stderr: "unknown option '--status'", latencyMs: 2 }
+          : { exitCode: 0, stdout: `${CLI_READY_SENTINEL} object object\n`, stderr: "noise\n", latencyMs: 7 },
+    });
+    const out = await probeCliLink({ bundled, useSdkPath: true, sdkPath: "/plugin/harness.js" }, f.io);
+    expect(out).toMatchObject({ ok: true, code: "" });
+  });
 });

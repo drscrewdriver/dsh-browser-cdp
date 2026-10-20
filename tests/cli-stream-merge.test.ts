@@ -60,3 +60,43 @@ describe("parseSentinel over merged output (R4)", () => {
     expect(parseSentinel(mergeCliOutput({ stdout: "a", stderr: "b" }))).toBeUndefined();
   });
 });
+
+// 1.3.1 — both tool descriptions told the model to "end with
+// console.log(JSON.stringify(...))", i.e. WITHOUT the sentinel prefix. Such a
+// script ran fine and was still reported as a failure, so a bare JSON object
+// line now counts as a payload too.
+describe("parseSentinel bare-JSON fallback (1.3.1)", () => {
+  it("accepts a bare JSON object line when no sentinel is present", () => {
+    const merged = mergeCliOutput({
+      stdout: "",
+      stderr: '{"ok":true,"title":"百度一下，你就知道"}\r\n\r\n',
+    });
+    expect(parseSentinel(merged)).toEqual({ ok: true, title: "百度一下，你就知道" });
+  });
+
+  it("still prefers the sentinel over a later bare JSON line", () => {
+    const merged = mergeCliOutput({
+      stdout: '@@DSH_RESULT@@{"ok":true,"src":"sentinel"}\n{"ok":true,"src":"bare"}\n',
+      stderr: "",
+    });
+    expect(parseSentinel(merged)).toMatchObject({ src: "sentinel" });
+  });
+
+  it("takes the LAST bare JSON object, not the first", () => {
+    const merged = mergeCliOutput({
+      stdout: "",
+      stderr: '{"n":1}\nnoise\n{"n":2}\n',
+    });
+    expect(parseSentinel(merged)).toEqual({ n: 2 });
+  });
+
+  it("ignores JSON arrays, bare scalars, and prose", () => {
+    expect(parseSentinel("[1,2,3]")).toBeUndefined();
+    expect(parseSentinel("42")).toBeUndefined();
+    expect(parseSentinel('the result was {"ok":true} inline')).toBeUndefined();
+  });
+
+  it("is a no-op for the structured tools (they always emit the sentinel)", () => {
+    expect(parseSentinel('@@DSH_RESULT@@{"ok":true}')).toEqual({ ok: true });
+  });
+});

@@ -572,8 +572,19 @@ export async function runWithStaleSpaceRetry(  ctx: EgoContext,
   }
   return result
 }
-/** Find the last line carrying the sentinel and JSON-parse its payload. */
-/** @internal exported for tests */
+/**
+ * Find the last line carrying the sentinel and JSON-parse its payload.
+ *
+ * Fallback: `bcdp_script` / `bcdp_cli` run user-authored heredocs, and both
+ * tool descriptions tell the model to "end with console.log(JSON.stringify(...))"
+ * — without the sentinel prefix. A script written to that instruction used to
+ * succeed and still be reported as a failure ("no @@DSH_RESULT@@ payload"), so
+ * when no sentinel line exists we accept the last line that parses as a JSON
+ * object. The sentinel still wins whenever it is present (it marks the payload
+ * deliberately, across any amount of surrounding log noise).
+ *
+ * @internal exported for tests
+ */
 export function parseSentinel(stdout: string): Record<string, unknown> | undefined {
   const lines = stdout.split('\n')
   for (let i = lines.length - 1; i >= 0; i--) {
@@ -584,6 +595,19 @@ export function parseSentinel(stdout: string): Record<string, unknown> | undefin
       return JSON.parse(payload) as Record<string, unknown>
     } catch {
       return undefined
+    }
+  }
+  // Sentinel absent (or its line was malformed): accept a bare JSON object line.
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const text = lines[i]!.trim()
+    if (text.length < 2 || text[0] !== '{' || text[text.length - 1] !== '}') continue
+    try {
+      const parsed = JSON.parse(text) as unknown
+      if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>
+      }
+    } catch {
+      /* not this line; keep walking up */
     }
   }
   return undefined
@@ -2488,13 +2512,13 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
       const def = defineTool({
         name: 'bcdp_cli',
         description:
-          'Escape hatch: run an arbitrary `ego-browser nodejs` heredoc script verbatim (facades page/browser/taskSpaces/site/fetch and the raw cdp() are preloaded). Use when the structured bcdp_* tools do not cover the task. Returns raw stdout plus the parsed console.log payload when present.',
+          'Escape hatch: run an arbitrary `ego-browser nodejs` heredoc script VERBATIM (facades page/browser/taskSpaces/site/fetch and the raw cdp() are preloaded; no preamble is added, so select the task space yourself before touching page.*). Use when the structured bcdp_* tools do not cover the task. Returns the raw output plus the parsed console.log payload when present.',
         parameters: {
           script: {
             type: 'string',
             required: true,
             description:
-              'Full JS script body for the heredoc; ego-browser helpers are preloaded. End with console.log(JSON.stringify(...)) for a parseable sentinel payload.',
+              'Full JS script body for the heredoc; ego-browser helpers are preloaded. Runs verbatim — call `await taskSpaces.useOrCreate(name)` first if your script uses page.*. End with console.log(JSON.stringify(payload)) to get it back as `result`.',
           },
         },
         output: {
@@ -2789,13 +2813,13 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
       const def = defineTool({
         name: 'bcdp_script',
         description:
-          'Run an arbitrary `ego-browser nodejs` heredoc script in ONE invocation (same runtime/API as bcdp_cli: page/…locator/browser/taskSpaces/site/fetch/cdp preloaded), and return structured {ok, stdout, stderr, result, durationMs, timedOut}. Use for a full multi-step browser task as a single script.',
+          'Run an arbitrary `ego-browser nodejs` heredoc script in ONE invocation (page/…locator/browser/taskSpaces/site/fetch/cdp preloaded), and return structured {ok, stdout, stderr, result, durationMs, timedOut}. Use for a full multi-step browser task as a single script. The task space is selected and a real (non-blank) tab activated for you before your script runs, so page.* works directly. Differs from bcdp_cli, which runs the body verbatim with no preamble.',
         parameters: {
           script: {
             type: 'string',
             required: true,
             description:
-              'Full JS script body; end with console.log(JSON.stringify(...)) for a parseable sentinel payload.',
+              'Full JS script body. You may end with console.log(JSON.stringify(payload)) — bare or prefixed with the sentinel — and it is returned as `result`. Without one, `output` still carries everything the script printed.',
           },
           timeoutMs: { type: 'integer', description: 'Per-run timeout in ms (default plugin grace).' },
         },
@@ -2830,7 +2854,21 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
               ? args.timeoutMs
               : undefined
           const start = Date.now()
-          const result = await runWithStaleSpaceRetry(ctx, cfg, exec, () => str(args.script, ''), timeoutMs)
+          // bcdp_script (unlike bcdp_cli) is the "just give me a working page"
+          // entry point, so it carries the same preamble every structured tool
+          // does: pick the task space, then activate a real (non-blank) tab.
+          // Without it a plain `page.evaluate(...)` body dies with
+          // "Task space not selected" — which reads as a plugin failure.
+          // A body that already selects its own space keeps it: useOrCreate is
+          // idempotent by name, so the preamble is skipped when the script
+          // mentions taskSpaces.useOrCreate itself.
+          const preamble = (body: string): string => {
+            if (/taskSpaces\s*\.\s*useOrCreate\s*\(/.test(body)) return body
+            return `${useSpace(cfg.defaultSpace)}${ensureRealTab()}${body}`
+          }
+          const result = await runWithStaleSpaceRetry(
+            ctx, cfg, exec, () => preamble(str(args.script, '')), timeoutMs,
+          )
           const durationMs = Date.now() - start
           if (!result.ok)
             return {

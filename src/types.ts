@@ -243,6 +243,8 @@ export interface ResolvedConfig {
   /** 一级一个开关：true = 开放注册，false = 封印（从模型工具列表消失）。core 级不可封印。 */
   toolBrowse: boolean
   toolExtended: boolean
+  /** 逃生舱级开关（cli / script）；开时冷启动即可用，不等浏览器活动。 */
+  toolEscape: boolean
   /** 评审级开关；开 + 配了 JEV/Laya Key 才会真的注入。 */
   toolJudge: boolean
   chromeArgs: string

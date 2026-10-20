@@ -2,8 +2,12 @@ import { describe, it, expect } from "vitest";
 import { apply } from "../src/index.ts";
 import { TIER_MEMBERS, batchOfTool } from "../src/toolTiers.ts";
 
+/** 渐进放行的三批（act → observe → wait），按批次筛成员。 */
 const browseBatch = (batch: "act" | "observe" | "wait") =>
-  TIER_MEMBERS.browse.filter((n) => batchOfTool(n) === batch);
+  [...TIER_MEMBERS.act, ...TIER_MEMBERS.observe, ...TIER_MEMBERS.wait].filter((n) => batchOfTool(n) === batch);
+
+/** 常驻面 = core + escape（逃生舱不吃活动闸）。 */
+const RESIDENT = () => [...TIER_MEMBERS.core, ...TIER_MEMBERS.escape];
 
 /**
  * 分级注入的挂载级验证：真的走一遍 `apply()`，用最小宿主替身观察注册面。
@@ -71,32 +75,36 @@ const mount = (config: Record<string, unknown> = {}) => {
 const sorted = (names: readonly string[]) => [...names].sort();
 
 describe("tool tier injection at mount", () => {
-  it("the shipped default is lazy: only the resident core tier at mount", () => {
+  it("the shipped default is lazy: core plus the escape hatch, nothing else", () => {
     const { live } = mount();
-    expect(sorted(live)).toEqual(sorted(TIER_MEMBERS.core));
+    // escape 冷启动即可用——它是唯一能一次干完任意多步任务的入口。
+    expect(sorted(live)).toEqual(sorted(RESIDENT()));
+    expect(live).toContain("bcdp_script");
+    expect(live).not.toContain("bcdp_click");
   });
 
   it("always mode restores the historical timing (minus the keyless judge tier)", () => {
     const { live } = mount({ toolInjection: "always" });
-    expect(sorted(live)).toEqual(sorted([...TIER_MEMBERS.core, ...TIER_MEMBERS.browse, ...TIER_MEMBERS.extended]));
+    expect(sorted(live)).toEqual(sorted([
+      ...TIER_MEMBERS.core, ...TIER_MEMBERS.act, ...TIER_MEMBERS.observe, ...TIER_MEMBERS.wait,
+      ...TIER_MEMBERS.power, ...TIER_MEMBERS.session, ...TIER_MEMBERS.escape,
+    ]));
     expect(live).not.toContain("bcdp_jev_run");
   });
 
   it("always + a configured judge key = all 38 on the surface", () => {
     const { live } = mount({ toolInjection: "always", layaKey: "k" });
     expect(live.length).toBe(38);
-    expect(sorted(live)).toEqual(sorted([
-      ...TIER_MEMBERS.core, ...TIER_MEMBERS.browse, ...TIER_MEMBERS.extended, ...TIER_MEMBERS.judge,
-    ]));
+    expect(sorted(live)).toEqual(sorted(Object.values(TIER_MEMBERS).flat()));
   });
 
   it("the first core-tier call releases the act batch (bcdp_help needs no browser)", async () => {
     const m = mount();
-    expect(m.live.length).toBe(TIER_MEMBERS.core.length);
+    expect(sorted(m.live)).toEqual(sorted(RESIDENT()));
     await m.handles.get("bcdp_help").execute({ topic: "navigate" }, {});
-    // 批次模型：一次活动只放出 browse 的 act 批；observe/wait 仍封印。
+    // 批次模型：一次活动只放出 act 批；observe/wait 仍封印。
     expect(sorted(m.live)).toEqual(sorted([
-      ...TIER_MEMBERS.core, ...browseBatch("act"), ...TIER_MEMBERS.extended,
+      ...RESIDENT(), ...TIER_MEMBERS.act, ...TIER_MEMBERS.power, ...TIER_MEMBERS.session,
     ]));
     expect(m.live).toContain("bcdp_click");
     expect(m.live).not.toContain("bcdp_screenshot");
@@ -105,10 +113,11 @@ describe("tool tier injection at mount", () => {
     expect(m.live).not.toContain("bcdp_jev_ask");
   });
 
-  it("each further activity releases the next browse batch (act → observe → wait)", async () => {
+  it("each further activity releases the next browsing batch (act → observe → wait)", async () => {
     const m = mount();
     const help = m.handles.get("bcdp_help");
-    await help.execute({}, {});
+    await help.execute({}, {}); // depth 1
+    expect(m.live).toContain("bcdp_click");
     expect(m.live).not.toContain("bcdp_screenshot");
     await help.execute({}, {}); // depth 2
     expect(m.live).toContain("bcdp_screenshot");
@@ -116,24 +125,44 @@ describe("tool tier injection at mount", () => {
     await help.execute({}, {}); // depth 3
     expect(m.live).toContain("bcdp_wait");
     expect(sorted(m.live)).toEqual(sorted([
-      ...TIER_MEMBERS.core, ...TIER_MEMBERS.browse, ...TIER_MEMBERS.extended,
+      ...TIER_MEMBERS.core, ...TIER_MEMBERS.act, ...TIER_MEMBERS.observe, ...TIER_MEMBERS.wait,
+      ...TIER_MEMBERS.power, ...TIER_MEMBERS.session, ...TIER_MEMBERS.escape,
     ]));
   });
 
-  it("one tier can be sealed alone, live, without touching the others", async () => {
+  it("one switch group can be sealed alone, live, without touching the others", async () => {
     const config: Record<string, unknown> = { toolInjection: "lazy" };
     const m = mount(config);
     const report = await m.handles.get("bcdp_doctor").execute({}, {});
-    // depth 1: core + act batch + extended.
-    expect(m.live.length).toBe(TIER_MEMBERS.core.length + browseBatch("act").length + TIER_MEMBERS.extended.length);
+    // depth 1: core + escape + act batch + power + session.
+    expect(m.live.length).toBe(
+      RESIDENT().length + browseBatch("act").length + TIER_MEMBERS.power.length + TIER_MEMBERS.session.length,
+    );
     // 开关状态必须在 doctor 里可见，否则用户不知道自己被封印了什么。
-    expect(String(report.report)).toMatch(/tool injection: mode=lazy browse=open extended=open judge=open/);
+    expect(String(report.report)).toMatch(/tool injection: mode=lazy browse=open extended=open escape=open judge=open/);
     config.toolExtended = false;
     m.emitVolatileUpdate();
-    // extended 被收，browse 的 act 批仍在——一级一个开关，批次不另设开关。
-    expect(sorted(m.live)).toEqual(sorted([...TIER_MEMBERS.core, ...browseBatch("act")]));
+    // power/session 被收，act 批与 escape 仍在。
+    expect(sorted(m.live)).toEqual(sorted([
+      ...RESIDENT(), ...browseBatch("act"),
+    ]));
     expect(m.live).toContain("bcdp_click");
-    expect(m.live).not.toContain("bcdp_drag");
+    expect(m.live).not.toContain("bcdp_download");
+  });
+
+  it("the escape switch is the only way to lose cli/script, and it costs nothing else", () => {
+    const config: Record<string, unknown> = { toolInjection: "always" };
+    const m = mount(config);
+    expect(m.live).toContain("bcdp_script");
+    config.toolEscape = false;
+    m.emitVolatileUpdate();
+    expect(m.live).not.toContain("bcdp_script");
+    expect(m.live).not.toContain("bcdp_cli");
+    // 其它批次一个不少。
+    expect(m.live).toContain("bcdp_click");
+    expect(m.live).toContain("bcdp_cdp");
+    // 38 − escape 2 − judge 5（always 下仍无 Key，评审级照旧封印）。
+    expect(m.live.length).toBe(38 - 2 - 5);
   });
 
   it("judge tools appear the moment a key is configured (volatile reapply, no remount)", () => {
@@ -148,6 +177,8 @@ describe("tool tier injection at mount", () => {
   it("the legacy ego_* alias follows its bcdp_* twin's tier", () => {
     const { live } = mount({ legacyEgoToolNames: true });
     expect(live).toContain("ego_status");
+    // escape 常驻，所以 ego_script 也在；ego_click 属 act，未活动时封印。
+    expect(live).toContain("ego_script");
     expect(live).not.toContain("ego_click");
   });
 

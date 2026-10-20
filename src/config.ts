@@ -125,6 +125,7 @@ export const Config = z.object({
   // 开关：封掉它 lazy 模式就没有解锁入口了。
   toolBrowse: z.boolean().default(true).description('Basic browsing tier (14 tools: click / fill / key / hover / scroll / select / check / screenshot / page_info / read_element / js / wait / wait_for_selector / space_close). Off = sealed: removed from the model tool list.').volatile(),
   toolExtended: z.boolean().default(true).description('Extended tier (13 tools: drag / upload / download / dialog / raw CDP / http / cli / script / captcha / auth_flush / login_import / wait_for_url / wait_for_response). Off = sealed even after browser activity.').volatile(),
+  toolEscape: z.boolean().default(true).description('Escape-hatch tier (2 tools: cli / script — run an arbitrary heredoc with page/browser/taskSpaces/fetch/cdp preloaded). Unlike every other non-core tier it is NOT held back until browser activity: the one tool that can do anything in a single call must always be reachable. Off = sealed.').volatile(),
   toolJudge: z.boolean().default(true).description('Judgement tier (5 bcdp_jev_* tools). On still requires a JEV or Laya key: without one they can only answer "not configured", so they stay sealed anyway.').volatile(),
   localHeadless: z.boolean().description('Run the locally launched browser headless.'),
   remoteEnabled: z.boolean().description('Master switch for REMOTE attach. Off = the configured target sequence is preserved but inert (nothing probes or connects remotely); flip back on any time. Does not affect cdpMode=local.').volatile(),
@@ -425,6 +426,7 @@ export function resolveConfig(config: RawConfig = {}): ResolvedConfig {
     toolInjection: oneOf(config.toolInjection, ['lazy', 'always'], 'lazy'),
     toolBrowse: tierOpenByDefault(config.toolBrowse),
     toolExtended: tierOpenByDefault(config.toolExtended),
+    toolEscape: tierOpenByDefault(config.toolEscape),
     toolJudge: tierOpenByDefault(config.toolJudge),
     localHeadless: config.localHeadless === undefined ? false : Boolean(config.localHeadless),
     localUserDataDir: typeof config.localUserDataDir === 'string' ? config.localUserDataDir : '',

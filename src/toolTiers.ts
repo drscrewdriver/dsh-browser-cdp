@@ -1,25 +1,43 @@
 // src/toolTiers.ts — 工具分级注入策略（纯函数，无宿主依赖）
 //
 // 动机：插件挂载时一次性注册 38 个 bcdp_* 工具，每个会话每一轮都要为它们付
-// schema 成本（实测 description+parameters 源文本 ≈ 25.6K 字符 ≈ 5–7K token），
+// schema 成本（AST 实测 description+parameters ≈ 18.8K 字符 ≈ 5.4K token），
 // 而绝大多数会话根本不碰浏览器。这里把「哪些工具在什么条件下允许出现在模型面
 // 前」收成一处策略，注册时机交给 index.ts 的控制器执行。
 //
-// 四级（rank 越小越常驻）：
-//   core      常驻：探测/诊断/指南 + 最小可用闭环（打开空间 → 导航 → 读页面）。
-//             永不封印，否则 lazy 模式下模型连「解锁」的入口都没有。
-//   browse    基础操作：一次浏览器活动之后注入。
-//   extended  扩展能力：拖拽/上传/下载/对话框/裸 CDP/脚本逃生舱/登录搬运。
-//   judge     评审链（bcdp_jev_*）：除解锁外还要求评审**已配置**——没配 key
-//             时这五个工具只能回答「未配置」，白占上下文。
+// 八批（见 ego-browser-cdp-issues.md §9.2）：
+//   core     常驻：探测/诊断/指南 + 最小可用闭环（打开空间 → 导航 → 读页面）。
+//            永不封印，否则 lazy 模式下模型连「解锁」的入口都没有。
+//   act      动手：click / fill / key / select / check / hover / scroll / drag。
+//   observe  看结果：screenshot / page_info / read_element / js。
+//   wait     等待：wait / wait_for_selector / wait_for_url / wait_for_response。
+//   power    重量级：raw CDP / http / upload / download / dialog。
+//   session  登录态：captcha / auth_flush / login_import。
+//   escape   逃生舱：cli / script。**冷启动即可用**（见下）。
+//   judge    评审链（bcdp_jev_*）：除解锁外还要求评审**已配置**。
+//
+// act / observe / wait 三批按顺序渐进放行（一次活动放一批），因为它们的使用
+// 时机高度重叠（点完要看、看完要点），拆成三个用户开关只会让人永远全开。
+//
+// escape 为什么给独立开关且不吃活动闸：
+//   它是唯一能在一次调用里干完任意多步任务的工具（page/browser/taskSpaces/
+//   fetch/cdp 全预置）。其余 30 多个工具都能用它等价做到，所以它必须始终可达
+//   ——否则模型遇到「结构化工具没覆盖」的情形时，手里没有任何逃生手段。
+//   cli 与 script 是同一 heredoc 运行时的两种返回形态（script 多 duration/
+//   timedOut），共用一个批次；给它们各开一批没有意义。
 //
 // 旋钮（全 volatile，且带 schema `.default()`——表单描述符与生效值必须同源，
 // 否则面板显示一个值、运行时用另一个值）：
 //   toolInjection  'lazy'（默认）| 'always'（历史行为：挂载即全量）
-//   toolBrowse / toolExtended / toolJudge   一级一个开关，ON = 开放注册、
-//                  OFF = 封印（从模型工具列表移除）——与 prime-memory 的
-//                  「工具封印」同一形状。`core` 级不参与封印，无开关。
+//   toolBrowse     act + observe + wait
+//   toolExtended   power + session
+//   toolEscape     escape（cli / script）
+//   toolJudge      judge
+//   ON = 开放注册、OFF = 封印（从模型工具列表移除）——与 prime-memory 的
+//   「工具封印」同一形状。`core` 级不参与封印，无开关。
 // judge 级除开关外还要求配了 Key（否则只能回答「未配置」）。
+export type ToolTier = 'core' | 'act' | 'observe' | 'wait' | 'power' | 'session' | 'escape' | 'judge'
+
 const CORE = [
   'bcdp_status',
   'bcdp_doctor',
@@ -29,7 +47,7 @@ const CORE = [
   'bcdp_navigate',
   'bcdp_snapshot',
 ] as const
-const BROWSE = [
+const ACT = [
   'bcdp_click',
   'bcdp_fill',
   'bcdp_key',
@@ -37,27 +55,35 @@ const BROWSE = [
   'bcdp_scroll',
   'bcdp_select',
   'bcdp_check',
+  'bcdp_drag',
+] as const
+const OBSERVE = [
   'bcdp_screenshot',
   'bcdp_page_info',
   'bcdp_read_element',
   'bcdp_js',
+] as const
+const WAIT = [
   'bcdp_wait',
   'bcdp_wait_for_selector',
+  'bcdp_wait_for_url',
+  'bcdp_wait_for_response',
 ] as const
-const EXTENDED = [
-  'bcdp_drag',
+const POWER = [
+  'bcdp_cdp',
+  'bcdp_http',
   'bcdp_upload',
   'bcdp_download',
   'bcdp_dialog',
-  'bcdp_cdp',
-  'bcdp_http',
-  'bcdp_cli',
-  'bcdp_script',
+] as const
+const SESSION = [
   'bcdp_captcha',
   'bcdp_auth_flush',
   'bcdp_login_import',
-  'bcdp_wait_for_url',
-  'bcdp_wait_for_response',
+] as const
+const ESCAPE = [
+  'bcdp_cli',
+  'bcdp_script',
 ] as const
 const JUDGE = [
   'bcdp_jev_status',
@@ -67,48 +93,50 @@ const JUDGE = [
   'bcdp_jev_attempt',
 ] as const
 
-export type ToolTier = 'core' | 'browse' | 'extended' | 'judge'
 export type ToolInjection = 'always' | 'lazy'
 
 /** 工具名 → 分级。`ego_*` 旧名（legacyEgoToolNames 别名）与 bcdp_* 同名同组。 */
 export const TIER_OF_TOOL: ReadonlyMap<string, ToolTier> = new Map<string, ToolTier>(
-  ([['core', CORE], ['browse', BROWSE], ['extended', EXTENDED], ['judge', JUDGE]] as const)
-    .flatMap(([tier, names]) => names.map((n) => [n, tier] as const)),
+  ([
+    ['core', CORE], ['act', ACT], ['observe', OBSERVE], ['wait', WAIT],
+    ['power', POWER], ['session', SESSION], ['escape', ESCAPE], ['judge', JUDGE],
+  ] as const).flatMap(([tier, names]) => names.map((n) => [n, tier] as const)),
 )
 
 /** 分级成员表（测试与文档用）。 */
 export const TIER_MEMBERS: Readonly<Record<ToolTier, readonly string[]>> = {
-  core: CORE, browse: BROWSE, extended: EXTENDED, judge: JUDGE,
+  core: CORE,
+  act: ACT,
+  observe: OBSERVE,
+  wait: WAIT,
+  power: POWER,
+  session: SESSION,
+  escape: ESCAPE,
+  judge: JUDGE,
 }
 
 /** 去掉 `bcdp_`/`ego_` 前缀后的裸名，便于策略表保持前缀无关。 */
 export const bareToolName = (name: string): string => name.replace(/^(?:bcdp|ego)_/, '')
 
-// ── 注入批次（Should Pass，见 issues §9.2/§9.3）──────────────────────────────
+// ── 注入批次 ────────────────────────────────────────────────────────────────
 //
-// 对外仍是 4 个开关（core 无开关 / browse / extended / judge），内部把
-// `browse` 拆成 act → observe → wait 三批按顺序放行：一次浏览器活动先放出
+// `toolBrowse` 一个开关管着 act → observe → wait 三批：一次浏览器活动先放出
 // 「能动手」的一批，再放出「能看结果」的一批，最后才是「等待」类。批次只是
-// 注入时机，不是新的用户开关——F5 已论证 act/observe 的使用时机高度重叠，
-// 拆成用户开关只会让用户永远全开。
+// 注入时机，不是新的用户开关。其余批次不参与渐进放行。
 export type ToolBatch = 'act' | 'observe' | 'wait'
 
 /** 批次放行顺序（索引即 rank）。 */
 export const BATCH_ORDER: readonly ToolBatch[] = ['act', 'observe', 'wait']
 
-/** `browse` 级工具 → 批次。未登记的名字按 'act' 处理，绝不因缺表而被卡住。 */
-const BROWSE_BATCH: Readonly<Record<string, ToolBatch>> = {
-  click: 'act', fill: 'act', key: 'act', hover: 'act', scroll: 'act', select: 'act', check: 'act',
-  screenshot: 'observe', page_info: 'observe', read_element: 'observe', js: 'observe',
-  wait: 'wait', wait_for_selector: 'wait',
+/** 某工具的注入批次；非渐进制分级一律归 'act'（前缀无关）。 */
+export const batchOfTool = (name: string): ToolBatch => {
+  const tier = tierOfTool(name)
+  return (BATCH_ORDER as readonly string[]).includes(tier) ? (tier as ToolBatch) : 'act'
 }
 
-/** 某工具的注入批次（前缀无关）。 */
-export const batchOfTool = (name: string): ToolBatch => BROWSE_BATCH[bareToolName(name)] ?? 'act'
-
 /**
- * 工具所属分级。未登记的名字落到 `extended`（最严的一档：宁可等活动解锁，
- * 也不让新工具悄悄回到常驻面）；调用方应当在启动时打一条 warn，见
+ * 工具所属分级。未登记的名字落到 `power`（最严的一档：宁可等活动解锁，也不
+ * 让新工具悄悄回到常驻面）；调用方应当在启动时打一条 warn，见
  * `unknownTieredTools`。分级表漂移由 `tests/tool-tiers.test.ts` 的覆盖率断言
  * 兜住，这里只是运行期兜底。
  */
@@ -117,7 +145,7 @@ export function tierOfTool(name: string): ToolTier {
   for (const [known, tier] of TIER_OF_TOOL) {
     if (bareToolName(known) === bare) return tier
   }
-  return 'extended'
+  return 'power'
 }
 
 /** 名单里所有查不到分级登记的工具名（启动自检 / 测试用）。 */
@@ -135,15 +163,16 @@ export const judgeConfigured = (c: { jevKey?: string; layaKey?: string }): boole
 /** 注入策略的一次读取快照（全部来自 volatile 活引用，每次重读）。 */
 export interface TierPolicy {
   injection: ToolInjection
-  /** 各级开关：true = 开放注册，false = 封印。`core` 级不在此列（不可封印）。 */
+  /** 开关组：true = 开放注册，false = 封印。`core` 级不在此列（不可封印）。 */
   toolBrowse: boolean
   toolExtended: boolean
+  toolEscape: boolean
   toolJudge: boolean
   judgeConfigured: boolean
   /** 本插件挂载以来是否发生过浏览器活动（bcdp_* 调用）。 */
   active: boolean
   /**
-   * `browse` 内部已放行的批次数（0–3，按 act → observe → wait 顺序）。
+   * act/observe/wait 已放行的批次数（0–3，按 act → observe → wait 顺序）。
    * 缺省 = 全部放行：既有调用方与测试不必感知批次（`always` 模式也忽略它）。
    */
   batchDepth?: number
@@ -152,40 +181,46 @@ export interface TierPolicy {
 /** 某级开关的当前极性；`core` 恒开放。 */
 export const tierOpen = (tier: ToolTier, p: TierPolicy): boolean => {
   switch (tier) {
-    case 'browse': return p.toolBrowse
-    case 'extended': return p.toolExtended
+    case 'core': return true
+    case 'act':
+    case 'observe':
+    case 'wait': return p.toolBrowse
+    case 'power':
+    case 'session': return p.toolExtended
+    case 'escape': return p.toolEscape
     case 'judge': return p.toolJudge
-    default: return true
   }
 }
 
 /**
  * 该分级此刻是否允许注册。
  *
- * 三条独立闸，任一不过即封印：
- * ① 本级开关（一级一个，ON = 开放）；
+ * 四条独立闸，任一不过即封印：
+ * ① 本级开关（见 tierOpen）；
  * ② 评审级额外要求已配 Key（没 Key 的 `bcdp_jev_*` 只能回「未配置」）；
- * ③ 注入模式：`lazy` 下非 core 级要等活动，`always` 下不设时机闸。
+ * ③ 活动闸：`lazy` 下非 core 级要等活动，`always` 下不设时机闸；
+ * ④ 批次闸：只在 act/observe/wait 三批上按 batchDepth 递增放行。
+ *
+ * `escape` 是唯一的例外：它不吃③。逃生舱必须在模型手里始终可达——否则遇到
+ * 「结构化工具没覆盖」的情形时，模型既调不动它、也没法用别的工具绕过。
  */
 export function tierAllowed(tier: ToolTier, p: TierPolicy): boolean {
+  if (tier === 'core') return true
   if (!tierOpen(tier, p)) return false
   if (tier === 'judge' && !p.judgeConfigured) return false
-  if (tier === 'core') return true
-  return p.injection === 'always' || p.active
+  if (tier === 'escape') return true
+  if (p.injection === 'always') return true
+  if (tier === 'act' || tier === 'observe' || tier === 'wait') {
+    // 活动闸在前、批次闸在后：没有活动时三批全封印，深度缺省值不得绕过活动。
+    if (!p.active) return false
+    const depth = p.batchDepth ?? BATCH_ORDER.length
+    return BATCH_ORDER.indexOf(tier) < depth
+  }
+  return p.active
 }
 
 /** 某工具此刻是否允许注册（名字 → 分级 → 策略）。 */
-export function toolAllowed(name: string, p: TierPolicy): boolean {
-  const tier = tierOfTool(name)
-  if (!tierAllowed(tier, p)) return false
-  // 批次闸只作用于 browse 级、且只在 lazy 模式下：always 是「挂载即全量」的
-  // 历史语义，不该被批次拖慢。`batchDepth` 缺省视为全部放行。
-  if (tier === 'browse' && p.injection !== 'always') {
-    const depth = p.batchDepth ?? BATCH_ORDER.length
-    if (BATCH_ORDER.indexOf(batchOfTool(name)) >= depth) return false
-  }
-  return true
-}
+export const toolAllowed = (name: string, p: TierPolicy): boolean => tierAllowed(tierOfTool(name), p)
 
 // ── 注入控制器 ──────────────────────────────────────────────────────────────
 //
@@ -217,7 +252,7 @@ export interface TierInjector {
   /** 策略变了（设置热更 / 活动解锁 / 闲置回收）：补齐该注册的、收回该封印的。幂等。 */
   reapply(): void
   /** 当前注入面（测试与 doctor 用）。 */
-  surface(): { live: string[]; sealed: string[] };
+  surface(): { live: string[]; sealed: string[] }
 }
 
 export function createTierInjector(o: TierInjectorOptions): TierInjector {

@@ -2,7 +2,7 @@
   "$schema": "https://dsh.community/schemas/dsh-plugin-0.15.json",
   "id": "dsh-browser-cdp",
   "name": "dsh-browser-cdp",
-  "version": "1.2.5",
+  "version": "1.3.0",
   "manifestVersion": "0.15",
   "facets": {
     "host": {
@@ -72,23 +72,31 @@
                   "label": "always"
                 }
               ],
-              "hint": "lazy（默认）= 只常驻核心 6 个，首次 bcdp_* 调用后按下方开关注入，闲置回收时收回；always = 挂载即注册全部 38 个（历史行为）。"
+              "hint": "lazy（默认）= 常驻核心 7 个 + 逃生舱 2 个，其余首次 bcdp_* 调用后按下方开关注入，闲置回收时收回；always = 挂载即注册全部 38 个（历史行为）。"
             },
             {
               "path": [
                 "toolBrowse"
               ],
-              "label": "基础操作工具（14 个）",
+              "label": "基础操作工具（16 个）",
               "kind": "boolean",
-              "hint": "开（默认）= 浏览器活动后正常注册；关 = 14 个工具从模型工具列表移除（点击/填写/键鼠/截图/读取/等待…）。"
+              "hint": "开（默认）= 浏览器活动后按 act → observe → wait 三波放行；关 = 16 个工具从模型工具列表移除（点击/填写/键鼠/拖拽/截图/读取/等待…）。"
             },
             {
               "path": [
                 "toolExtended"
               ],
-              "label": "扩展能力工具（13 个）",
+              "label": "扩展能力工具（8 个）",
               "kind": "boolean",
-              "hint": "开（默认）= 正常注册；关 = 13 个工具移除（拖拽/上传/下载/对话框/裸 CDP/脚本逃生舱/登录导入）。"
+              "hint": "开（默认）= 浏览器活动后注册；关 = 8 个工具移除（裸 CDP/HTTP/上传/下载/对话框/验证码/登录落盘/登录导入）。"
+            },
+            {
+              "path": [
+                "toolEscape"
+              ],
+              "label": "逃生舱 cli / script（2 个）",
+              "kind": "boolean",
+              "hint": "始终可用——与其它档不同，它不等浏览器活动，因为一个 heredoc 就能做到其余 36 个工具的事。关 = 封印。"
             },
             {
               "path": [

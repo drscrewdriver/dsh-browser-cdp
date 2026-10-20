@@ -678,6 +678,7 @@ interface EgoRuntimeConfig {
   readonly toolInjection: ResolvedConfig['toolInjection']
   readonly toolBrowse: boolean
   readonly toolExtended: boolean
+  readonly toolEscape: boolean
   readonly toolJudge: boolean
   // ── R1/R7: connection sequence + activation ─────────────────────────────
   readonly links: BrowserLink[]
@@ -1001,6 +1002,7 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
     get toolInjection() { return resolveConfig(bridge.source() as RawConfig).toolInjection },
     get toolBrowse() { return resolveConfig(bridge.source() as RawConfig).toolBrowse },
     get toolExtended() { return resolveConfig(bridge.source() as RawConfig).toolExtended },
+    get toolEscape() { return resolveConfig(bridge.source() as RawConfig).toolEscape },
     get toolJudge() { return resolveConfig(bridge.source() as RawConfig).toolJudge },
     // ── R1: CDP sequence + activation ────────────────────────────────────
     get links() { return resolveConfig(bridge.source() as RawConfig).links },
@@ -1071,6 +1073,7 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
       injection: cfg.toolInjection,
       toolBrowse: cfg.toolBrowse,
       toolExtended: cfg.toolExtended,
+      toolEscape: cfg.toolEscape,
       toolJudge: cfg.toolJudge,
       judgeConfigured: judgeConfigured({ jevKey: cfg.jevKey, layaKey: cfg.layaKey }),
       active: browserActive,
@@ -1139,16 +1142,17 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
     const s = tiers.surface()
     const unlisted = unknownTieredTools([...s.live, ...s.sealed])
     if (unlisted.length > 0) {
-      ctx.logger?.warn?.(`dsh-browser-cdp: tools missing from the tier table (defaulted to extended): ${unlisted.join(' ')}`)
+      ctx.logger?.warn?.(`dsh-browser-cdp: tools missing from the tier table (defaulted to power): ${unlisted.join(' ')}`)
     }
     ctx.logger?.info?.(
       `dsh-browser-cdp: tool surface ${s.live.length}/${s.live.length + s.sealed.length}` +
       ` (injection=${cfg.toolInjection}, switches browse=${cfg.toolBrowse ? 'open' : 'sealed'}` +
-      ` extended=${cfg.toolExtended ? 'open' : 'sealed'} judge=${cfg.toolJudge ? 'open' : 'sealed'},` +
+      ` extended=${cfg.toolExtended ? 'open' : 'sealed'} escape=${cfg.toolEscape ? 'open' : 'sealed'}` +
+      ` judge=${cfg.toolJudge ? 'open' : 'sealed'},` +
       ` judgeConfigured=${judgeConfigured({ jevKey: cfg.jevKey, layaKey: cfg.layaKey })})`,
     )
   }
-  // 设置页翻 toolInjection / toolBrowse / toolExtended / toolJudge → volatile 热更 → 当场重算注入面
+  // 设置页翻 toolInjection / toolBrowse / toolExtended / toolEscape / toolJudge → volatile 热更 → 当场重算注入面
   // （与 prime-memory 的 applyToolSeals 同式：不需要重启插件）。
   bridge.onChange(() => tiers.reapply())
 
@@ -2659,6 +2663,7 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
           lines.push(
             `tool injection: mode=${cfg.toolInjection}` +
             ` browse=${cfg.toolBrowse ? 'open' : 'sealed'} extended=${cfg.toolExtended ? 'open' : 'sealed'}` +
+            ` escape=${cfg.toolEscape ? 'open' : 'sealed'}` +
             ` judge=${cfg.toolJudge ? 'open' : 'sealed'} judgeKey=${key ? 'set' : 'none'}` +
             ` active=${tiers.active() ? 'yes' : 'no'} → live ${s.live.length} / sealed ${s.sealed.length}`,
           )

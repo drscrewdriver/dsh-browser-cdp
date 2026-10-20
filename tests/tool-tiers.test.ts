@@ -22,8 +22,13 @@ const registeredNames = async (): Promise<string[]> => {
 };
 
 const P = (over: Partial<TierPolicy> = {}): TierPolicy => ({
-  injection: "lazy", toolBrowse: true, toolExtended: true, toolJudge: true, judgeConfigured: true, active: false, ...over,
+  injection: "lazy", toolBrowse: true, toolExtended: true, toolEscape: true, toolJudge: true,
+  judgeConfigured: true, active: false, ...over,
 });
+
+const sorted0 = (names: readonly string[]) => [...names].sort();
+/** 非 core、非 escape 的批次（它们要等活动 / 批次深度）。 */
+const GATED = ["act", "observe", "wait", "power", "session", "judge"] as const;
 
 describe("tier table coverage", () => {
   it("the table covers every registered bcdp_* tool, with no stale entries", async () => {
@@ -43,11 +48,37 @@ describe("tier table coverage", () => {
     ]);
   });
 
-  it("the core tier is the only one allowed in the shipped default configuration", () => {
+  it("the eight batches carry the members the issues doc §9.2 assigns them", () => {
+    expect(TIER_MEMBERS.act).toEqual([
+      "bcdp_click", "bcdp_fill", "bcdp_key", "bcdp_hover", "bcdp_scroll", "bcdp_select", "bcdp_check", "bcdp_drag",
+    ]);
+    expect(TIER_MEMBERS.observe).toEqual([
+      "bcdp_screenshot", "bcdp_page_info", "bcdp_read_element", "bcdp_js",
+    ]);
+    expect(TIER_MEMBERS.wait).toEqual([
+      "bcdp_wait", "bcdp_wait_for_selector", "bcdp_wait_for_url", "bcdp_wait_for_response",
+    ]);
+    expect(TIER_MEMBERS.power).toEqual([
+      "bcdp_cdp", "bcdp_http", "bcdp_upload", "bcdp_download", "bcdp_dialog",
+    ]);
+    expect(TIER_MEMBERS.session).toEqual([
+      "bcdp_captcha", "bcdp_auth_flush", "bcdp_login_import",
+    ]);
+    // 第八批：逃生舱独立成批，且只有这两个（同一个 heredoc 运行时的两种返回形态）。
+    expect(TIER_MEMBERS.escape).toEqual(["bcdp_cli", "bcdp_script"]);
+  });
+
+  it("every batch fits the ≤8 rule the doc set for a batch", () => {
+    for (const [tier, names] of Object.entries(TIER_MEMBERS)) {
+      expect(names.length, `${tier} has ${names.length} tools`).toBeLessThanOrEqual(8);
+    }
+  });
+
+  it("only core and the ready escape hatch are live in the shipped default", () => {
     const p = P();
     for (const [tier, names] of Object.entries(TIER_MEMBERS)) {
       const allowed = names.every((n) => toolAllowed(n, p));
-      expect(allowed).toBe(tier === "core");
+      expect(allowed).toBe(tier === "core" || tier === "escape");
     }
   });
 });
@@ -61,40 +92,61 @@ describe("tierOfTool", () => {
   });
 
   it("an unregistered name falls to the strictest tier instead of sneaking onto the resident surface", () => {
-    expect(tierOfTool("bcdp_not_in_the_table")).toBe("extended");
+    expect(tierOfTool("bcdp_not_in_the_table")).toBe("power");
+    expect(toolAllowed("bcdp_not_in_the_table", P())).toBe(false);
     expect(unknownTieredTools(["bcdp_click", "bcdp_nope"])).toEqual(["bcdp_nope"]);
   });
 });
 
 describe("tierAllowed policy gates", () => {
   it("core is never sealable — lazy mode must keep its own unlock entry", () => {
-    for (const p of [P(), P({ injection: "always" }), P({ toolBrowse: false, toolExtended: false, toolJudge: false })]) {
+    for (const p of [
+      P(), P({ injection: "always" }),
+      P({ toolBrowse: false, toolExtended: false, toolEscape: false, toolJudge: false }),
+    ]) {
       expect(tierAllowed("core", p)).toBe(true);
+    }
+  });
+
+  it("escape is the ONE tier that ignores the activity gate (its switch still seals it)", () => {
+    // 冷启动可用：这是它存在的全部意义。
+    expect(tierAllowed("escape", P({ active: false, batchDepth: 0 }))).toBe(true);
+    // 但开关仍然是硬锁。
+    expect(tierAllowed("escape", P({ active: true, toolEscape: false }))).toBe(false);
+    // always 模式同样受开关约束。
+    expect(tierAllowed("escape", P({ injection: "always", toolEscape: false }))).toBe(false);
+  });
+
+  it("every other gated tier still waits for browser activity in lazy mode", () => {
+    const sealed = P({ active: false, batchDepth: 0 });
+    const open = P({ active: true });
+    for (const tier of GATED) {
+      expect(tierAllowed(tier, sealed), `${tier} should be sealed`).toBe(false);
+      expect(tierAllowed(tier, open), `${tier} should be open`).toBe(true);
     }
   });
 
   it("a tier switch is a hard lock: activity cannot open a sealed tier", () => {
     const active = P({ active: true });
-    expect(tierAllowed("browse", { ...active, toolBrowse: false })).toBe(false);
-    expect(tierAllowed("extended", { ...active, toolExtended: false })).toBe(false);
-    expect(tierAllowed("browse", active)).toBe(true);
-    expect(tierAllowed("extended", active)).toBe(true);
-    // 封一级不波及另一级：一级一个开关，不是全局深度锁。
-    expect(tierAllowed("extended", { ...active, toolBrowse: false })).toBe(true);
+    expect(tierAllowed("power", { ...active, toolExtended: false })).toBe(false);
+    expect(tierAllowed("session", { ...active, toolExtended: false })).toBe(false);
+    expect(tierAllowed("act", { ...active, toolBrowse: false })).toBe(false);
+    // 封一组不波及另一组：开关组之间互相独立。
+    expect(tierAllowed("power", { ...active, toolBrowse: false })).toBe(true);
+    expect(tierAllowed("act", { ...active, toolExtended: false })).toBe(true);
   });
 
-  it("lazy mode holds everything above core until the first browser activity", () => {
-    const sealed = P({ active: false });
-    const open = { ...sealed, active: true };
-    for (const tier of ["browse", "extended", "judge"] as const) {
-      expect(tierAllowed(tier, sealed)).toBe(false);
-      expect(tierAllowed(tier, open)).toBe(true);
-    }
+  it("one switch covers its whole group (browse → act/observe/wait, extended → power/session)", () => {
+    const off = P({ active: true, toolBrowse: false });
+    for (const tier of ["act", "observe", "wait"] as const) expect(tierAllowed(tier, off)).toBe(false);
+    const off2 = P({ active: true, toolExtended: false });
+    for (const tier of ["power", "session"] as const) expect(tierAllowed(tier, off2)).toBe(false);
   });
 
-  it("always mode ignores the activity flag (historical timing)", () => {
-    for (const tier of ["browse", "extended", "judge"] as const) {
+  it("always mode ignores the activity flag but not the switches", () => {
+    for (const tier of GATED) {
       expect(tierAllowed(tier, P({ injection: "always", active: false }))).toBe(true);
+      expect(tierAllowed(tier, P({ injection: "always", active: false, toolBrowse: false, toolExtended: false, toolJudge: false }))).toBe(false);
     }
   });
 
@@ -139,22 +191,24 @@ describe("tier injector controller", () => {
     };
   };
 
-  it("lazy mount registers only the resident core tier and keeps the rest pending", () => {
-    const h = harness(P({ active: false }));
-    for (const n of [...TIER_MEMBERS.core, ...TIER_MEMBERS.browse]) h.offer(n);
-    expect(h.injector.surface().live.slice().sort()).toEqual(TIER_MEMBERS.core.slice().sort());
+  it("lazy mount registers core plus the escape hatch, and keeps the rest pending", () => {
+    const h = harness(P({ active: false, batchDepth: 0 }));
+    for (const n of [...TIER_MEMBERS.core, ...TIER_MEMBERS.act, ...TIER_MEMBERS.escape]) h.offer(n);
+    expect(h.injector.surface().live.slice().sort()).toEqual(
+      sorted0([...TIER_MEMBERS.core, ...TIER_MEMBERS.escape]),
+    );
     expect(h.injector.surface().sealed).toContain("bcdp_click");
   });
 
   it("activity widens the surface; re-sealing narrows it again (dispose, not refuse)", () => {
-    const h = harness(P({ active: false }));
-    for (const n of [...TIER_MEMBERS.core, ...TIER_MEMBERS.browse]) h.offer(n);
-    h.setPolicy(P({ active: true }));
+    const h = harness(P({ active: false, batchDepth: 0 }));
+    for (const n of [...TIER_MEMBERS.core, ...TIER_MEMBERS.act, ...TIER_MEMBERS.escape]) h.offer(n);
+    h.setPolicy(P({ active: true, batchDepth: 3 }));
     h.injector.reapply();
     expect(h.live).toContain("bcdp_click");
-    h.setPolicy(P({ active: false }));
+    h.setPolicy(P({ active: false, batchDepth: 0 }));
     h.injector.reapply();
-    expect(h.live.slice().sort()).toEqual(TIER_MEMBERS.core.slice().sort());
+    expect(h.live.slice().sort()).toEqual(sorted0([...TIER_MEMBERS.core, ...TIER_MEMBERS.escape]));
     expect(h.disposals).toContain("bcdp_click");
   });
 
@@ -167,14 +221,26 @@ describe("tier injector controller", () => {
     expect(h.disposals).toEqual([]);
   });
 
-  it("a settings flip seals one tier live, leaving the others open", () => {
-    const h = harness(P({ active: true }));
-    for (const n of [...TIER_MEMBERS.core, ...TIER_MEMBERS.browse, ...TIER_MEMBERS.extended]) h.offer(n);
-    expect(h.live).toContain("bcdp_drag");
-    h.setPolicy(P({ active: true, toolExtended: false }));
+  it("a settings flip seals one group live, leaving the others open", () => {
+    const h = harness(P({ active: true, batchDepth: 3 }));
+    for (const n of [...TIER_MEMBERS.core, ...TIER_MEMBERS.act, ...TIER_MEMBERS.power]) h.offer(n);
+    expect(h.live).toContain("bcdp_cdp");
+    h.setPolicy(P({ active: true, batchDepth: 3, toolExtended: false }));
     h.injector.reapply();
-    // extended 被收，browse 仍在——一级一个开关。
-    expect(sorted0(h.live)).toEqual(sorted0([...TIER_MEMBERS.core, ...TIER_MEMBERS.browse]));
+    // power 被收，act 仍在——开关组互相独立。
+    expect(sorted0(h.live)).toEqual(sorted0([...TIER_MEMBERS.core, ...TIER_MEMBERS.act]));
+  });
+
+  it("the escape switch seals cli/script alone, without touching any other group", () => {
+    const h = harness(P({ active: true, batchDepth: 3 }));
+    for (const n of [...TIER_MEMBERS.core, ...TIER_MEMBERS.escape, ...TIER_MEMBERS.power]) h.offer(n);
+    expect(h.live).toContain("bcdp_script");
+    h.setPolicy(P({ active: true, batchDepth: 3, toolEscape: false }));
+    h.injector.reapply();
+    expect(h.live).not.toContain("bcdp_script");
+    expect(h.live).not.toContain("bcdp_cli");
+    // power 完全不受影响。
+    expect(h.live).toContain("bcdp_cdp");
   });
 
   it("an unconfigured judge tier never registers, even at mount in always mode", () => {
@@ -183,7 +249,7 @@ describe("tier injector controller", () => {
     expect(h.live).toEqual([]);
     h.setPolicy(P({ injection: "always", judgeConfigured: true }));
     h.injector.reapply();
-    expect(h.live.slice().sort()).toEqual(TIER_MEMBERS.judge.slice().sort());
+    expect(h.live.slice().sort()).toEqual(sorted0(TIER_MEMBERS.judge));
   });
 
   it("every table entry is reachable under the widest policy", () => {
@@ -194,10 +260,10 @@ describe("tier injector controller", () => {
   });
 });
 
-describe("browse injection batches (act → observe → wait)", () => {
-  it("releases browse in batch order as activity depth grows", () => {
+describe("progressive batches (act → observe → wait)", () => {
+  it("releases the browsing trio in order as activity depth grows", () => {
     const at = (batchDepth: number) => P({ active: true, batchDepth });
-    // depth 0: nothing above core, even though activity is on.
+    // depth 0: nothing browsing-related yet.
     expect(toolAllowed("bcdp_click", at(0))).toBe(false);
     // depth 1: act only.
     expect(toolAllowed("bcdp_click", at(1))).toBe(true);
@@ -212,10 +278,14 @@ describe("browse injection batches (act → observe → wait)", () => {
     expect(toolAllowed("bcdp_wait_for_selector", at(3))).toBe(true);
   });
 
-  it("leaves core and extended untouched by the browse batch gate", () => {
-    const shallow = P({ active: true, batchDepth: 1, toolExtended: true });
+  it("the batch gate applies to the browsing trio only — power/session/escape are not depth-gated", () => {
+    const shallow = P({ active: true, batchDepth: 1 });
     expect(toolAllowed("bcdp_status", shallow)).toBe(true);
-    expect(toolAllowed("bcdp_drag", shallow)).toBe(true);
+    // power/session ride the activity gate, not the depth gate.
+    expect(toolAllowed("bcdp_download", shallow)).toBe(true);
+    expect(toolAllowed("bcdp_login_import", shallow)).toBe(true);
+    // escape ignores both.
+    expect(toolAllowed("bcdp_script", P({ active: false, batchDepth: 0 }))).toBe(true);
   });
 
   it("always mode ignores batch depth (historical mount-all semantics)", () => {
@@ -223,13 +293,16 @@ describe("browse injection batches (act → observe → wait)", () => {
     expect(toolAllowed("bcdp_wait", p)).toBe(true);
   });
 
-  it("batchOfTool is prefix-agnostic and defaults unknown names to act", () => {
+  it("batchOfTool is prefix-agnostic and maps non-progressive tiers to act", () => {
     expect(batchOfTool("bcdp_click")).toBe("act");
     expect(batchOfTool("ego_click")).toBe("act");
+    expect(batchOfTool("bcdp_drag")).toBe("act");
     expect(batchOfTool("bcdp_screenshot")).toBe("observe");
     expect(batchOfTool("bcdp_wait_for_selector")).toBe("wait");
+    expect(batchOfTool("bcdp_wait_for_url")).toBe("wait");
+    // 非渐进批次不是「批」，落到默认值。
+    expect(batchOfTool("bcdp_script")).toBe("act");
     expect(batchOfTool("bcdp_unlisted")).toBe("act");
+    expect(BATCH_ORDER).toEqual(["act", "observe", "wait"]);
   });
 });
-
-const sorted0 = (names: readonly string[]) => [...names].sort();

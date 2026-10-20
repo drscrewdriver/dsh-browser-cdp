@@ -31,8 +31,9 @@ export const EGO_HELP_INDEX: Record<string, string> = {
   script: 'bcdp_cli / bcdp_script: 原样运行任意内置运行时 heredoc 脚本(page/browser/taskSpaces/site/fetch/cdp预载)。bcdp_script额外返回 duration/timedOut。',
   doctor: 'bcdp_doctor: 体检环境（浏览器候选、vendored runtime、状态目录、CDP端口、任务空间、引擎与降级清单）；首行附工具注入面快照。',
   injection:
-    '工具分级注入（不是工具，是出现时机）：38 个 bcdp_* 分四级——core（status/doctor/help/space_open/navigate/snapshot，常驻不可封印）/ browse（基础操作）/ extended（拖拽上传下载对话框裸CDP脚本登录搬运）/ judge（bcdp_jev_*）。' +
-    '设置旋钮（全 volatile，一级一个开关）：toolInjection = lazy（默认，只常驻 core，首次 bcdp_* 调用后铺开）/ always（挂载即全量，历史行为）；toolBrowse / toolExtended / toolJudge 三把开关——开 = 开放注册，关 = 该级从工具列表移除（core 级不给开关，封了就没解锁入口）；judge 级即使开了仍需配 JEV/Laya Key。' +
+    '工具分级注入（不是工具，是出现时机）：38 个 bcdp_* 分八批——core（status/doctor/help/space_open/space_close/navigate/snapshot，常驻不可封印）/ act（点击填写键鼠拖拽）/ observe（截图页面信息读取js）/ wait（等待类）/ power（裸CDP/HTTP/上传/下载/对话框）/ session（验证码/登录落盘/登录导入）/ escape（cli/script 逃生舱）/ judge（bcdp_jev_*）。' +
+    '设置旋钮（全 volatile）：toolInjection = lazy（默认，常驻 core + escape，首次 bcdp_* 调用后铺开其余）/ always（挂载即全量，历史行为）；toolBrowse（act+observe+wait，内部按 act→observe→wait 三波放行）/ toolExtended（power+session）/ toolEscape（cli+script）/ toolJudge 四把开关——开 = 开放注册，关 = 该批从工具列表移除（core 级不给开关，封了就没解锁入口）；judge 级即使开了仍需配 JEV/Laya Key。' +
+    '**escape 批不吃活动闸**：cli/script 是唯一的「一次调用干完任意多步任务」的入口，必须始终可达，不排在首次活动之后。' +
     '封印 = 从工具列表里反注册，不是执行期报错；lazy 下闲置回收会把扩展面收回。' +
     '**若某个 bcdp_* 工具不在你的工具列表里**：它被分级封印了——先跑 bcdp_status 或 bcdp_doctor（两者也算浏览器活动，会把面铺开），或让用户在设置页「工具封印」里打开对应档位的开关；别猜测不存在的工具名。',
   lightpanda:

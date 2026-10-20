@@ -221,28 +221,34 @@ dshx list                                                # 应显示：[on] dsh-
 
 ## 工具注入分级（懒注册 / 分级 / 锁定）
 
-38 个工具全量注册时，**每个会话每一轮**都要为它们的 schema 付费（实测 `description` + `parameters` ≈ 25.6K 字符 ≈ 5–7K token），而不碰浏览器的会话一个也用不上。插件因此把「谁能出现在模型面前」收成一处策略（`src/toolTiers.ts`），分四级注入：
+38 个工具全量注册时，**每个会话每一轮**都要为它们的 schema 付费（AST 实测 `description` + `parameters` ≈ 18.8K 字符 ≈ 5.4K token），而不碰浏览器的会话一个也用不上。插件因此把「谁能出现在模型面前」收成一处策略（`src/toolTiers.ts`），分**八批**注入：
 
-| 级别 | 成员 | 何时出现 |
-|---|---|---|
-| **core** 常驻（6） | `bcdp_status` `bcdp_doctor` `bcdp_help` `bcdp_space_open` `bcdp_navigate` `bcdp_snapshot` | 永远在场，不可封印——否则 lazy 模式连解锁入口都没有 |
-| **browse** 基础操作（14） | 点击/填写/键鼠/截图/读取/等待/关闭空间 等 | `lazy` 下等首次活动；`always` 下挂载即在 |
-| **extended** 扩展能力（13） | 拖拽/上传/下载/对话框/裸 CDP/脚本逃生舱/登录搬运 | 同上 |
-| **judge** 评审链（5） | `bcdp_jev_*` | 除解锁外，**还要求配了 JEV 或 Laya Key**——没 Key 它们只能回答「未配置」 |
+| 批次 | 成员 | schema | 何时出现 |
+|---|---|---:|---|
+| **core** 常驻（7） | `bcdp_status` `bcdp_doctor` `bcdp_help` `bcdp_space_open` `bcdp_space_close` `bcdp_navigate` `bcdp_snapshot` | 2,610 | 永远在场，不可封印——否则 lazy 模式连解锁入口都没有 |
+| **act** 动手（8） | click / fill / key / hover / scroll / select / check / drag | 3,823 | `lazy` 下首次活动放第一波 |
+| **observe** 观察（4） | screenshot / page_info / read_element / js | 1,663 | 第二次活动 |
+| **wait** 等待（4） | wait / wait_for_selector / wait_for_url / wait_for_response | 1,695 | 第三次活动 |
+| **power** 重量级（5） | raw CDP / http / upload / download / dialog | 2,947 | 首次活动（同 `toolExtended`） |
+| **session** 登录态（3） | captcha / auth_flush / login_import | 1,689 | 首次活动（同 `toolExtended`） |
+| **escape** 逃生舱（2） | cli / script | 1,224 | **冷启动即在**，不吃活动闸（见下） |
+| **judge** 评审链（5） | `bcdp_jev_*` | 3,183 | 除解锁外，**还要求配了 JEV 或 Laya Key** |
 
-设置项在插件设置页**最上方**的「工具封印」分块（全部 volatile，翻完当场生效，不重启插件）——一级一个开关，形状照 dsh-prime-memory 的「工具封印」：
+设置项在插件设置页**最上方**的「工具封印」分块（全部 volatile，翻完当场生效，不重启插件）——一个开关管一组批次，形状照 dsh-prime-memory 的「工具封印」：
 
-- **`toolInjection`** `lazy`（**默认**：只常驻 core，首次 `bcdp_*` 调用后按开关注入）/ `always`（挂载即全量，历史行为）。
-- **`toolBrowse`**（14）/ **`toolExtended`**（13）/ **`toolJudge`**（5）：开 = 开放注册，关 = 该级从模型工具列表移除。三级各自独立，封一级不波及别级；`core` 级不给开关（封了就没了活动入口）。
+- **`toolInjection`** `lazy`（**默认**：常驻 core + escape，其余首次 `bcdp_*` 调用后按开关注入）/ `always`（挂载即全量，历史行为）。
+- **`toolBrowse`**（act + observe + wait = 16）/ **`toolExtended`**（power + session = 8）/ **`toolEscape`**（cli + script = 2）/ **`toolJudge`**（5）：开 = 开放注册，关 = 该批从模型工具列表移除。四组各自独立，封一组不波及别组；`core` 级不给开关（封了就没了活动入口）。
+
+**escape 批为什么单独成组、且不等活动**：`cli` / `script` 是唯一能在一次调用里干完任意多步任务的入口（`page` / `browser` / `taskSpaces` / `fetch` / `cdp` 全预置），其余 36 个工具能做的事它都能做。所以它必须始终可达——否则模型遇到「结构化工具没覆盖」的情形时手里没有任何逃生手段。这也让它成为**按需只开逃生舱**的合法姿势：关掉 `toolExtended`、留着 `toolEscape`，只留 2 个工具。
 
 行为要点：
 
 - **封印 = 反注册**（工具从模型的工具列表里消失），不是执行期拒绝。解锁信号挂在 `bcdp_*` 调用的公共出口上，工具体不知道分级存在；`bcdp_status` / `bcdp_help` / `bcdp_doctor` 自身也算活动信号（读了指南就得有工具可用）。
 - **闲置自动收回**：`lazy` + `idleTimeoutMin > 0` 时，空闲回收把后台浏览器停掉的同一刻收回扩展面；下次活动重新铺开。`always` 模式不受影响。
 - `legacyEgoToolNames` 的 `ego_*` 别名跟随其 `bcdp_*` 本体的级别。
-- 当前注入面写在 `bcdp_doctor` 报告首行（`tool injection: mode=lazy browse=open extended=open judge=open judgeKey=none active=no → live 6 / sealed 32`），不用猜。
-- 默认档下不碰浏览器的会话只有 **6** 个工具在场（≈ 2.9K 字符，−88.6%）；要回到历史行为把 `toolInjection` 改成 `always`（38 件全在场需再配一个评审 Key）。
-- 四个字段都带 schema `.default()`：volatile 字段的表单描述符直接拿 schema 默认值，不写默认会出现「面板显示 A、运行时用 B」。
+- 当前注入面写在 `bcdp_doctor` 报告首行（`tool injection: mode=lazy browse=open extended=open escape=open judge=open judgeKey=none active=no → live 9 / sealed 29`），不用猜。
+- 默认档下不碰浏览器的会话只有 **9** 个工具在场（core 7 + escape 2 ≈ 3.8K 字符，−79.6%）；要回到历史行为把 `toolInjection` 改成 `always`（38 件全在场需再配一个评审 Key）。
+- 五个字段都带 schema `.default()`：volatile 字段的表单描述符直接拿 schema 默认值，不写默认会出现「面板显示 A、运行时用 B」。
 
 > 取舍提醒：窄工具（一个动作一个工具）是模型写对参数、少重试的护栏。把交互原子合并成脚本逃生舱会省上下文，但代价是模型要自己写 heredoc、出错率上升——本插件保持全部 38 个工具的签名不变，只改**出现时机**。
 

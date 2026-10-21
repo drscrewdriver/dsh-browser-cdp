@@ -1,3 +1,39 @@
+## 1.5.0 (2026-10-21)
+
+**破坏性变更**：工具面三族合并（计划组 `bcdp-tool-consolidation`）。`wait` / `space` / `escape` 三族按 `op` 收口，工具数 **41 → 34**，全量 schema **24,093 → 22,224 字符**（净省 1,869，天花板 24,094 未上调）。旧工具名**直接移除**，不保留薄别名——别名同样占 schema 预算，保留等于没省。迁移表见 README「1.5.0 迁移表」。
+
+### 移除（破坏性）：8 个旧工具名
+- `bcdp_wait_for_selector` / `bcdp_wait_for_url` / `bcdp_wait_for_response` / `bcdp_wait_page` → 并入 `bcdp_wait` 的 `op=selector|url|response|load|function|request|event`。
+- `bcdp_space_open` / `bcdp_space_close` → 并入 `bcdp_space` 的 `op=open|close`（原有 `op=list|handoff|takeover` 不变）。
+- `bcdp_cli` → 并入 `bcdp_script` 的 `verbatim:true`（裸 heredoc、无 preamble、返回含 `output` 合并文本）。
+
+### 变更：三族为何可合（同源证据）
+- **wait（5 → 1）**：五个工具共用同一 `useSpace(...)` + `ensureRealTab()` preamble、同一 `timeout` 语义、同一 `space` 参数；`bcdp_wait_page` 本身已是 `op` 多动作形态，合并是把既有范式用完，不是新范式。
+- **space（3 → 1）**：`bcdp_space` 本就是 op 工具（list/handoff/takeover），open/close 只是没并进去。
+- **escape（2 → 1）**：`bcdp_cli` 与 `bcdp_script` 是同一 heredoc 运行时，唯一差异是 preamble（script 先选空间 + 激活真实 tab）。
+
+### 修复：空间追踪的分派基准随合并调整
+- 共享 `t()` 包装器的 `afterExecute` 原按**工具名**分派 tracker（`bcdp_space_open` → `spaceTracker.opened`、`bcdp_space_close` → `spaceTracker.closed`）。三族合并后工具名不再携带动作信息，改为按 `args.op` 分派。若不改，活动空间追踪会**静默失效**（不报错、只是状态不对）。已补三条单测直接观察该唯一用户可见效应（后续调用解析到的默认空间）。
+
+### 保留的守卫（逐字未动）
+- `op=function` 仍用 `safeEvalWrap(expr, true)`（preserveFalsy）——否则 DOM/window 返回值会撞 SDK 的 `Object reference chain is too long`。
+- `timeout` 默认值分档不变：普通 op 10,000ms、页面级 op（load/function/request/event）30,000ms。
+- 各 op 的失败均可归因：`reason` 带 op 名（如 `bcdp_wait: selector is required for op=selector`），不退化为裸 `ok:false`。
+- `handoff` 后同脚本不碰 `page.*` 的硬停（P0-5）、`ensureRealTab`、`attachSessionHint` 全部保留。
+
+### 变更：默认注入面更窄
+- `lazy` 默认档下不碰浏览器的会话在场工具 **10 → 7**（core 6 + escape 1 = 4,978 字符 ≈ 1,430 token）；`always` 全量 34 件 = 22,224 字符。
+- `core` 批次 **8 → 6**、`wait` 批次 **5 → 1**、`escape` 批次 **2 → 1**。
+
+### 文档
+- 6 个 README（`README.md` + de/es/fr/it/ru）工具表、分级表、注入面实测值、core 计数全部同步；主 README 新增「1.5.0 迁移表」。
+- `help.ts` 工具清单与 `navigate` / `wait` / `network` / `script` 四个 topic 改为合并后口径。
+
+### 验证
+- `npm run typecheck` EXIT 0；`npm run test` **861 passed / 12 skipped（873）**（三族合并新增 11 项断言）；`npm run build` 三 bundle complete。
+- 全量 schema 门：**34 工具 / 22,224 字符 ≤ 24,094**（实测落值，非估算）。
+- `npm pack --ignore-scripts` 出 `dsh-browser-cdp-1.5.0.tgz`，解包 `lib/index.js` SHA256 与本地构建逐字节一致。
+
 ## 1.4.1 (2026-10-21)
 
 空间命名与并发隔离加固（计划组 `bcdp-space-ns-hardening`，A/B/C/D1/E/F/G）。按风险分级落地，SDK 快照编号生成逻辑（D3）不在本轮改，以 D1 插件层解法替代。

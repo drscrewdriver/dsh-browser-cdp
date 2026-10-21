@@ -36,7 +36,7 @@ describe("tier table coverage", () => {
     const listed = Object.values(TIER_MEMBERS).flat();
     // 双向对齐：源码里注册的每个名字都在表上，表上每个名字都还在源码里。
     expect(names.slice().sort()).toEqual(listed.slice().sort());
-    expect(names.length).toBe(41);
+    expect(names.length).toBe(34);
     expect(unknownTieredTools(names)).toEqual([]);
   });
 
@@ -44,7 +44,7 @@ describe("tier table coverage", () => {
     const all = Object.values(TIER_MEMBERS).flat();
     expect(new Set(all).size).toBe(all.length);
     expect(TIER_MEMBERS.core).toEqual([
-      "bcdp_status", "bcdp_doctor", "bcdp_help", "bcdp_space_open", "bcdp_space_close", "bcdp_space", "bcdp_navigate", "bcdp_snapshot",
+      "bcdp_status", "bcdp_doctor", "bcdp_help", "bcdp_space", "bcdp_navigate", "bcdp_snapshot",
     ]);
   });
 
@@ -56,7 +56,7 @@ describe("tier table coverage", () => {
       "bcdp_screenshot", "bcdp_page_info", "bcdp_read_element", "bcdp_js",
     ]);
     expect(TIER_MEMBERS.wait).toEqual([
-      "bcdp_wait", "bcdp_wait_for_selector", "bcdp_wait_for_url", "bcdp_wait_for_response", "bcdp_wait_page",
+      "bcdp_wait",
     ]);
     expect(TIER_MEMBERS.power).toEqual([
       "bcdp_cdp", "bcdp_http", "bcdp_upload", "bcdp_download", "bcdp_dialog",
@@ -64,8 +64,8 @@ describe("tier table coverage", () => {
     expect(TIER_MEMBERS.session).toEqual([
       "bcdp_captcha", "bcdp_auth_flush", "bcdp_login_import",
     ]);
-    // 第八批：逃生舱独立成批，且只有这两个（同一个 heredoc 运行时的两种返回形态）。
-    expect(TIER_MEMBERS.escape).toEqual(["bcdp_cli", "bcdp_script"]);
+    // 第八批：逃生舱独立成批，1.5.0 起合并为单工具（verbatim 切换两种形态）。
+    expect(TIER_MEMBERS.escape).toEqual(["bcdp_script"]);
   });
 
   it("every batch fits the ≤9 rule the doc set for a batch", () => {
@@ -233,14 +233,13 @@ describe("tier injector controller", () => {
     expect(sorted0(h.live)).toEqual(sorted0([...TIER_MEMBERS.core, ...TIER_MEMBERS.act]));
   });
 
-  it("the escape switch seals cli/script alone, without touching any other group", () => {
+  it("the escape switch seals script alone, without touching any other group", () => {
     const h = harness(P({ active: true, batchDepth: 3 }));
     for (const n of [...TIER_MEMBERS.core, ...TIER_MEMBERS.escape, ...TIER_MEMBERS.power]) h.offer(n);
     expect(h.live).toContain("bcdp_script");
     h.setPolicy(P({ active: true, batchDepth: 3, toolEscape: false }));
     h.injector.reapply();
     expect(h.live).not.toContain("bcdp_script");
-    expect(h.live).not.toContain("bcdp_cli");
     // power 完全不受影响。
     expect(h.live).toContain("bcdp_cdp");
   });
@@ -277,7 +276,6 @@ describe("progressive batches (act → observe → wait)", () => {
     expect(toolAllowed("bcdp_wait", at(2))).toBe(false);
     // depth 3: + wait.
     expect(toolAllowed("bcdp_wait", at(3))).toBe(true);
-    expect(toolAllowed("bcdp_wait_for_selector", at(3))).toBe(true);
   });
 
   it("the batch gate applies to the browsing trio only — power/session/escape are not depth-gated", () => {
@@ -300,8 +298,7 @@ describe("progressive batches (act → observe → wait)", () => {
     expect(batchOfTool("ego_click")).toBe("act");
     expect(batchOfTool("bcdp_drag")).toBe("act");
     expect(batchOfTool("bcdp_screenshot")).toBe("observe");
-    expect(batchOfTool("bcdp_wait_for_selector")).toBe("wait");
-    expect(batchOfTool("bcdp_wait_for_url")).toBe("wait");
+    expect(batchOfTool("bcdp_wait")).toBe("wait");
     // 非渐进批次不是「批」，落到默认值。
     expect(batchOfTool("bcdp_script")).toBe("act");
     expect(batchOfTool("bcdp_unlisted")).toBe("act");

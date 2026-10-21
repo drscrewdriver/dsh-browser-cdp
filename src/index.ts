@@ -722,7 +722,7 @@ export async function runWithTabRevive(
 /**
  * Find the last line carrying the sentinel and JSON-parse its payload.
  *
- * Fallback: `bcdp_script` / `bcdp_cli` run user-authored heredocs, and both
+ * Fallback: `bcdp_script` (with verbatim:true) runs user-authored heredocs, which
  * tool descriptions tell the model to "end with console.log(JSON.stringify(...))"
  * �?without the sentinel prefix. A script written to that instruction used to
  * succeed and still be reported as a failure ("no @@DSH_RESULT@@ payload"), so
@@ -1085,7 +1085,7 @@ const ensureRealTab = (): string =>
   `const __real = __tabs.find(t => !t.url.startsWith('about:') && !t.url.startsWith('chrome://')) ?? __tabs[0]\n` +
   `if (__real) await browser.switchTab(__real.targetId)\n`
 /**
- * G �?a raw heredoc (`bcdp_cli` / `bcdp_script`) that touches `page.*` without
+ * G �?a raw heredoc (`bcdp_script` with verbatim:true) that touches `page.*` without
  * first selecting a task space dies with the runtime's "no active tab to attach
  * session". Structured bcdp_* tools never hit this because each wraps its body
  * in `useSpace(...)` + `ensureRealTab()`; a hand-written heredoc has no such
@@ -1915,12 +1915,16 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
     ...opts,
     afterExecute: (args, result) => {
       if (!result || (result as Record<string, unknown>).ok === false) return
-      if (opts.name === 'bcdp_space_open') {
+      // open/close/list/handoff/takeover now live in ONE tool, so the tool
+      // NAME no longer reveals which slot transition happened — dispatch by op.
+      const a = args as { op?: unknown; name?: unknown; space?: unknown }
+      const op = typeof a?.op === 'string' ? a.op.trim() : ''
+      if (opts.name === 'bcdp_space' && op === 'open') {
         cfg.spaceTracker.opened(args as { name?: string | number }, result as { id?: string | number; name?: string; done?: boolean })
-      } else if (opts.name === 'bcdp_space_close') {
-        cfg.spaceTracker.closed(args.name as string | number, (result as { done?: boolean }).done as boolean)
-      } else if (args && args.space !== undefined && args.space !== '') {
-        cfg.spaceTracker.selected(args.space as string | number)
+      } else if (opts.name === 'bcdp_space' && op === 'close') {
+        cfg.spaceTracker.closed(a.name as string | number, (result as { done?: boolean }).done as boolean)
+      } else if (a && a.space !== undefined && a.space !== '') {
+        cfg.spaceTracker.selected(a.space as string | number)
       }
       opts.afterExecute?.(args, result)
     },
@@ -1932,72 +1936,22 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
   }
   reg(
     t({
-      name: 'bcdp_space_open',
-      get description() {
-        return cfg.isolateSpaces
-          ? 'Open (or reuse) an ego-lite task space in isolated sandbox mode.'
-          : "Open (or reuse) the ego-lite task space. In persistent profile mode (default), ALWAYS use or reuse the single 'default' space. Login credentials automatically persist on disk across restarts �?if a page requires login, prompt user to log in manually in the opened window. DO NOT create numbered spaces like #4, #5."
-      },
-      parameters: {
-        name: {
-          type: 'string',
-          required: true,
-          get description() {
-            return cfg.isolateSpaces
-              ? 'Task-space name or numeric id.'
-              : "Task-space name. In persistent mode, ALWAYS specify 'default'. Reuse this single space for all browsing tasks."
-          },
-        },
-      },
-      buildScript: (args) =>
-        `${useSpace(str(args.name, cfg.activeSpace))}` +
-        `console.log('${SENTINEL}' + JSON.stringify({ ok: true, id: task.id ?? null, name: task.name ?? ${j(
-          str(args.name, cfg.activeSpace),
-        )} }))\n`,
-    }),
-  )
-  reg(
-    t({
-      name: 'bcdp_space_close',
-      get description() {
-        return cfg.isolateSpaces
-          ? 'Complete (close) an ego-lite task space in sandbox mode.'
-          : 'Close an ego-lite task space. WARNING: In persistent profile mode, DO NOT call this tool when finishing tasks! Keep the space, tabs, and browser window alive so login sessions and streams remain intact. Conclude tasks by replying to the user directly without closing the space.'
-      },
-      parameters: {
-        name: {
-          type: 'string',
-          required: true,
-          description: 'Task-space name or numeric id to close.',
-        },
-        keep: {
-          type: 'boolean',
-          description: 'Keep the live page open (default false: close it).',
-        },
-      },
-      buildScript: (args) =>
-        `const res = await taskSpaces.complete(${j(
-          str(args.name, cfg.activeSpace),
-        )}, { keep: ${bool(args.keep, false)} })\n` +
-        `console.log('${SENTINEL}' + JSON.stringify({ ok: true, done: !!res.done, skipped: !!res.skipped, reason: res.skipped ? ${j(
-          'target space was not agent-owned',
-        )} : null }))\n`,
-    }),
-  )
-  reg(
-    t({
       name: 'bcdp_space',
       description:
-        'Inspect or transfer a task space: op=list|handoff|takeover. handoff yields control to the human (stop driving until they hand back); takeover resumes agent control.',
+        "Task space: op=open (or reuse) | close | list | handoff | takeover. In persistent profile mode (default) ALWAYS use or reuse the single 'default' space — credentials persist on disk across restarts, so do NOT create numbered spaces like #4/#5; if a page needs login, prompt the user to log in manually. Omitting `space` targets THIS session's own active slot (persistent: 'default'; isolated mode: dsh-agent-<sessionId8>), so concurrent sessions never drift into each other's spaces. handoff yields control to the human (stop driving until they hand back); takeover resumes agent control.",
       parameters: {
         op: {
           type: 'string',
           required: true,
-          description: '"list" | "handoff" | "takeover".',
+          description: '"open" | "close" | "list" | "handoff" | "takeover".',
         },
         name: {
           type: 'string',
-          description: 'Task-space name or id (default: the configured space).',
+          description: "op=open/close: task-space name (persistent mode: ALWAYS specify 'default' and reuse it for all browsing tasks). op=handoff/takeover: default = the configured space.",
+        },
+        keep: {
+          type: 'boolean',
+          description: 'op=close: keep the live page open (default false: close it).',
         },
         space: spaceParam,
       },
@@ -2006,13 +1960,22 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
           `console.log('${SENTINEL}' + JSON.stringify(${expr}))\n`
         const op = str(args.op, '').trim()
         const name = str(args.name, str(args.space, cfg.activeSpace))
+        if (op === 'open') {
+          return `${useSpace(str(args.name, cfg.activeSpace))}` +
+            send(`{ ok: true, op: 'open', id: task.id ?? null, name: task.name ?? ${j(str(args.name, cfg.activeSpace))} }`)
+        }
+        if (op === 'close') {
+          return `const res = await taskSpaces.complete(${j(name)}, { keep: ${bool(args.keep, false)} })\n` +
+            send(`{ ok: true, op: 'close', done: !!res.done, skipped: !!res.skipped, reason: res.skipped ? ${j('target space was not agent-owned')} : null }`)
+        }
         if (op === 'list') {
           return `const __sp = await taskSpaces.list()\n` +
-            send(`{ ok: true, spaces: __sp.map(s => ({ id: s.id ?? null, name: s.name ?? null, ownership: s.ownership ?? null })) }`)
+            send(`{ ok: true, op: 'list', spaces: __sp.map(s => ({ id: s.id ?? null, name: s.name ?? null, ownership: s.ownership ?? null })) }`)
         }
         if (op === 'handoff') {
           // After handoff the human owns the space; any page.* call in THIS same
-          // script would hit the runtime's hard-stop. Emit the result and stop �?          // do not probe page.info() here (see findings P0-5).
+          // script would hit the runtime's hard-stop. Emit the result and stop —
+          // do not probe page.info() here (see findings P0-5).
           return `${useSpace(name)}const __h = await taskSpaces.handOff(${j(name)})\n` +
             send(`{ ok: true, op: 'handoff', name: ${j(name)}, done: !!__h.done, skipped: __h.skipped ?? null, hint: 'user now has control; ask them to confirm before calling op=takeover' }`)
         }
@@ -2021,7 +1984,7 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
             `const __info = await page.info()\n` +
             send(`{ ok: true, op: 'takeover', name: ${j(name)}, page: __info }`)
         }
-        return send(`{ ok: false, reason: ${j('bcdp_space: op must be one of list|handoff|takeover')} }`)
+        return send(`{ ok: false, reason: ${j('bcdp_space: op must be one of open|close|list|handoff|takeover')} }`)
       },
     }),
   )
@@ -2434,136 +2397,38 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
     t({
       name: 'bcdp_wait',
       description:
-        'Pause for a fixed number of milliseconds (e.g. for animations or partial loads). For load waits prefer bcdp_navigate\'s wait option.',
-      parameters: {
-        ms: {
-          type: 'number',
-          required: true,
-          description: 'Milliseconds to wait.',
-        },
-      },
-      buildScript: (args) =>
-        `await page.waitForTimeout(${Math.max(0, num(args.ms, 1000))})\n` +
-        `console.log('${SENTINEL}' + JSON.stringify({ ok: true, waitedMs: ${Math.max(
-          0,
-          num(args.ms, 1000),
-        )} }))\n`,
-    }),
-  )
-  reg(
-    t({
-      name: 'bcdp_wait_for_selector',
-      description:
-        "Wait until a CSS selector appears (state=visible, default) or disappears (state=hidden). Use instead of a fixed wait for async pages.",
-      parameters: {
-        selector: { type: 'string', required: true, description: "CSS selector to wait for, e.g. '.results' or '[data-id=done]'." },
-        state: { type: 'string', description: "'visible' (default) | 'attached' | 'hidden' | 'detached'." },
-        timeout: { type: 'number', description: 'Wait in ms (default 10000).' },
-        space: spaceParam,
-      },
-      buildScript: (args) => {
-        const sel = str(args.selector, '').trim()
-        if (sel === '')
-          return `console.log('${SENTINEL}' + JSON.stringify({ ok: false, waited: false, reason: 'bcdp_wait_for_selector: selector is required' }))\n`
-        return (
-          `${useSpace(str(args.space, cfg.activeSpace))}${ensureRealTab()}` +
-          `await page.waitForSelector(${j(sel)}, { state: ${j(
-            str(args.state, 'visible'),
-          )}, timeout: ${num(args.timeout, 10000)} })\n` +
-          `console.log('${SENTINEL}' + JSON.stringify({ ok: true, waited: true, selector: ${j(
-            sel,
-          )}, state: ${j(str(args.state, 'visible'))} }))\n`
-        )
-      },
-    }),
-  )
-  reg(
-    t({
-      name: 'bcdp_wait_for_url',
-      description:
-        'Wait until the page navigates to a URL matching a substring / glob / regex. Use to catch login redirects or pagination.',
-      parameters: {
-        pattern: {
-          type: 'string',
-          required: true,
-          description:
-            "URL/glob to match (e.g. '/login?done', 'https://*/post/*', or a /regex/).",
-        },
-        timeout: {
-          type: 'number',
-          description: 'How long to wait in ms (default 10000).',
-        },
-        space: spaceParam,
-      },
-      buildScript: (args) => {
-        const p = str(args.pattern, '').trim()
-        if (p === '')
-          return `console.log('${SENTINEL}' + JSON.stringify({ ok: false, reached: false, reason: 'bcdp_wait_for_url: pattern is required' }))\n`
-        return (
-          `${useSpace(str(args.space, cfg.activeSpace))}${ensureRealTab()}` +
-          `const __ok = await page.waitForURL(${j(p)}, { timeout: ${num(
-            args.timeout,
-            10000,
-          )} }).catch(() => false)\n` +
-          `const __u = await page.url()\n` +
-          `console.log('${SENTINEL}' + JSON.stringify({ ok: !!__ok, reached: !!__ok, url: __u }))\n`
-        )
-      },
-    }),
-  )
-  reg(
-    t({
-      name: 'bcdp_wait_for_response',
-      description:
-        'Wait for a network response matching a URL/glob/regex and return it; optionally return the body (text or JSON).',
-      parameters: {
-        url: { type: 'string', required: true, description: "URL/glob/regex, e.g. '/api/search' or 'https://*.com/data'." },
-        timeout: { type: 'number', description: 'Wait in ms (default 10000).' },
-        body: { type: 'string', description: "'none' (default) | 'text' | 'json'." },
-        space: spaceParam,
-      },
-      buildScript: (args) => {
-        const u = str(args.url, '').trim()
-        const mode = str(args.body, 'none')
-        const wantBody = mode === 'text' || mode === 'json'
-        return (
-          `${useSpace(str(args.space, cfg.activeSpace))}${ensureRealTab()}` +
-          `const __res = await page.waitForResponse(${j(u)}, { timeout: ${num(
-            args.timeout,
-            10000,
-          )} })\n` +
-          `${wantBody ? `const __body = ${mode === 'json' ? 'await __res.json().catch(()=>null)' : 'await __res.text().catch(()=>null)'}\n` : ''}` +
-          `console.log('${SENTINEL}' + JSON.stringify({ ok: true, url: __res.url(), status: __res.status()${wantBody ? ', body: __body' : ''} }))\n`
-        )
-      },
-    }),
-  )
-  reg(
-    t({
-      name: 'bcdp_wait_page',
-      description:
-        "Page-level wait, op=load|function|request|event. load: a load state (state=load|domcontentloaded|networkidle). function: in-page JS `expression` until truthy (returns the value). request: a request whose URL matches `url` (substring/glob/regex). event: a download. load/function time out softly (ok:false); request/event surface their timeout as ok:false.",
+        "Wait. op=duration (fixed ms) | selector (element appears/disappears) | url (navigation) | response (network reply) | load (page load state) | function (in-page expression becomes truthy) | request (network request) | event (a download). selector takes `selector` + optional `state` (visible|attached|hidden|detached); url takes `pattern`; response takes `url` + optional `body` (none|text|json); load takes `state` (load|domcontentloaded|networkidle); function takes `expression`; request takes `url`. `timeout` in ms (default 10000; page-level ops load/function/request/event default 30000). Every op except duration accepts `space`.",
       parameters: {
         op: {
           type: 'string',
           required: true,
-          description: '"load" | "function" | "request" | "event".',
+          description: '"duration" | "selector" | "url" | "response" | "load" | "function" | "request" | "event".',
+        },
+        ms: { type: 'number', description: 'op=duration: milliseconds to wait (default 1000).' },
+        selector: {
+          type: 'string',
+          description: "op=selector: CSS selector to wait for, e.g. '.results' or '[data-id=done]'.",
         },
         state: {
           type: 'string',
-          description: 'op=load: "load" (default) | "domcontentloaded" | "networkidle".',
+          description: 'op=selector: "visible" (default) | "attached" | "hidden" | "detached". op=load: "load" (default) | "domcontentloaded" | "networkidle".',
         },
+        pattern: {
+          type: 'string',
+          description: "op=url: URL/glob to match (e.g. '/login?done', 'https://*/post/*', or a /regex/).",
+        },
+        url: {
+          type: 'string',
+          description: "op=response: URL/glob/regex, e.g. '/api/search'. op=request: URL substring / glob / regex.",
+        },
+        body: { type: 'string', description: "op=response: 'none' (default) | 'text' | 'json'." },
         expression: {
           type: 'string',
           description: 'op=function: in-page JS expression evaluated until truthy.',
         },
-        url: {
-          type: 'string',
-          description: 'op=request: URL substring / glob / regex.',
-        },
         timeout: {
           type: 'number',
-          description: 'Wait in ms (default 30000).',
+          description: 'Wait in ms (default 10000; page-level ops default 30000).',
         },
         space: spaceParam,
       },
@@ -2571,48 +2436,79 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
         const send = (expr: string): string =>
           `console.log('${SENTINEL}' + JSON.stringify(${expr}))\n`
         const op = str(args.op, '').trim()
-        const to = num(args.timeout, 0) > 0 ? num(args.timeout, 0) : 30_000
+        // 两档默认值与合并前一致：普通 op 10s，页面级 op 30s。
+        const asked = num(args.timeout, 0)
+        const to = asked > 0 ? asked : 10_000
+        const pageTo = asked > 0 ? asked : 30_000
         const head = `${useSpace(str(args.space, cfg.activeSpace))}${ensureRealTab()}`
+        if (op === 'duration') {
+          // duration 不需要真实 tab（与合并前的 bcdp_wait 一致），故不带 head。
+          const ms = Math.max(0, num(args.ms, 1000))
+          return `await page.waitForTimeout(${ms})\n` +
+            send(`{ ok: true, op: 'duration', waitedMs: ${ms} }`)
+        }
+        if (op === 'selector') {
+          const sel = str(args.selector, '').trim()
+          if (sel === '') return send(`{ ok: false, op: 'selector', waited: false, reason: 'bcdp_wait: selector is required for op=selector' }`)
+          return head +
+            `await page.waitForSelector(${j(sel)}, { state: ${j(
+              str(args.state, 'visible'),
+            )}, timeout: ${to} })\n` +
+            send(`{ ok: true, op: 'selector', waited: true, selector: ${j(sel)}, state: ${j(str(args.state, 'visible'))} }`)
+        }
+        if (op === 'url') {
+          const p = str(args.pattern, '').trim()
+          if (p === '') return send(`{ ok: false, op: 'url', reached: false, reason: 'bcdp_wait: pattern is required for op=url' }`)
+          return head +
+            `const __ok = await page.waitForURL(${j(p)}, { timeout: ${to} }).catch(() => false)\n` +
+            `const __u = await page.url()\n` +
+            send(`{ ok: !!__ok, op: 'url', reached: !!__ok, url: __u }`)
+        }
+        if (op === 'response') {
+          const u = str(args.url, '').trim()
+          if (u === '') return send(`{ ok: false, op: 'response', reason: 'bcdp_wait: url is required for op=response' }`)
+          const mode = str(args.body, 'none')
+          const wantBody = mode === 'text' || mode === 'json'
+          return head +
+            `const __res = await page.waitForResponse(${j(u)}, { timeout: ${to} })\n` +
+            `${wantBody ? `const __body = ${mode === 'json' ? 'await __res.json().catch(()=>null)' : 'await __res.text().catch(()=>null)'}\n` : ''}` +
+            send(`{ ok: true, op: 'response', url: __res.url(), status: __res.status()${wantBody ? ', body: __body' : ''} }`)
+        }
         if (op === 'load') {
           // waitForLoadState RESOLVES true/false (never throws on timeout).
           return head +
-            `const __ok = await page.waitForLoadState(${j(str(args.state, 'load'))}, { timeout: ${to} })\n` +
-            send(`{ ok: !!__ok, op: 'load', state: ${j(str(args.state, 'load'))}, reason: __ok ? null : 'timed out: load state not reached within ${to}ms' }`)
+            `const __ok = await page.waitForLoadState(${j(str(args.state, 'load'))}, { timeout: ${pageTo} })\n` +
+            send(`{ ok: !!__ok, op: 'load', state: ${j(str(args.state, 'load'))}, reason: __ok ? null : 'timed out: load state not reached within ${pageTo}ms' }`)
         }
         if (op === 'function') {
           const expr = str(args.expression, '').trim()
-          if (expr === '') return send(`{ ok: false, op: 'function', reason: 'bcdp_wait_page: expression is required for op=function' }`)
-          // waitForFunction RESOLVES the truthy value or false (never throws on timeout).
-          // The false branch must still carry a reason: a bare ok:false is not
-          // attributable to a timeout (see findings P0-2).
-          // The expression is wrapped IN-PAGE (safeEvalWrap, preserveFalsy) so a
-          // truthy result that is a cyclic/DOM/global handle is degraded to a
-          // string before it crosses the CDP boundary �?otherwise the runtime's
-          // own serialization rejects with "Object reference chain is too long"
-          // and kills the subprocess. A falsy result is returned as-is so the
-          // `__v === false` timeout branch and truthiness gating stay intact.
+          if (expr === '') return send(`{ ok: false, op: 'function', reason: 'bcdp_wait: expression is required for op=function' }`)
+          // waitForFunction RESOLVES the truthy value or false (never throws on
+          // timeout). The expression is wrapped IN-PAGE (safeEvalWrap,
+          // preserveFalsy) so a truthy cyclic/DOM/global handle degrades to a
+          // string before it crosses the CDP boundary (see findings P0-2 / E).
           return head +
-            `const __v = await page.waitForFunction(${j(safeEvalWrap(expr, true))}, undefined, { timeout: ${to} })\n` +
-            send(`{ ok: !!__v, op: 'function', value: __v === false ? null : __v, reason: __v === false ? 'timed out: expression never became truthy within ${to}ms' : null }`)
+            `const __v = await page.waitForFunction(${j(safeEvalWrap(expr, true))}, undefined, { timeout: ${pageTo} })\n` +
+            send(`{ ok: !!__v, op: 'function', value: __v === false ? null : __v, reason: __v === false ? 'timed out: expression never became truthy within ${pageTo}ms' : null }`)
         }
         if (op === 'request') {
           const u = str(args.url, '').trim()
-          if (u === '') return send(`{ ok: false, op: 'request', reason: 'bcdp_wait_page: url is required for op=request' }`)
-          // waitForRequest THROWS "timed out after Nms" �?wrap it.
+          if (u === '') return send(`{ ok: false, op: 'request', reason: 'bcdp_wait: url is required for op=request' }`)
+          // waitForRequest THROWS "timed out after Nms" — wrap it.
           return head +
-            `try { const __req = await page.waitForRequest(${j(u)}, { timeout: ${to} })\n` +
+            `try { const __req = await page.waitForRequest(${j(u)}, { timeout: ${pageTo} })\n` +
             send(`{ ok: true, op: 'request', url: __req.url(), method: __req.method() }`) +
             `} catch (e) { ${send(`{ ok: false, op: 'request', reason: String(e && e.message || e) }`)} }\n`
         }
         if (op === 'event') {
           // waitForEvent supports ONLY "download"; it throws on timeout.
           return head +
-            `try { const __ev = await page.waitForEvent('download', { timeout: ${to} })\n` +
+            `try { const __ev = await page.waitForEvent('download', { timeout: ${pageTo} })\n` +
             `const __p = await __ev.path().catch(() => null)\n` +
             send(`{ ok: true, op: 'event', event: 'download', suggestedFilename: __ev.suggestedFilename(), url: __ev.url(), path: __p }`) +
             `} catch (e) { ${send(`{ ok: false, op: 'event', reason: String(e && e.message || e) }`)} }\n`
         }
-        return send(`{ ok: false, reason: ${j('bcdp_wait_page: op must be one of load|function|request|event')} }`)
+        return send(`{ ok: false, reason: ${j('bcdp_wait: op must be one of duration|selector|url|response|load|function|request|event')} }`)
       },
     }),
   )
@@ -2987,62 +2883,6 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
       },
     }),
   )
-  reg(
-    (() => {
-      const def = defineTool({
-        name: 'bcdp_cli',
-        description:
-          'Escape hatch: run an arbitrary `ego-browser nodejs` heredoc script VERBATIM (facades page/browser/taskSpaces/site/fetch and the raw cdp() are preloaded; no preamble is added, so select the task space yourself before touching page.*). Use when the structured bcdp_* tools do not cover the task. Returns the raw output plus the parsed console.log payload when present. These scripts expose the vendored SDK (`taskSpaces`, `page.locator()`, global `cdp()`, `fetch.browser|server`) �?NOT the official docs\' `taskSpace()` / `page.click()`.',
-        parameters: {
-          script: {
-            type: 'string',
-            required: true,
-            description:
-              'Full JS script body for the heredoc; ego-browser helpers are preloaded. Runs verbatim �?call `await taskSpaces.useOrCreate(name)` first if your script uses page.*. End with console.log(JSON.stringify(payload)) to get it back as `result`.',
-          },
-        },
-        output: {
-          schema: {
-            type: 'object',
-            additionalProperties: false,
-            properties: {
-              ok: { type: 'boolean', required: true },
-              stdout: { type: 'string', required: true },
-              stderr: { type: 'string' },
-              output: {
-                type: 'string',
-                description:
-                  'Merged stdout+stderr text of the CLI run. The ego CLI writes script output to stderr on Windows, so read this when `stdout` looks empty.',
-              },
-              result: { type: 'json' },
-            },
-          },
-          render: renderText,
-        },
-        timeoutMs: TOOL_TIMEOUT_MS,
-        execute: async (args: Record<string, unknown>, exec: ToolExec) => {
-          cfg.spaceTracker.setCurrentSession(callingSessionId(exec)); markEgoToolCall(callingSessionId(exec))
-          const result = await runWithStaleSpaceRetry(ctx, cfg, exec, () => str(args.script, ''))
-          if (!result.ok) throw new Error(attachSessionHint(result.error))
-          const parsed = parseSentinel(mergeCliOutput(result))
-          return {
-            ok: true,
-            stdout: result.stdout,
-            stderr: result.stderr,
-            output: mergeCliOutput(result),
-            result: parsed ?? null,
-          }
-        },
-        presentCall: () => ({
-          card: 'generic',
-          title: 'bcdp_cli',
-          kind: 'other',
-          rawInput: null,
-        }),
-      } as unknown as DefineToolOpts)
-      return def
-    })(),
-  )
 }
 
 // ── bcdp_help: built-in tool / category index ───────────────────────────────
@@ -3292,7 +3132,7 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
       const def = defineTool({
         name: 'bcdp_script',
         description:
-          'Run an arbitrary `ego-browser nodejs` heredoc script in ONE invocation (page/…locator/browser/taskSpaces/site/fetch/cdp preloaded), and return structured {ok, stdout, stderr, result, durationMs, timedOut}. Use for a full multi-step browser task as a single script. The task space is selected and a real (non-blank) tab activated for you before your script runs, so page.* works directly. Differs from bcdp_cli, which runs the body verbatim with no preamble. These scripts expose the vendored SDK (`taskSpaces`, `page.locator()`, global `cdp()`, `fetch.browser|server`) �?NOT the official docs\' `taskSpace()` / `page.click()`.',
+          'Run an arbitrary `ego-browser nodejs` heredoc script in ONE invocation (page/…locator/browser/taskSpaces/site/fetch/cdp preloaded), and return structured {ok, stdout, stderr, result, durationMs, timedOut}. Use for a full multi-step browser task as a single script. The task space is selected and a real (non-blank) tab activated for you before your script runs, so page.* works directly. Set verbatim:true to run the body verbatim with no preamble (the retired bcdp_cli behaviour). These scripts expose the vendored SDK (`taskSpaces`, `page.locator()`, global `cdp()`, `fetch.browser|server`) �?NOT the official docs\' `taskSpace()` / `page.click()`.',
         parameters: {
           script: {
             type: 'string',
@@ -3301,6 +3141,11 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
               'Full JS script body. You may end with console.log(JSON.stringify(payload)) �?bare or prefixed with the sentinel �?and it is returned as `result`. Without one, `output` still carries everything the script printed.',
           },
           timeoutMs: { type: 'integer', description: 'Per-run timeout in ms (default plugin grace).' },
+          verbatim: {
+            type: 'boolean',
+            description:
+              'Run the body verbatim with NO preamble (no task-space selection, no real-tab activation) — the retired bcdp_cli behaviour. Default false prepends the preamble so page.* works directly. In verbatim mode select the space yourself (`await taskSpaces.useOrCreate(name)`) before touching page.*.',
+          },
         },
         output: {
           schema: {
@@ -3333,7 +3178,7 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
               ? args.timeoutMs
               : undefined
           const start = Date.now()
-          // bcdp_script (unlike bcdp_cli) is the "just give me a working page"
+          // bcdp_script (when verbatim is false) is the "just give me a working page"
           // entry point, so it carries the same preamble every structured tool
           // does: pick the task space, then activate a real (non-blank) tab.
           // Without it a plain `page.evaluate(...)` body dies with
@@ -3341,7 +3186,11 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
           // A body that already selects its own space keeps it: useOrCreate is
           // idempotent by name, so the preamble is skipped when the script
           // mentions taskSpaces.useOrCreate itself.
+          // verbatim:true reproduces the retired bcdp_cli: the body runs with NO
+          // preamble, so the caller owns task-space selection.
+          const verbatimMode = bool(args.verbatim, false)
           const preamble = (body: string): string => {
+            if (verbatimMode) return body
             if (/taskSpaces\s*\.\s*useOrCreate\s*\(/.test(body)) return body
             return `${useSpace(cfg.activeSpace)}${ensureRealTab()}${body}`
           }

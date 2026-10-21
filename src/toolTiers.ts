@@ -1,6 +1,6 @@
 // src/toolTiers.ts — 工具分级注入策略（纯函数，无宿主依赖）
 //
-// 动机：插件挂载时一次性注册 41 个 bcdp_* 工具，每个会话每一轮都要为它们付
+// 动机：插件挂载时一次性注册 34 个 bcdp_* 工具，每个会话每一轮都要为它们付
 // schema 成本（AST 实测 description+parameters ≈ 18.8K 字符 ≈ 5.4K token），
 // 而绝大多数会话根本不碰浏览器。这里把「哪些工具在什么条件下允许出现在模型面
 // 前」收成一处策略，注册时机交给 index.ts 的控制器执行。
@@ -13,7 +13,7 @@
 //   wait     等待：wait / wait_for_selector / wait_for_url / wait_for_response / wait_page。
 //   power    重量级：raw CDP / http / upload / download / dialog。
 //   session  登录态：captcha / auth_flush / login_import。
-//   escape   逃生舱：cli / script。**冷启动即可用**（见下）。
+//   escape   逃生舱：script（verbatim:true 即原 cli 的裸 heredoc 行为）。**冷启动即可用**（见下）。
 //   judge    评审链（bcdp_jev_*）：除解锁外还要求评审**已配置**。
 //
 // act / observe / wait 三批按顺序渐进放行（一次活动放一批），因为它们的使用
@@ -23,15 +23,16 @@
 //   它是唯一能在一次调用里干完任意多步任务的工具（page/browser/taskSpaces/
 //   fetch/cdp 全预置）。其余 30 多个工具都能用它等价做到，所以它必须始终可达
 //   ——否则模型遇到「结构化工具没覆盖」的情形时，手里没有任何逃生手段。
-//   cli 与 script 是同一 heredoc 运行时的两种返回形态（script 多 duration/
-//   timedOut），共用一个批次；给它们各开一批没有意义。
+//   cli 与 script 原是同一 heredoc 运行时的两种返回形态（script 多 duration/
+//   timedOut），1.5.0 已合并为单个 bcdp_script：verbatim:true 走裸 heredoc，
+//   默认走带 preamble 的形态。
 //
 // 旋钮（全 volatile，且带 schema `.default()`——表单描述符与生效值必须同源，
 // 否则面板显示一个值、运行时用另一个值）：
 //   toolInjection  'lazy'（默认）| 'always'（历史行为：挂载即全量）
 //   toolBrowse     act + observe + wait
 //   toolExtended   power + session
-//   toolEscape     escape（cli / script）
+//   toolEscape     escape（script）
 //   toolJudge      judge
 //   ON = 开放注册、OFF = 封印（从模型工具列表移除）——与 prime-memory 的
 //   「工具封印」同一形状。`core` 级不参与封印，无开关。
@@ -42,8 +43,6 @@ const CORE = [
   'bcdp_status',
   'bcdp_doctor',
   'bcdp_help',
-  'bcdp_space_open',
-  'bcdp_space_close',
   'bcdp_space',
   'bcdp_navigate',
   'bcdp_snapshot',
@@ -67,10 +66,6 @@ const OBSERVE = [
 ] as const
 const WAIT = [
   'bcdp_wait',
-  'bcdp_wait_for_selector',
-  'bcdp_wait_for_url',
-  'bcdp_wait_for_response',
-  'bcdp_wait_page',
 ] as const
 const POWER = [
   'bcdp_cdp',
@@ -85,7 +80,6 @@ const SESSION = [
   'bcdp_login_import',
 ] as const
 const ESCAPE = [
-  'bcdp_cli',
   'bcdp_script',
 ] as const
 const JUDGE = [

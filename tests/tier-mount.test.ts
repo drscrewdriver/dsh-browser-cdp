@@ -92,9 +92,9 @@ describe("tool tier injection at mount", () => {
     expect(live).not.toContain("bcdp_jev_run");
   });
 
-  it("always + a configured judge key = all 41 on the surface", () => {
+  it("always + a configured judge key = all 34 on the surface", () => {
     const { live } = mount({ toolInjection: "always", layaKey: "k" });
-    expect(live.length).toBe(41);
+    expect(live.length).toBe(34);
     expect(sorted(live)).toEqual(sorted(Object.values(TIER_MEMBERS).flat()));
   });
 
@@ -150,19 +150,18 @@ describe("tool tier injection at mount", () => {
     expect(m.live).not.toContain("bcdp_download");
   });
 
-  it("the escape switch is the only way to lose cli/script, and it costs nothing else", () => {
+  it("the escape switch is the only way to lose script, and it costs nothing else", () => {
     const config: Record<string, unknown> = { toolInjection: "always" };
     const m = mount(config);
     expect(m.live).toContain("bcdp_script");
     config.toolEscape = false;
     m.emitVolatileUpdate();
     expect(m.live).not.toContain("bcdp_script");
-    expect(m.live).not.toContain("bcdp_cli");
     // 其它批次一个不少。
     expect(m.live).toContain("bcdp_click");
     expect(m.live).toContain("bcdp_cdp");
-    // 41 − escape 2 − judge 5（always 下仍无 Key，评审级照旧封印）。
-    expect(m.live.length).toBe(41 - 2 - 5);
+    // 34 − escape 1 − judge 5（always 下仍无 Key，评审级照旧封印）。
+    expect(m.live.length).toBe(34 - 1 - 5);
   });
 
   it("judge tools appear the moment a key is configured (volatile reapply, no remount)", () => {

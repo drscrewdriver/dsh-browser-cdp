@@ -1,3 +1,31 @@
+## 1.6.0 (2026-10-21)
+
+**默认行为变更：会话隔离成为默认。** 一个 `bcdp_*` 调用**省略 `space`** 时，不再落到跨会话共享的 `default`，而是落到**本会话自己的**任务空间 `dsh-agent-<会话id前8位>`；只有**显式**写 `space: 'default'`（或 `op=open name='default'`）才使用共享具名槽。
+
+### 变更：默认任务空间改为按会话派生
+- `resolveConfig` 中 `defaultSpace` 的**空值折叠目标**由 `'default'` 改为 `':auto'`：不配置即为会话隔离，无需额外开关。
+- `deriveSlotDefaultName` **取消 `isolateSpaces` 门**：`:auto` 在持久模式与沙箱模式下**都**派生 `dsh-agent-<sid8>`。空间**命名**与 `isolateSpaces`（只管 Profile 落盘 vs 内存沙箱）是两条独立的轴，此前把两者绑死，导致「持久模式下配 `:auto` 也永远得到 `default`」。
+- 显式 `space: 'default'` / `op=open name='default'` 仍完全可用：该会话随后固定用这个共享槽。把 `defaultSpace` 设成具名值（如 `default`）可全局退回旧行为。
+- 无 session 的调用（`__global__` 槽）仍回落 `default`，向后兼容。
+
+### 修复：真实 DSH 会话 id 会塌缩成同一个空间
+- 旧派生用 `sessionKey.slice(0, 8)`。真实 DSH id 形如 `session-52adc205-3251-…`，前 8 位恒为字面量 **`session-`**，于是**所有会话撞进同一个 `dsh-agent-session-` 空间**，隔离在无声中完全失效（不报错，只是共用上下文）。
+- 新增 `sessionSpaceToken()`：先剥掉 `session-` 前缀、去掉非 `[A-Za-z0-9-]` 字符，再取 8 位；短 id 原样使用（仍唯一）；退化/空 id 用 FNV-1a 哈希兜底保证非空。
+- 补 5 条回归测试：真实 id 正确分离（`session-52adc205-…` → `52adc205`）、两会话 token 不同、永不返回裸前缀 `session-`、短 id 原样、token 合法且 ≤8 位。
+
+### 文档与描述
+- `bcdp_space` 描述改为教新默认语义：省略 `space` = 本会话空间；要共享才显式传 `default`。
+- `Config.defaultSpace` 的 schema 描述同步；`README` 的「任务空间命名与并发隔离」小节重写为 1.6.0 口径，附「你怎么写 → 落到哪个空间」对照表，并记录 `session-` 塌缩这个坑。
+
+### 迁移指引
+- **无需任何操作**：默认即隔离。
+- 想维持「所有会话共用一个空间」的旧行为：把 `defaultSpace` 设为 `default`，或在调用里显式 `space: 'default'`。
+- 注意：会话空间是**按会话命名**的命名空间，不是「每个会话独立 Cookie」。是否把登录态落盘仍由 `isolateSpaces` 决定；Profile 持久模式下登录态依然跨重启保留。
+
+### 验证
+- `npm run typecheck` EXIT 0；`npm run test` **866 passed / 12 skipped（878）**（较 1.5.0 的 861 增 5 项 token 回归）；`npm run build` 三 bundle complete。
+- 确认 profile / 设置存储中无持久化的 `defaultSpace` 残留，新默认会生效（`~/.dsh` 全量扫过，命中均在记忆库与会话缓存，非插件配置）。
+
 ## 1.5.0 (2026-10-21)
 
 **破坏性变更**：工具面三族合并（计划组 `bcdp-tool-consolidation`）。`wait` / `space` / `escape` 三族按 `op` 收口，工具数 **41 → 34**，全量 schema **24,093 → 22,224 字符**（净省 1,869，天花板 24,094 未上调）。旧工具名**直接移除**，不保留薄别名——别名同样占 schema 预算，保留等于没省。迁移表见 README「1.5.0 迁移表」。

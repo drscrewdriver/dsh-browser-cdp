@@ -274,12 +274,21 @@ wait / space / escape 三族已按 `op` 合并，旧工具名**移除**（不保
 
 > 取舍提醒：窄工具（一个动作一个工具）是模型写对参数、少重试的护栏。1.5.0 只合并了 **wait / space / escape** 三族同源冗余（41 → 34，省 1,869 字符 schema）：五个 wait 共用同一 preamble 与 timeout 语义、三个 space 本就是同一个 op 工具的碎片、cli/script 是同一 heredoc 运行时。代价是这三族的旧工具名不再存在（见上方迁移表）；交互原子（click/fill/key…）**不合并**，因为它们是模型写对参数的护栏。
 
-## 任务空间命名与并发隔离（1.4.1）
+## 任务空间命名与并发隔离（1.6.0）
 
-- **默认空间名统一为 `default`**：代码常量 `DEFAULT_SPACE='default'`、`bcdp_space` 的 `op=open` 描述、`Config.defaultSpace` 三者一致。持久化 Profile 模式（默认）下**始终复用这一个具名槽**——登录态、tab、stream 跨会话保留；不要因为"当前在做任务 X"就另开编号空间（`#4`/`#5`），那会丢持久化。
-- **`defaultSpace` 可配（A）**：`Config.defaultSpace` 是 volatile 标量，留空折叠为 `'default'`，热更新不重注册。注意区分两个概念：配置值 `cfg.defaultSpace`（schema 里那个）和运行时的**当前会话活值** `cfg.activeSpace`（命令实际用的 `useSpace(...)` 入参）；前者是设置，后者随会话切换。
+> **默认就是会话隔离**：不传 `space` 的调用落在**本会话自己的**任务空间 `dsh-agent-<会话id前8位>`，两个会话永远不会共用或抢占同一个浏览上下文。**只有显式写 `space: 'default'`（或 `bcdp_space op=open name='default'`）才会用那个跨会话共享的具名槽。**
+
+| 你怎么写 | 落到哪个空间 |
+|---|---|
+| 省略 `space`（默认，`defaultSpace` 未设 = `:auto`） | `dsh-agent-<会话id前8位>`，每会话独立 |
+| `space: 'default'` / `op=open name='default'` | 共享具名槽 `default`（此后该会话固定用它） |
+| `defaultSpace: 'default'`（配置项改成具名） | 所有会话默认都用 `default`（退回旧行为，全局生效） |
+| 无 session 的调用（`__global__`） | `default`，保证向后兼容 |
+
+- **`defaultSpace`（A）**：volatile 标量，**留空/缺失折叠为 `:auto`**（1.6.0 起，此前折叠为 `default`），热更新不重注册。注意区分两个概念：配置值 `cfg.defaultSpace`（schema 里那个，可以是 `:auto` 或具名）与运行时**当前会话活值** `cfg.activeSpace`（命令实际用的 `useSpace(...)` 入参）；前者是设置，后者随会话与显式选择切换。
+- **`:auto` 派生（C）**：`:auto` 在**两种模式**下都派生 `dsh-agent-<sid8>` —— 空间**命名**与 `isolateSpaces`（那个只管 Profile 落盘还是内存沙箱）是两条独立的轴。会话 id 会先剥掉 `session-` 前缀再取 8 位：真实 DSH id 形如 `session-52adc205-…`，直接 `slice(0,8)` 会得到 `session-`，让**所有会话撞成同一个空间**——这正是隔离失效的经典坑，已用 `sessionSpaceToken()` 修掉并有回归测试。
 - **会话级隔离（B）**：活动空间追踪器按 `sessionId` 键控成一张槽位表（`Map<string,Slot>`，无 session 的调用落 `__global__` 槽保持向后兼容）。每个 `bcdp_*` 调用一进来就 `setCurrentSession(callingSessionId(exec))`，所以**并发多会话各开各的空间互不漂移**——A 会话重启空间不波及 B。
-- **`:auto` 哨兵（C）**：沙箱模式（`isolateSpaces:true`）下默认名派生为 `dsh-agent-<sessionId 前 8 位>`，给每个会话一个独立命名空间；持久模式下 `:auto` 折叠为具名单槽 `default`。`resolveConfig` 把 `:auto` 原样保留，由追踪器据 sessionId + 模式决定真正落点。
+- **不要再手动建编号空间**：不需要 `#4`/`#5` 这类手工命名，隔离已经由会话派生自动完成；需要共享就走显式 `default`。
 
 ### 跨调用稳定定位（D1）
 

@@ -6,6 +6,7 @@ import {
   isTabStuckFailure,
   createSessionSpaceTracker,
   deriveSlotDefaultName,
+  sessionSpaceToken,
   attachSessionHint,
   ATTACH_SESSION_HINT,
   GLOBAL_SESSION_KEY,
@@ -182,15 +183,67 @@ describe("deriveSlotDefaultName (:auto expansion, C)", () => {
   it("expands :auto to dsh-agent-<sid8> in isolated-sandbox mode", () => {
     expect(deriveSlotDefaultName({ defaultSpace: ":auto", isolateSpaces: true }, "sess-1234567890")).toBe("dsh-agent-sess-123");
   });
-  it("collapses :auto to the single 'default' slot in persistent mode", () => {
-    expect(deriveSlotDefaultName({ defaultSpace: ":auto", isolateSpaces: false }, "sess-1234567890")).toBe("default");
+  // v1.6.0: session isolation is the DEFAULT, so the sentinel is honoured in
+  // persistent mode too — space NAMING is orthogonal to profile persistence
+  // (isolateSpaces only decides disk-profile vs in-memory sandbox).
+  it("expands :auto the same way in persistent mode (isolation is the default)", () => {
+    expect(deriveSlotDefaultName({ defaultSpace: ":auto", isolateSpaces: false }, "sess-1234567890")).toBe("dsh-agent-sess-123");
   });
-  it("keeps the global (no-session) slot on 'default' even in sandbox mode", () => {
+  it("keeps the global (no-session) slot on 'default' in either mode", () => {
     expect(deriveSlotDefaultName({ defaultSpace: ":auto", isolateSpaces: true }, GLOBAL_SESSION_KEY)).toBe("default");
+    expect(deriveSlotDefaultName({ defaultSpace: ":auto", isolateSpaces: false }, GLOBAL_SESSION_KEY)).toBe("default");
   });
-  it("passes a non-:auto configured name through verbatim in either mode", () => {
+  it("passes a non-:auto configured name through verbatim (opt-in to a shared slot)", () => {
     expect(deriveSlotDefaultName({ defaultSpace: "research", isolateSpaces: true }, "sess-1")).toBe("research");
     expect(deriveSlotDefaultName({ defaultSpace: "research", isolateSpaces: false }, "sess-1")).toBe("research");
+    expect(deriveSlotDefaultName({ defaultSpace: "default", isolateSpaces: false }, "sess-1")).toBe("default");
+  });
+});
+
+// ── v1.6.0 regression: a real DSH sessionId must NOT collapse to 'session-' ──
+//
+// The old derivation was `sessionKey.slice(0, 8)`. Real DSH ids look like
+// `session-52adc205-3251-…`, so that yielded the literal `session-` for EVERY
+// session and all sessions shared one space — silently defeating isolation.
+describe("sessionSpaceToken (prefix-collapse regression)", () => {
+  it("strips the `session-` prefix so real DSH ids separate", () => {
+    expect(sessionSpaceToken("session-52adc205-3251-4fb4-8db0-716d56053365")).toBe("52adc205");
+    expect(sessionSpaceToken("session-11111111-aaaa-bbbb-cccc-dddddddddddd")).toBe("11111111");
+  });
+  it("gives two different DSH sessions two different tokens", () => {
+    const a = sessionSpaceToken("session-52adc205-3251-4fb4-8db0-716d56053365");
+    const b = sessionSpaceToken("session-9f3e7711-0000-1111-2222-333344445555");
+    expect(a).not.toBe(b);
+  });
+  it("never returns the bare prefix (the historical failure mode)", () => {
+    for (const id of [
+      "session-52adc205-3251-4fb4-8db0-716d56053365",
+      "session-abc",
+      "s",
+      "",
+    ]) {
+      expect(sessionSpaceToken(id)).not.toBe("session-");
+    }
+  });
+  it("uses a short id as-is, and only a degenerate id hashes", () => {
+    // Short ids stay readable AND distinct.
+    expect(sessionSpaceToken("alpha")).toBe("alpha");
+    expect(sessionSpaceToken("alpha")).not.toBe(sessionSpaceToken("beta"));
+    // An id that sanitizes to nothing still yields a deterministic 8-hex token.
+    const empty1 = sessionSpaceToken("");
+    const empty2 = sessionSpaceToken("");
+    expect(empty1).toBe(empty2);
+    expect(empty1).toMatch(/^[0-9a-f]{8}$/);
+  });
+  it("produces a space-name-safe token (alphanumerics/hyphens, at most 8 chars)", () => {
+    for (const id of ["session-52adc205-3251-4fb4-8db0-716d56053365", "weird id!!with spaces", "session-x"]) {
+      const tok = sessionSpaceToken(id);
+      expect(tok).toMatch(/^[A-Za-z0-9-]+$/);
+      expect(tok.length).toBeLessThanOrEqual(8);
+      expect(tok.length).toBeGreaterThan(0);
+    }
+    // A real DSH id consumes the full 8 chars.
+    expect(sessionSpaceToken("session-52adc205-3251-4fb4-8db0-716d56053365")).toHaveLength(8);
   });
 });
 

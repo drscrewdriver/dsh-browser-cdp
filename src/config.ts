@@ -45,13 +45,17 @@ export const Config = z.object({
   // could only be set through a raw profile patch with no GUI form entry.
   // Now promoted to a `.volatile()` scalar: the settings page projects it,
   // a value change is delivered through the bridge as a live-ref update (no
-  // remount — the mount reads `cfg.configuredDefaultSpace` as a getter), and
-  // resolveConfig folds empty→`'default'` so the constant and docs match.
-  // Sentinel `:auto` (C) derives a per-session name `dsh-agent-<sid8>` —
-  // only honoured in the isolated-sandbox mode (`isolateSpaces: true`); in
-  // persistent mode the sentinel collapses back to `'default'` so a login
-  // state stays on the single named slot.
-  defaultSpace: z.string().description('Default task-space name when a bcdp_* call omits `space`. Persistent-profile mode reuses this single named slot — set it to the same value across sessions to share login state. Set `:auto` in isolated-sandbox mode to derive a per-session name (dsh-agent-<sessionId8>). Leave default ("default") unless you are running multiple agents in parallel.').volatile(),
+  // remount — the mount reads `cfg.configuredDefaultSpace` as a getter).
+  //
+  // v1.6.0 — SESSION ISOLATION IS THE DEFAULT. `resolveConfig` now folds an
+  // empty/absent value to the `:auto` sentinel, which derives a per-session
+  // task space `dsh-agent-<sid8>`: a call that omits `space` can no longer
+  // land in another session's browsing context. The sentinel is honoured in
+  // BOTH modes on purpose — space NAMING is orthogonal to `isolateSpaces`,
+  // which only decides whether the browser PROFILE is persisted on disk or is
+  // an in-memory sandbox. A caller that wants the old shared slot sets this to
+  // a named value (e.g. `default`) or passes `space: 'default'` explicitly.
+  defaultSpace: z.string().description('Task space used when an bcdp_* call omits `space`. Default `:auto` = derive a per-session space `dsh-agent-<sessionId8>`, so concurrent sessions never share or hijack each other\'s browsing context. Set a fixed name (e.g. `default`) to reuse ONE shared slot across sessions — pass `space: "default"` on a single call for the same effect. Note this only names spaces; whether the browser profile itself persists is controlled by isolateSpaces.').volatile(),
   idleTimeoutMin: z.number().min(0).max(1440).step(1).description('Auto-stop the backing browser after N minutes without an bcdp_* call (0 = off). Relaunches on demand at the next call.').volatile(),
   chromePath: z.string().description('Path to Chrome/Chromium. Empty = auto-detect.').volatile(),
   captureBackend: backend.description('Capture backend: auto, cdp, or ffmpeg.').volatile(),
@@ -422,13 +426,14 @@ export function resolveConfig(config: RawConfig = {}): ResolvedConfig {
     chromeArgs: typeof config.chromeArgs === 'string' ? config.chromeArgs : '',
     isolateSpaces: typeof config.isolateSpaces === 'boolean' ? config.isolateSpaces : config.isolateSpaces === 'true' || config.isolateSpaces === '1' || config.isolateSpaces === 1,
     // A + C: `:auto` is kept verbatim here (the tracker is the one that knows
-    // the sessionId and mode); empty / non-string collapses to `'default'` so
-    // the constant, the docs and the schema default all agree. A legacy
-    // profile-patch value (any non-empty string, e.g. a prior `dsh-agent`) is
-    // read unchanged — the schema default never overrides a persisted value.
+    // the sessionId). v1.6.0 — an empty/absent value folds to `:auto`, i.e.
+    // session isolation is the DEFAULT behaviour; a named value (e.g. `default`)
+    // is the opt-in to one shared slot. A legacy profile-patch value (any
+    // non-empty string) is read unchanged — resolveConfig never overrides a
+    // persisted value.
     defaultSpace: typeof config.defaultSpace === 'string' && config.defaultSpace.trim() !== ''
       ? config.defaultSpace.trim()
-      : 'default',
+      : AUTO_SPACE_SENTINEL,
     idleTimeoutMin: finiteIn(config.idleTimeoutMin, 0, 1440) ? config.idleTimeoutMin : 0,
     // Connection sequence (R1/R7): every entry is sanitized (unusable rows
     // dropped, the ego-cli singleton enforced) and probe state normalized so a

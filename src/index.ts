@@ -173,10 +173,20 @@ export interface SessionSpaceTracker extends ActiveSpaceTracker {
 export const GLOBAL_SESSION_KEY = '__global__'
 
 /**
- * C — resolve the fallback slot name for a session. `:auto` only expands to a
- * per-session `dsh-agent-<sid8>` in isolated-sandbox mode; persistent mode
- * (and the no-session global slot) collapse to the single named `default`,
- * protecting login reuse. Any other configured value passes through verbatim.
+ * C — resolve the fallback slot name for a session.
+ *
+ * v1.6.0 — SESSION ISOLATION IS THE DEFAULT. `defaultSpace` ships as `:auto`,
+ * so a call that omits `space` lands in a per-session task space
+ * `dsh-agent-<sid8>` instead of the shared `default` slot. The sentinel is
+ * honoured regardless of `isolateSpaces`, because space NAMING and PROFILE
+ * persistence are two different axes: `isolateSpaces` only decides whether the
+ * browser profile lives on disk or in an in-memory sandbox.
+ *
+ * A caller that deliberately wants the shared slot sets `defaultSpace` to a
+ * named value (e.g. `default`) or passes `space: 'default'` on a call — the
+ * tracker then pins that session to it. Calls carrying NO session id always
+ * fall back to the named shared slot so pre-existing behaviour keeps working.
+ * Any other configured value passes through verbatim.
  * @internal exported for tests
  */
 export function deriveSlotDefaultName(
@@ -185,10 +195,36 @@ export function deriveSlotDefaultName(
 ): string {
   const name = rc.defaultSpace
   if (name === AUTO_SPACE_SENTINEL) {
-    if (!rc.isolateSpaces) return DEFAULT_SPACE
-    return sessionKey === GLOBAL_SESSION_KEY ? DEFAULT_SPACE : AUTO_SPACE_PREFIX + sessionKey.slice(0, 8)
+    if (sessionKey === GLOBAL_SESSION_KEY) return DEFAULT_SPACE
+    return AUTO_SPACE_PREFIX + sessionSpaceToken(sessionKey)
   }
   return name
+}
+
+/**
+ * A stable, space-name-safe 8-char token for a DSH session id.
+ *
+ * DSH session ids look like `session-52adc205-3251-…`, so the old
+ * `slice(0, 8)` yielded the literal `session-` for EVERY session — silently
+ * collapsing all sessions into one space, i.e. exactly the failure this
+ * feature exists to prevent. The known prefix is stripped and
+ * hyphens kept, other non-alphanumerics dropped, then sliced to 8; a short id
+ * is used as-is (still unique), and only a degenerate/empty id falls back to a
+ * deterministic FNV-1a hash so the name is never empty.
+ * @internal exported for tests
+ */
+export function sessionSpaceToken(sessionId: string): string {
+  // Keep hyphens (a space name may contain them, and it stays readable);
+  // drop everything else so the token is always a legal space name.
+  const bare = sessionId.replace(/^session-/, '').replace(/[^A-Za-z0-9-]/g, '')
+  if (bare.length > 0) return bare.slice(0, 8)
+  // An empty/degenerate id still needs a non-empty, deterministic token.
+  let h = 0x811c9dc5
+  for (let i = 0; i < sessionId.length; i += 1) {
+    h ^= sessionId.charCodeAt(i)
+    h = Math.imul(h, 0x01000193) >>> 0
+  }
+  return h.toString(16).padStart(8, '0').slice(0, 8)
 }
 
 export function createSessionSpaceTracker(
@@ -1938,7 +1974,7 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
     t({
       name: 'bcdp_space',
       description:
-        "Task space: op=open (or reuse) | close | list | handoff | takeover. In persistent profile mode (default) ALWAYS use or reuse the single 'default' space — credentials persist on disk across restarts, so do NOT create numbered spaces like #4/#5; if a page needs login, prompt the user to log in manually. Omitting `space` targets THIS session's own active slot (persistent: 'default'; isolated mode: dsh-agent-<sessionId8>), so concurrent sessions never drift into each other's spaces. handoff yields control to the human (stop driving until they hand back); takeover resumes agent control.",
+        "Task space: op=open (or reuse) | close | list | handoff | takeover. Omitting `space` targets THIS session's own space (dsh-agent-<sessionId8>), so concurrent sessions never share or hijack each other's browsing context — this is the default and needs no setup. To reuse ONE shared slot across sessions, pass `space: 'default'` (or op=open with name='default') deliberately; do NOT create numbered spaces like #4/#5. The browser profile (logins) persists on disk across restarts unless isolateSpaces is on; if a page needs login, prompt the user to log in manually. handoff yields control to the human (stop driving until they hand back); takeover resumes agent control.",
       parameters: {
         op: {
           type: 'string',
@@ -1947,7 +1983,7 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
         },
         name: {
           type: 'string',
-          description: "op=open/close: task-space name (persistent mode: ALWAYS specify 'default' and reuse it for all browsing tasks). op=handoff/takeover: default = the configured space.",
+          description: "op=open/close: task-space name. Omit to use this session's own space (dsh-agent-<sessionId8>); pass 'default' only when you deliberately want the ONE shared slot. op=handoff/takeover: default = this session's space.",
         },
         keep: {
           type: 'boolean',

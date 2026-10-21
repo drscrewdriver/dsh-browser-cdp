@@ -7,7 +7,7 @@ describe("dual capture config", () => {
       chromePath: "", captureBackend: "auto", streamProfile: "balanced",
       cdpFps: 20, cdpQuality: 55, cdpMaxWidth: 960, cdpBackstopIntervalMs: 3000,
       ffmpegFps: 20, ffmpegMaxWidth: 1280, ffmpegBitrateKbps: 4000, ffmpegEncoder: "auto", ffmpegPath: "", githubMirror: "",
-      runtimeArgs: "", chromeArgs: "", isolateSpaces: false, idleTimeoutMin: 0, defaultSpace: "default",
+      runtimeArgs: "", chromeArgs: "", isolateSpaces: false, idleTimeoutMin: 0, defaultSpace: ":auto",
       links: [], activeTargetId: "", cdpMode: "auto", cdpProbeTimeoutMs: 3000,
       cursorHud: true, cursorName: "DeepSeek", allowLocalFallback: false, localHeadless: false, localUserDataDir: "", lightpandaArgs: "", legacyEgoToolNames: false, remoteEnabled: true,
       // 工具分级注入默认：lazy + 三级全开放（core 级不可封印）。
@@ -29,7 +29,7 @@ describe("dual capture config", () => {
       chromePath: "", captureBackend: "auto", streamProfile: "balanced",
       cdpFps: 30, cdpQuality: 70, cdpMaxWidth: 1200, cdpBackstopIntervalMs: 5000,
       ffmpegFps: 20, ffmpegMaxWidth: 1280, ffmpegBitrateKbps: 4000, ffmpegEncoder: "auto", ffmpegPath: "", githubMirror: "",
-      runtimeArgs: "", chromeArgs: "", isolateSpaces: false, idleTimeoutMin: 0, defaultSpace: "default",
+      runtimeArgs: "", chromeArgs: "", isolateSpaces: false, idleTimeoutMin: 0, defaultSpace: ":auto",
       links: [], activeTargetId: "", cdpMode: "auto", cdpProbeTimeoutMs: 3000,
       cursorHud: true, cursorName: "DeepSeek", allowLocalFallback: false, localHeadless: false, localUserDataDir: "", lightpandaArgs: "", legacyEgoToolNames: false, remoteEnabled: true,
       // 工具分级注入默认：lazy + 三级全开放（core 级不可封印）。
@@ -65,20 +65,23 @@ describe("dual capture config", () => {
   });
 });
 
-// ── A/C: defaultSpace resolution (fold empty -> 'default', keep :auto verbatim) ──
+// ── A/C: defaultSpace resolution. v1.6.0: session isolation is the DEFAULT,
+// i.e. empty/absent folds to the :auto sentinel; a named value is the opt-in
+// to one shared slot and :auto is kept verbatim for the tracker to expand.
 
 describe("resolveConfig.defaultSpace (A/C)", () => {
-  it("folds empty / missing / whitespace to 'default'", () => {
-    expect(resolveConfig({}).defaultSpace).toBe("default");
-    expect(resolveConfig({ defaultSpace: "" }).defaultSpace).toBe("default");
-    expect(resolveConfig({ defaultSpace: "   " }).defaultSpace).toBe("default");
+  it("folds empty / missing / whitespace to :auto (per-session default)", () => {
+    expect(resolveConfig({}).defaultSpace).toBe(":auto");
+    expect(resolveConfig({ defaultSpace: "" }).defaultSpace).toBe(":auto");
+    expect(resolveConfig({ defaultSpace: "   " }).defaultSpace).toBe(":auto");
   });
   it("keeps :auto verbatim (the tracker, not resolveConfig, expands it)", () => {
     expect(resolveConfig({ defaultSpace: ":auto" }).defaultSpace).toBe(":auto");
   });
-  it("trims a named value and passes a non-default name through (task_5 read path)", () => {
+  it("trims a named value and passes it through — the opt-in to one shared slot", () => {
     expect(resolveConfig({ defaultSpace: "  research  " }).defaultSpace).toBe("research");
     expect(resolveConfig({ defaultSpace: "research" }).defaultSpace).toBe("research");
+    expect(resolveConfig({ defaultSpace: "default" }).defaultSpace).toBe("default");
   });
 });
 

@@ -1,8 +1,17 @@
+/**
+ * Platform capability layer for FFmpeg screen capture of a browser window.
+ * Builds per-OS FFmpeg input/encoder argument sets (Windows gfxcapture by
+ * hwnd, macOS avfoundation, Linux x11grab; Wayland is rejected outright),
+ * enumerates candidate windows for a browser PID via an embedded PowerShell
+ * user32 probe, and resolves the final CaptureSource geometry from CDP.
+ * Unsupported combinations surface as coded Errors, never silent fallbacks.
+ */
 import { execFile as nodeExecFile } from 'node:child_process'
 import { promisify } from 'node:util'
 
 const execFile = promisify(nodeExecFile)
 
+/** Error carrying a machine-readable `code` for upstream capability gating. */
 export interface CodedErrorLike extends Error {
   code?: string
 }
@@ -26,6 +35,7 @@ export interface WindowBounds {
   height: number
 }
 
+/** Geometry of the area FFmpeg should capture (window hwnd on Windows, display crop elsewhere). */
 export interface CaptureSource {
   sourceType: 'window-hwnd' | 'display-crop'
   hwnd?: string
@@ -52,6 +62,7 @@ export interface BuildCaptureInputArgs {
   encoder?: string
 }
 
+/** Emit the FFmpeg input arguments for this platform: win32 gfxcapture filter, darwin avfoundation, X11 x11grab; throws on Wayland. */
 export function buildCaptureInput({ platform = process.platform, env = process.env, source, fps, maxWidth, encoder }: BuildCaptureInputArgs): string[] {
   if (platform === 'win32') {
     if (source.sourceType !== 'window-hwnd' || !source.hwnd) {
@@ -100,6 +111,7 @@ export interface BuildEncoderArgsArgs {
   platform?: NodeJS.Platform
 }
 
+/** Emit the FFmpeg output/encoder arguments: Windows h264_mf/libx264 fast-start paths vs. the crop+scale baseline path, both streaming fragmented MP4 to stdout. */
 export function buildEncoderArgs({ encoder, fps, maxWidth, bitrateKbps = 4000, source, platform = process.platform }: BuildEncoderArgsArgs): string[] {
   const maxrateKbps = Math.round(bitrateKbps * 1.25)
   const bufsizeKbps = bitrateKbps * 2
@@ -124,6 +136,7 @@ export function buildEncoderArgs({ encoder, fps, maxWidth, bitrateKbps = 4000, s
   return [...common, '-movflags', 'empty_moov+default_base_moof+frag_keyframe', '-frag_duration', '500000', '-f', 'mp4', 'pipe:1']
 }
 
+/** Pick the window closest to CDP-reported bounds (±8px tolerance), preferring a title match among the closest candidates. */
 export function selectWindowCandidate(windows: WindowInfo[], bounds: WindowBounds | null, targetTitle = ''): WindowInfo | null {
   const candidates = windows.filter((window) => window.hwnd && window.width > 0 && window.height > 0)
   if (candidates.length === 0) return null
@@ -145,6 +158,7 @@ export function selectWindowCandidate(windows: WindowInfo[], bounds: WindowBound
 
 export type ExecFn = (command: string, args: readonly string[], options?: Record<string, unknown>) => Promise<{ stdout: string }>
 
+/** List visible top-level windows owned by `browserPid` (Windows only) by running an inline PowerShell script that P/invokes user32.dll. */
 export async function enumerateWindowsForPid(browserPid: number, run: ExecFn = execFile as unknown as ExecFn): Promise<WindowInfo[]> {
   if (!Number.isInteger(browserPid) || browserPid <= 0) return []
   const script = `
@@ -217,6 +231,7 @@ export interface ResolveCaptureSourceArgs {
   windowEnumerator?: typeof enumerateWindowsForPid
 }
 
+/** Resolve the capture source for a CDP target: window-geometry probe via Runtime.evaluate, then hwnd matching (win32) or display-crop math elsewhere; throws coded errors when the target is missing/not visible/minimized. */
 export async function resolveCaptureSource({ sessions, targetId, browserPid, platform = process.platform, windowEnumerator = enumerateWindowsForPid }: ResolveCaptureSourceArgs): Promise<CaptureSource> {
   const value = (await sessions.call(targetId, 'Runtime.evaluate', {
     expression: '({screenX,screenY,outerWidth,outerHeight,innerWidth,innerHeight,devicePixelRatio,title:document.title})',

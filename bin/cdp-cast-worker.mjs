@@ -35,8 +35,8 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 var __require = /* @__PURE__ */ createRequire(import.meta.url);
 
 //#endregion
-//#region node_modules/ws/lib/constants.js
-var require_constants = /* @__PURE__ */ __commonJS({ "node_modules/ws/lib/constants.js": ((exports, module) => {
+//#region node_modules/.pnpm/ws@8.21.3/node_modules/ws/lib/constants.js
+var require_constants = /* @__PURE__ */ __commonJS({ "node_modules/.pnpm/ws@8.21.3/node_modules/ws/lib/constants.js": ((exports, module) => {
 	const BINARY_TYPES$2 = [
 		"nodebuffer",
 		"arraybuffer",
@@ -59,8 +59,8 @@ var require_constants = /* @__PURE__ */ __commonJS({ "node_modules/ws/lib/consta
 }) });
 
 //#endregion
-//#region node_modules/ws/lib/buffer-util.js
-var require_buffer_util = /* @__PURE__ */ __commonJS({ "node_modules/ws/lib/buffer-util.js": ((exports, module) => {
+//#region node_modules/.pnpm/ws@8.21.3/node_modules/ws/lib/buffer-util.js
+var require_buffer_util = /* @__PURE__ */ __commonJS({ "node_modules/.pnpm/ws@8.21.3/node_modules/ws/lib/buffer-util.js": ((exports, module) => {
 	const { EMPTY_BUFFER: EMPTY_BUFFER$3 } = require_constants();
 	const FastBuffer$2 = Buffer[Symbol.species];
 	/**
@@ -160,8 +160,8 @@ var require_buffer_util = /* @__PURE__ */ __commonJS({ "node_modules/ws/lib/buff
 }) });
 
 //#endregion
-//#region node_modules/ws/lib/limiter.js
-var require_limiter = /* @__PURE__ */ __commonJS({ "node_modules/ws/lib/limiter.js": ((exports, module) => {
+//#region node_modules/.pnpm/ws@8.21.3/node_modules/ws/lib/limiter.js
+var require_limiter = /* @__PURE__ */ __commonJS({ "node_modules/.pnpm/ws@8.21.3/node_modules/ws/lib/limiter.js": ((exports, module) => {
 	const kDone = Symbol("kDone");
 	const kRun = Symbol("kRun");
 	/**
@@ -212,8 +212,8 @@ var require_limiter = /* @__PURE__ */ __commonJS({ "node_modules/ws/lib/limiter.
 }) });
 
 //#endregion
-//#region node_modules/ws/lib/permessage-deflate.js
-var require_permessage_deflate = /* @__PURE__ */ __commonJS({ "node_modules/ws/lib/permessage-deflate.js": ((exports, module) => {
+//#region node_modules/.pnpm/ws@8.21.3/node_modules/ws/lib/permessage-deflate.js
+var require_permessage_deflate = /* @__PURE__ */ __commonJS({ "node_modules/.pnpm/ws@8.21.3/node_modules/ws/lib/permessage-deflate.js": ((exports, module) => {
 	const zlib = __require("zlib");
 	const bufferUtil = require_buffer_util();
 	const Limiter = require_limiter();
@@ -546,8 +546,8 @@ var require_permessage_deflate = /* @__PURE__ */ __commonJS({ "node_modules/ws/l
 }) });
 
 //#endregion
-//#region node_modules/ws/lib/validation.js
-var require_validation = /* @__PURE__ */ __commonJS({ "node_modules/ws/lib/validation.js": ((exports, module) => {
+//#region node_modules/.pnpm/ws@8.21.3/node_modules/ws/lib/validation.js
+var require_validation = /* @__PURE__ */ __commonJS({ "node_modules/.pnpm/ws@8.21.3/node_modules/ws/lib/validation.js": ((exports, module) => {
 	const { isUtf8 } = __require("buffer");
 	const { hasBlob } = require_constants();
 	const tokenChars$2 = [
@@ -743,8 +743,8 @@ var require_validation = /* @__PURE__ */ __commonJS({ "node_modules/ws/lib/valid
 }) });
 
 //#endregion
-//#region node_modules/ws/lib/receiver.js
-var require_receiver = /* @__PURE__ */ __commonJS({ "node_modules/ws/lib/receiver.js": ((exports, module) => {
+//#region node_modules/.pnpm/ws@8.21.3/node_modules/ws/lib/receiver.js
+var require_receiver = /* @__PURE__ */ __commonJS({ "node_modules/.pnpm/ws@8.21.3/node_modules/ws/lib/receiver.js": ((exports, module) => {
 	const { Writable } = __require("stream");
 	const PerMessageDeflate$4 = require_permessage_deflate();
 	const { BINARY_TYPES: BINARY_TYPES$1, EMPTY_BUFFER: EMPTY_BUFFER$2, kStatusCode: kStatusCode$1, kWebSocket: kWebSocket$3 } = require_constants();
@@ -1207,8 +1207,8 @@ var require_receiver = /* @__PURE__ */ __commonJS({ "node_modules/ws/lib/receive
 }) });
 
 //#endregion
-//#region node_modules/ws/lib/sender.js
-var require_sender = /* @__PURE__ */ __commonJS({ "node_modules/ws/lib/sender.js": ((exports, module) => {
+//#region node_modules/.pnpm/ws@8.21.3/node_modules/ws/lib/sender.js
+var require_sender = /* @__PURE__ */ __commonJS({ "node_modules/.pnpm/ws@8.21.3/node_modules/ws/lib/sender.js": ((exports, module) => {
 	const { Duplex: Duplex$3 } = __require("stream");
 	const { randomFillSync } = __require("crypto");
 	const { types: { isUint8Array } } = __require("util");
@@ -1705,8 +1705,8 @@ var require_sender = /* @__PURE__ */ __commonJS({ "node_modules/ws/lib/sender.js
 }) });
 
 //#endregion
-//#region node_modules/ws/lib/event-target.js
-var require_event_target = /* @__PURE__ */ __commonJS({ "node_modules/ws/lib/event-target.js": ((exports, module) => {
+//#region node_modules/.pnpm/ws@8.21.3/node_modules/ws/lib/event-target.js
+var require_event_target = /* @__PURE__ */ __commonJS({ "node_modules/.pnpm/ws@8.21.3/node_modules/ws/lib/event-target.js": ((exports, module) => {
 	const { kForOnEventAttribute: kForOnEventAttribute$1, kListener: kListener$1 } = require_constants();
 	const kCode = Symbol("kCode");
 	const kData = Symbol("kData");
@@ -1925,8 +1925,8 @@ var require_event_target = /* @__PURE__ */ __commonJS({ "node_modules/ws/lib/eve
 }) });
 
 //#endregion
-//#region node_modules/ws/lib/extension.js
-var require_extension = /* @__PURE__ */ __commonJS({ "node_modules/ws/lib/extension.js": ((exports, module) => {
+//#region node_modules/.pnpm/ws@8.21.3/node_modules/ws/lib/extension.js
+var require_extension = /* @__PURE__ */ __commonJS({ "node_modules/.pnpm/ws@8.21.3/node_modules/ws/lib/extension.js": ((exports, module) => {
 	const { tokenChars: tokenChars$1 } = require_validation();
 	/**
 	* Adds an offer to the map of extension offers or a parameter to the map of
@@ -2069,8 +2069,8 @@ var require_extension = /* @__PURE__ */ __commonJS({ "node_modules/ws/lib/extens
 }) });
 
 //#endregion
-//#region node_modules/ws/lib/websocket.js
-var require_websocket = /* @__PURE__ */ __commonJS({ "node_modules/ws/lib/websocket.js": ((exports, module) => {
+//#region node_modules/.pnpm/ws@8.21.3/node_modules/ws/lib/websocket.js
+var require_websocket = /* @__PURE__ */ __commonJS({ "node_modules/.pnpm/ws@8.21.3/node_modules/ws/lib/websocket.js": ((exports, module) => {
 	const EventEmitter$1 = __require("events");
 	const https = __require("https");
 	const http$1 = __require("http");
@@ -2129,14 +2129,10 @@ var require_websocket = /* @__PURE__ */ __commonJS({ "node_modules/ws/lib/websoc
 				this._bufferedAmount = 0;
 				this._isServer = false;
 				this._redirects = 0;
-				if (protocols === void 0) if (!options || options.protocols === void 0) protocols = [];
-				else if (Array.isArray(options.protocols)) protocols = options.protocols;
-				else protocols = [options.protocols];
+				if (protocols === void 0) protocols = [];
 				else if (!Array.isArray(protocols)) if (typeof protocols === "object" && protocols !== null) {
 					options = protocols;
-					if (options.protocols === void 0) protocols = [];
-					else if (Array.isArray(options.protocols)) protocols = options.protocols;
-					else protocols = [options.protocols];
+					protocols = [];
 				} else protocols = [protocols];
 				initAsClient(this, address, protocols, options);
 			} else {
@@ -2325,12 +2321,12 @@ var require_websocket = /* @__PURE__ */ __commonJS({ "node_modules/ws/lib/websoc
 				if (this._closeFrameSent && (this._closeFrameReceived || this._receiver._writableState.errorEmitted)) this._socket.end();
 				return;
 			}
+			this._readyState = WebSocket$3.CLOSING;
 			this._sender.close(code, data, !this._isServer, (err) => {
 				if (err) return;
 				this._closeFrameSent = true;
 				if (this._closeFrameReceived || this._receiver._writableState.errorEmitted) this._socket.end();
 			});
-			this._readyState = WebSocket$3.CLOSING;
 			setCloseTimer(this);
 		}
 		/**
@@ -2613,7 +2609,6 @@ var require_websocket = /* @__PURE__ */ __commonJS({ "node_modules/ws/lib/websoc
 			socketPath: void 0,
 			hostname: void 0,
 			protocol: void 0,
-			protocols: void 0,
 			timeout: void 0,
 			method: "GET",
 			host: void 0,
@@ -3064,8 +3059,8 @@ var require_websocket = /* @__PURE__ */ __commonJS({ "node_modules/ws/lib/websoc
 }) });
 
 //#endregion
-//#region node_modules/ws/lib/stream.js
-var require_stream = /* @__PURE__ */ __commonJS({ "node_modules/ws/lib/stream.js": ((exports, module) => {
+//#region node_modules/.pnpm/ws@8.21.3/node_modules/ws/lib/stream.js
+var require_stream = /* @__PURE__ */ __commonJS({ "node_modules/.pnpm/ws@8.21.3/node_modules/ws/lib/stream.js": ((exports, module) => {
 	require_websocket();
 	const { Duplex: Duplex$1 } = __require("stream");
 	/**
@@ -3181,8 +3176,8 @@ var require_stream = /* @__PURE__ */ __commonJS({ "node_modules/ws/lib/stream.js
 }) });
 
 //#endregion
-//#region node_modules/ws/lib/subprotocol.js
-var require_subprotocol = /* @__PURE__ */ __commonJS({ "node_modules/ws/lib/subprotocol.js": ((exports, module) => {
+//#region node_modules/.pnpm/ws@8.21.3/node_modules/ws/lib/subprotocol.js
+var require_subprotocol = /* @__PURE__ */ __commonJS({ "node_modules/.pnpm/ws@8.21.3/node_modules/ws/lib/subprotocol.js": ((exports, module) => {
 	const { tokenChars } = require_validation();
 	/**
 	* Parses the `Sec-WebSocket-Protocol` header into a set of subprotocol names.
@@ -3221,8 +3216,8 @@ var require_subprotocol = /* @__PURE__ */ __commonJS({ "node_modules/ws/lib/subp
 }) });
 
 //#endregion
-//#region node_modules/ws/lib/websocket-server.js
-var require_websocket_server = /* @__PURE__ */ __commonJS({ "node_modules/ws/lib/websocket-server.js": ((exports, module) => {
+//#region node_modules/.pnpm/ws@8.21.3/node_modules/ws/lib/websocket-server.js
+var require_websocket_server = /* @__PURE__ */ __commonJS({ "node_modules/.pnpm/ws@8.21.3/node_modules/ws/lib/websocket-server.js": ((exports, module) => {
 	const EventEmitter = __require("events");
 	const http = __require("http");
 	const { Duplex } = __require("stream");
@@ -3608,7 +3603,7 @@ var require_websocket_server = /* @__PURE__ */ __commonJS({ "node_modules/ws/lib
 }) });
 
 //#endregion
-//#region node_modules/ws/wrapper.mjs
+//#region node_modules/.pnpm/ws@8.21.3/node_modules/ws/wrapper.mjs
 var import_stream = /* @__PURE__ */ __toESM(require_stream(), 1);
 var import_extension = /* @__PURE__ */ __toESM(require_extension(), 1);
 var import_permessage_deflate = /* @__PURE__ */ __toESM(require_permessage_deflate(), 1);
@@ -3832,6 +3827,7 @@ var CdpCaptureBackend = class {
 	getConfig;
 	onStatus;
 	onJpegFrame;
+	imageFormat;
 	now;
 	setTimer;
 	clearTimer;
@@ -3843,12 +3839,13 @@ var CdpCaptureBackend = class {
 	metrics;
 	offFrame;
 	offDestroyed;
-	constructor({ cdp, sessions, getConfig, onStatus, onJpegFrame, now = Date.now, setTimer = setTimeout, clearTimer = clearTimeout }) {
+	constructor({ cdp, sessions, getConfig, onStatus, onJpegFrame, imageFormat = "jpeg", now = Date.now, setTimer = setTimeout, clearTimer = clearTimeout }) {
 		this.cdp = cdp;
 		this.sessions = sessions;
 		this.getConfig = getConfig;
 		this.onStatus = onStatus;
 		this.onJpegFrame = onJpegFrame;
+		this.imageFormat = imageFormat;
 		this.now = now;
 		this.setTimer = setTimer;
 		this.clearTimer = clearTimer;
@@ -3892,8 +3889,8 @@ var CdpCaptureBackend = class {
 		});
 		try {
 			await this.cdp.call("Page.startScreencast", {
-				format: "jpeg",
-				quality: config.cdpQuality,
+				format: this.imageFormat,
+				...this.imageFormat === "jpeg" ? { quality: config.cdpQuality } : {},
 				maxWidth: config.cdpMaxWidth,
 				everyNthFrame: 1
 			}, session.sessionId);
@@ -4016,8 +4013,8 @@ var CdpCaptureBackend = class {
 				const session = await this.sessions.updateViewport(current.targetId);
 				const scale = session.viewportW > this.getConfig().cdpMaxWidth ? this.getConfig().cdpMaxWidth / session.viewportW : 1;
 				const result = await this.cdp.call("Page.captureScreenshot", {
-					format: "jpeg",
-					quality: this.getConfig().cdpQuality,
+					format: this.imageFormat,
+					...this.imageFormat === "jpeg" ? { quality: this.getConfig().cdpQuality } : {},
 					captureBeyondViewport: false,
 					...session.viewportW && session.viewportH ? { clip: {
 						x: 0,
@@ -4047,6 +4044,7 @@ var CaptureManager = class {
 	backendFactories;
 	getConfig;
 	onStatus;
+	screencastSupported;
 	now;
 	setTimer;
 	clearTimer;
@@ -4061,10 +4059,11 @@ var CaptureManager = class {
 	transition;
 	stopTimer;
 	sweepTimer;
-	constructor({ backendFactories, getConfig, onStatus, now = Date.now, setTimer = setTimeout, clearTimer = clearTimeout, leaseTtlMs = 12e4, idleGraceMs = 1500 }) {
+	constructor({ backendFactories, getConfig, onStatus, screencastSupported = true, now = Date.now, setTimer = setTimeout, clearTimer = clearTimeout, leaseTtlMs = 12e4, idleGraceMs = 1500 }) {
 		this.backendFactories = backendFactories;
 		this.getConfig = getConfig;
 		this.onStatus = onStatus;
+		this.screencastSupported = screencastSupported;
 		this.now = now;
 		this.setTimer = setTimer;
 		this.clearTimer = clearTimer;
@@ -4084,7 +4083,8 @@ var CaptureManager = class {
 			...fallbackReason ? {
 				code: "ffmpeg-fallback-cdp",
 				message: fallbackReason
-			} : {}
+			} : {},
+			...screencastSupported ? {} : { engineUnsupported: true }
 		};
 		this.transition = Promise.resolve();
 		this.stopTimer = null;
@@ -4169,6 +4169,18 @@ var CaptureManager = class {
 	}
 	async #activate(backendName, targetId, force = false) {
 		if (!force && this.backend && this.backendName === backendName && this.targetId === targetId) return;
+		if (!this.screencastSupported) {
+			await this.#stopBackend("engine-unsupported");
+			this.#setStatus({
+				backend: backendName,
+				state: "unsupported",
+				targetId,
+				code: "engine-unsupported",
+				message: "the attached engine cannot capture frames (no screencast, no window)",
+				engineUnsupported: true
+			});
+			return;
+		}
 		await this.#stopBackend("backend-change");
 		const factory = this.backendFactories[backendName];
 		if (!factory) {
@@ -4300,7 +4312,15 @@ var CaptureManager = class {
 
 //#endregion
 //#region src/worker/mp4-fragments.ts
+/**
+* Incremental parser for fragmented-MP4 streams produced by FFmpeg
+* (`empty_moov+default_base_moof+frag_keyframe`). Splits the byte stream on
+* box boundaries and emits two callback events: the init segment
+* (ftyp+moov) once, then each media fragment (moof+mdat) as it completes.
+* Only 32-bit box headers are supported; any other box order is an error.
+*/
 const MAX_BOX_BYTES = 64 * 1024 * 1024;
+/** Stateful box splitter: feed via push(), close with end() to detect truncation. */
 var Mp4FragmentParser = class {
 	onInit;
 	onFragment;
@@ -4318,6 +4338,7 @@ var Mp4FragmentParser = class {
 		this.fragmentBoxes = [];
 		this.ready = false;
 	}
+	/** Append a raw chunk and emit every MP4 box that is now fully buffered. */
 	push(chunk) {
 		this.buffer = Buffer.concat([this.buffer, Buffer.from(chunk)]);
 		while (this.buffer.length >= 8) {
@@ -4331,9 +4352,11 @@ var Mp4FragmentParser = class {
 			this.#box(type, box);
 		}
 	}
+	/** Signal end of stream; throws if a partial box is still buffered. */
 	end() {
 		if (this.buffer.length !== 0) throw new Error("truncated MP4 stream");
 	}
+	/** Route one complete box: init phase collects ftyp/moov, media phase pairs moof+mdat. */
 	#box(type, box) {
 		if (!this.ready) {
 			if (type !== "ftyp" && type !== "moov") throw new Error(`unexpected MP4 init box ${type}`);
@@ -4362,6 +4385,7 @@ var Mp4FragmentParser = class {
 //#endregion
 //#region src/worker/capture-platform.ts
 const execFile$1 = promisify(execFile);
+/** Emit the FFmpeg input arguments for this platform: win32 gfxcapture filter, darwin avfoundation, X11 x11grab; throws on Wayland. */
 function buildCaptureInput({ platform: platform$1 = process.platform, env = process.env, source, fps, maxWidth, encoder }) {
 	if (platform$1 === "win32") {
 		if (source.sourceType !== "window-hwnd" || !source.hwnd) {
@@ -4417,6 +4441,7 @@ function buildCaptureInput({ platform: platform$1 = process.platform, env = proc
 		`${display}+${source.captureX},${source.captureY}`
 	];
 }
+/** Emit the FFmpeg output/encoder arguments: Windows h264_mf/libx264 fast-start paths vs. the crop+scale baseline path, both streaming fragmented MP4 to stdout. */
 function buildEncoderArgs({ encoder, fps, maxWidth, bitrateKbps = 4e3, source, platform: platform$1 = process.platform }) {
 	const maxrateKbps = Math.round(bitrateKbps * 1.25);
 	const bufsizeKbps = bitrateKbps * 2;
@@ -4485,6 +4510,7 @@ function buildEncoderArgs({ encoder, fps, maxWidth, bitrateKbps = 4e3, source, p
 		"pipe:1"
 	];
 }
+/** Pick the window closest to CDP-reported bounds (±8px tolerance), preferring a title match among the closest candidates. */
 function selectWindowCandidate(windows, bounds, targetTitle = "") {
 	const candidates = windows.filter((window) => window.hwnd && window.width > 0 && window.height > 0);
 	if (candidates.length === 0) return null;
@@ -4502,6 +4528,7 @@ function selectWindowCandidate(windows, bounds, targetTitle = "") {
 	}
 	return ranked[0].window;
 }
+/** List visible top-level windows owned by `browserPid` (Windows only) by running an inline PowerShell script that P/invokes user32.dll. */
 async function enumerateWindowsForPid(browserPid, run = execFile$1) {
 	if (!Number.isInteger(browserPid) || browserPid <= 0) return [];
 	const script = `
@@ -4567,6 +4594,7 @@ ConvertTo-Json -Compress -InputObject @($items)
 	const parsed = JSON.parse(stdout.trim() || "[]");
 	return Array.isArray(parsed) ? parsed : [parsed];
 }
+/** Resolve the capture source for a CDP target: window-geometry probe via Runtime.evaluate, then hwnd matching (win32) or display-crop math elsewhere; throws coded errors when the target is missing/not visible/minimized. */
 async function resolveCaptureSource({ sessions, targetId, browserPid, platform: platform$1 = process.platform, windowEnumerator = enumerateWindowsForPid }) {
 	const value = (await sessions.call(targetId, "Runtime.evaluate", {
 		expression: "({screenX,screenY,outerWidth,outerHeight,innerWidth,innerHeight,devicePixelRatio,title:document.title})",
@@ -6258,8 +6286,63 @@ async function captureMarked(call, sessionId, options = {}) {
 }
 
 //#endregion
+//#region src/cdp/capabilities.ts
+const FULL = {
+	engine: "chrome",
+	screencast: true,
+	overlay: true,
+	bindingCalled: true,
+	imageFormat: "jpeg",
+	loadEvent: true,
+	downloadEvents: true,
+	browserClose: true
+};
+/**
+* The capability projection per engine. `chrome` / `unknown` → full
+* capabilities (bit-for-bit today's behavior); `lightpanda` → the analysis
+* (docs/plans/2026-10-04-lightpanda-backend-analysis.md §7) projection.
+*/
+function capabilitiesFor(engine) {
+	if (engine === "lightpanda") return {
+		engine: "lightpanda",
+		screencast: false,
+		overlay: false,
+		bindingCalled: false,
+		imageFormat: "png",
+		loadEvent: false,
+		downloadEvents: false,
+		browserClose: false
+	};
+	return {
+		...FULL,
+		engine
+	};
+}
+/**
+* Env key the host half sets when spawning the cast / render workers
+* (mirrors `EGO_LINUX_CDP_URL`'s injection pattern in cast-server). The child
+* processes cannot see the host's attach cache, so the projected engine id
+* travels as data — the host decides once, children only read.
+*/
+const BCDP_CDP_ENGINE = "BCDP_CDP_ENGINE";
+/**
+* Project capabilities from the spawn-env value. Anything absent or
+* unrecognized means FULL capabilities — an unknown engine must never
+* conservatively break a Chrome endpoint.
+*/
+function capabilitiesFromEnvValue(value) {
+	return capabilitiesFor(value !== void 0 && value.trim() === "lightpanda" ? "lightpanda" : "unknown");
+}
+
+//#endregion
 //#region src/worker/cdp-cast-worker.ts
 const SENTINEL = "@@DSH_RESULT@@";
+/**
+* Lightpanda backend — capability projection for THIS connection. The host
+* decides once (probe → attach cache → spawn env); the worker only reads.
+* Absent env = full capabilities = pre-Lightpanda behavior.
+*/
+const CAPS = capabilitiesFromEnvValue(process.env[BCDP_CDP_ENGINE]);
 const HOME = homedir() || process.env.HOME || process.env.USERPROFILE || "/root";
 const IS_WIN = platform() === "win32";
 const STATE_HOME = IS_WIN ? process.env.LOCALAPPDATA || join(HOME, "AppData", "Local") : process.env.XDG_STATE_HOME || join(HOME, ".local", "state");
@@ -6442,7 +6525,10 @@ function publishJpeg(frame) {
 		viewportH: frame.vh
 	});
 	while (frameCache.size > 30) frameCache.delete(frameCache.keys().next().value);
-	broadcast("frame", frame);
+	broadcast("frame", frame.data !== void 0 && CAPS.imageFormat === "png" ? {
+		...frame,
+		fmt: "png"
+	} : frame);
 }
 function publishVideoInit(event) {
 	videoInit = {
@@ -6490,6 +6576,7 @@ function endVideo({ generation } = {}) {
 const manager = new CaptureManager({
 	getConfig: () => castConfig,
 	onStatus: publishStatus,
+	screencastSupported: CAPS.screencast,
 	backendFactories: {
 		cdp: ({ onStatus }) => {
 			if (!active) throw new Error("no live browser");
@@ -6498,7 +6585,8 @@ const manager = new CaptureManager({
 				sessions: active.sessions,
 				getConfig: () => castConfig,
 				onStatus,
-				onJpegFrame: publishJpeg
+				onJpegFrame: publishJpeg,
+				imageFormat: CAPS.imageFormat
 			});
 		},
 		ffmpeg: ({ generation, onStatus }) => {
@@ -6777,6 +6865,11 @@ async function main() {
 					code: "browser-disconnected",
 					error: "no live browser"
 				});
+				if (body.enabled === true && (!CAPS.overlay || !CAPS.bindingCalled)) return sendJson(res, 503, {
+					ok: false,
+					code: "engine-unsupported",
+					error: "this engine does not support Overlay-based picking"
+				});
 				const channel = ensurePickChannel();
 				if (channel === null) return sendJson(res, 409, {
 					ok: false,
@@ -6875,8 +6968,8 @@ async function main() {
 						limit: typeof body.limit === "number" ? body.limit : 20,
 						highlightIndex: typeof body.highlightIndex === "number" ? body.highlightIndex : void 0,
 						measureRects: body.measureRects !== false,
-						format: body.format === "jpeg" ? "jpeg" : "png",
-						quality: typeof body.quality === "number" ? body.quality : void 0,
+						format: CAPS.imageFormat === "png" ? "png" : body.format === "jpeg" ? "jpeg" : "png",
+						quality: CAPS.imageFormat === "png" ? void 0 : typeof body.quality === "number" ? body.quality : void 0,
 						timeoutMs: 15e3
 					});
 					return sendJson(res, result.ok ? 200 : 502, result);

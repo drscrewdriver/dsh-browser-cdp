@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { resolveConfig, judgeSettingsOf, tokenizeArgs, filterArgs, EGO_CLI_BLOCKED, CHROME_BLOCKED } from "../src/config.ts";
+import { resolveConfig, judgeSettingsOf, tokenizeArgs, filterArgs, normalizeProbeState, EGO_CLI_BLOCKED, CHROME_BLOCKED } from "../src/config.ts";
 
 describe("dual capture config", () => {
   it("returns canonical defaults", () => {
@@ -7,9 +7,11 @@ describe("dual capture config", () => {
       chromePath: "", captureBackend: "auto", streamProfile: "balanced",
       cdpFps: 20, cdpQuality: 55, cdpMaxWidth: 960, cdpBackstopIntervalMs: 3000,
       ffmpegFps: 20, ffmpegMaxWidth: 1280, ffmpegBitrateKbps: 4000, ffmpegEncoder: "auto", ffmpegPath: "", githubMirror: "",
-      runtimeArgs: "", chromeArgs: "", isolateSpaces: false, idleTimeoutMin: 0,
+      runtimeArgs: "", chromeArgs: "", isolateSpaces: false, idleTimeoutMin: 0, defaultSpace: ":auto",
       links: [], activeTargetId: "", cdpMode: "auto", cdpProbeTimeoutMs: 3000,
-      cursorHud: true, cursorName: "DeepSeek", allowLocalFallback: false, localHeadless: false, localUserDataDir: "", legacyEgoToolNames: false, remoteEnabled: true,
+      cursorHud: true, cursorName: "DeepSeek", allowLocalFallback: false, localHeadless: false, localUserDataDir: "", lightpandaArgs: "", legacyEgoToolNames: false, remoteEnabled: true,
+      // 工具分级注入默认：lazy + 三级全开放（core 级不可封印）。
+      toolInjection: "lazy", toolBrowse: true, toolExtended: true, toolEscape: true, toolJudge: true,
       // 阶段 10 judge defaults. layaUrl defaults to the REAL sidecar port:/n      // 7789 (JevLoop’s value) is a different tool and yields a confusing
       // connection error that reads like "laya is down".
       jevUrl: "", jevKey: "", jevModel: "jev",
@@ -27,9 +29,11 @@ describe("dual capture config", () => {
       chromePath: "", captureBackend: "auto", streamProfile: "balanced",
       cdpFps: 30, cdpQuality: 70, cdpMaxWidth: 1200, cdpBackstopIntervalMs: 5000,
       ffmpegFps: 20, ffmpegMaxWidth: 1280, ffmpegBitrateKbps: 4000, ffmpegEncoder: "auto", ffmpegPath: "", githubMirror: "",
-      runtimeArgs: "", chromeArgs: "", isolateSpaces: false, idleTimeoutMin: 0,
+      runtimeArgs: "", chromeArgs: "", isolateSpaces: false, idleTimeoutMin: 0, defaultSpace: ":auto",
       links: [], activeTargetId: "", cdpMode: "auto", cdpProbeTimeoutMs: 3000,
-      cursorHud: true, cursorName: "DeepSeek", allowLocalFallback: false, localHeadless: false, localUserDataDir: "", legacyEgoToolNames: false, remoteEnabled: true,
+      cursorHud: true, cursorName: "DeepSeek", allowLocalFallback: false, localHeadless: false, localUserDataDir: "", lightpandaArgs: "", legacyEgoToolNames: false, remoteEnabled: true,
+      // 工具分级注入默认：lazy + 三级全开放（core 级不可封印）。
+      toolInjection: "lazy", toolBrowse: true, toolExtended: true, toolEscape: true, toolJudge: true,
       // 阶段 10 judge defaults. layaUrl defaults to the REAL sidecar port:/n      // 7789 (JevLoop’s value) is a different tool and yields a confusing
       // connection error that reads like "laya is down".
       jevUrl: "", jevKey: "", jevModel: "jev",
@@ -58,6 +62,26 @@ describe("dual capture config", () => {
     expect(resolveConfig({ streamProfile: "high", ffmpegBitrateKbps: 6000 }).ffmpegBitrateKbps).toBe(6000);
     expect(resolveConfig({ streamProfile: "high", ffmpegFps: 12 }).ffmpegFps).toBe(12);
     expect(resolveConfig({ backstopIntervalMs: 200 }).cdpBackstopIntervalMs).toBe(1000);
+  });
+});
+
+// ── A/C: defaultSpace resolution. v1.6.0: session isolation is the DEFAULT,
+// i.e. empty/absent folds to the :auto sentinel; a named value is the opt-in
+// to one shared slot and :auto is kept verbatim for the tracker to expand.
+
+describe("resolveConfig.defaultSpace (A/C)", () => {
+  it("folds empty / missing / whitespace to :auto (per-session default)", () => {
+    expect(resolveConfig({}).defaultSpace).toBe(":auto");
+    expect(resolveConfig({ defaultSpace: "" }).defaultSpace).toBe(":auto");
+    expect(resolveConfig({ defaultSpace: "   " }).defaultSpace).toBe(":auto");
+  });
+  it("keeps :auto verbatim (the tracker, not resolveConfig, expands it)", () => {
+    expect(resolveConfig({ defaultSpace: ":auto" }).defaultSpace).toBe(":auto");
+  });
+  it("trims a named value and passes it through — the opt-in to one shared slot", () => {
+    expect(resolveConfig({ defaultSpace: "  research  " }).defaultSpace).toBe("research");
+    expect(resolveConfig({ defaultSpace: "research" }).defaultSpace).toBe("research");
+    expect(resolveConfig({ defaultSpace: "default" }).defaultSpace).toBe("default");
   });
 });
 
@@ -199,6 +223,20 @@ describe("R7 connection sequence", () => {
       links: [{ kind: "ego-cli", id: "c", label: "", cliPath: "" }],
     } as never);
     expect(config.links[0]).toMatchObject({ probeStatus: "unknown", probeLatencyMs: 0, probeError: "", probeCode: "", probeAt: 0 });
+  });
+
+  it("converges probeEngine to 'unknown' on rows missing it — same lifecycle as probeStatus", () => {
+    const config = resolveConfig({
+      links: [{ kind: "cdp", id: "legacy", label: "", endpoint: "http://legacy:1", enabled: true, note: "" }],
+    } as never);
+    expect(config.links[0]!.probeEngine).toBe("unknown");
+  });
+
+  it("normalizeProbeState keeps a recognized probeEngine and drops forged values", () => {
+    const engineOf = (link: unknown) => (normalizeProbeState(link as never) as { probeEngine?: string }).probeEngine;
+    expect(engineOf({ id: "lp", probeEngine: "lightpanda" })).toBe("lightpanda");
+    expect(engineOf({ id: "x", probeEngine: "espresso" })).toBe("unknown");
+    expect(engineOf({ id: "y" })).toBe("unknown");
   });
 });
 

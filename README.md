@@ -3,7 +3,7 @@
 [简体中文](README.md) | [Français](README.fr.md) | [Deutsch](README.de.md) | [Italiano](README.it.md) | [Русский](README.ru.md) | [Español](README.es.md)
 
 <p align="center">
-  <img src="https://img.shields.io/badge/DSH-%3E%3D0.2.0--rc.1-blue" alt="DSH >= 0.2.0-rc.1">
+  <img src="https://img.shields.io/badge/DSH-0.1.7--rc.1~0.2.1--rc.2-blue" alt="DSH 0.1.7-rc.1 ~ 0.2.1-rc.2">
   <img src="https://img.shields.io/badge/DSH--better--sidebar-%3E%3D0.12.2(optional)-red" alt="dsh-better-sidebar >= 0.12.2 (optional)">
   <img src="https://img.shields.io/badge/Node-%3E%3D22-brightgreen?logo=node.js&logoColor=white" alt="Node >= 22">
 </p>
@@ -14,11 +14,11 @@
 
 | 依赖 | 最低版本 | 推荐版本 | 说明 |
 |---|---|---|---|
-| **DSH** (DeepSeek Harness) | `0.2.0-rc.1` | `≥ 0.2.0-rc.1 <0.2.1-0` | 0.2.0 线：peer 依赖同步锁定 `>=0.2.0-rc.1 <0.2.1-0`；宿主对插件 API 向后兼容（0.2.0 的 composer/`forkSession` 为签名扩展，插件仅作调用方，免改）。声明式设置面自 0.1.7 引入（Config `.volatile()` 字段自动生成设置表单），0.2.0 延续该形态。DSH `0.1.2-rc.1` ~ `0.1.7` 请使用 **0.17.x** 版本线，0.1.0-rc.x / 0.1.1-rc.x 请使用 v0.8.0 及更早版本 |
+| **DSH** (DeepSeek Harness) | `0.1.7-rc.1` | `0.1.7-rc.1 ~ 0.2.1-rc.1`（精确枚举） | 精确枚举 5 个 rc 版本，engines 与全部 dsh peer 同串（无区间/caret）：`0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-rc.1 || 0.2.1-rc.2`；宿主对插件 API 向后兼容（0.2.0 的 composer/`forkSession` 为签名扩展，插件仅作调用方，免改）。声明式设置面自 0.1.7 引入（Config `.volatile()` 字段自动生成设置表单），0.2.0/0.2.1 延续该形态。DSH `0.1.2-rc.1` ~ `0.1.5-rc.3` 请使用 **0.17.x** 版本线，0.1.0-rc.x / 0.1.1-rc.x 请使用 v0.8.0 及更早版本 |
 | **dsh-better-sidebar** | `0.12.2`（可选） | `≥ 0.17.1` | 未安装时自动回退浮动观察球；`< 0.12.2` 可运行但外部链接拦截（`urlTarget`）静默降级 |
 | **Node.js** | `22` | — | harness 环境自带 |
 
-**DSH 全版本适配说明**：本版本（**v0.18.0 起，0.2.0 线**）面向 DSH `0.2.0-rc.1+`：相对 0.1.7 线（v0.17.x）**零代码改动**，纯依赖/元数据换代——0.2.0 宿主对插件 API 向后兼容，本插件经 `ctx.get('conversation').input` 门面投递选区（不调 `submit()`、不 override），不在 0.2.0 变更影响面内。声明式设置面自 0.1.7 引入：插件不再注册任何设置节（`ctx.settings` 注册类 API 已被宿主删除），改为在 Config schema 上以 `.volatile()` 标记可配置字段，由宿主设置页自动生成表单；volatile 字段变更通过 `loader/volatile-update` 事件热生效，无需重载插件。核心宿主 API（`defineTool`、`ctx.tools.register`、`ctx.subprocess.spawn`、`ctx.webServer.register`、`ctx.inject`、`ModuleLoader` CJS factory、`cordis.patch.yml`）沿用 0.1.2 以来形态。DSH `0.1.2-rc.1` ~ `0.1.7` 请使用 **0.17.x** 版本线。
+**DSH 全版本适配说明**：本版本（**1.2.1 起**；1.2.2 起追加 0.2.1-rc.2）面向 DSH `0.1.7-rc.1 ~ 0.2.1-rc.2`（精确枚举 6 个 rc）：相对 0.1.7 线（v0.17.x）**零代码改动**，纯依赖/元数据换代——0.2.0 宿主对插件 API 向后兼容，本插件经 `ctx.get('conversation').input` 门面投递选区（不调 `submit()`、不 override），不在 0.2.0 变更影响面内。声明式设置面自 0.1.7 引入：插件不再注册任何设置节（`ctx.settings` 注册类 API 已被宿主删除），改为在 Config schema 上以 `.volatile()` 标记可配置字段，由宿主设置页自动生成表单；volatile 字段变更通过 `loader/volatile-update` 事件热生效，无需重载插件。核心宿主 API（`defineTool`、`ctx.tools.register`、`ctx.subprocess.spawn`、`ctx.webServer.register`、`ctx.inject`、`ModuleLoader` CJS factory、`cordis.patch.yml`）沿用 0.1.2 以来形态。DSH `0.1.2-rc.1` ~ `0.1.5-rc.3` 请使用 **0.17.x** 版本线。
 
 **dsh-better-sidebar 适配说明**：本插件通过 `ctx.betterSidebar` 服务（try-catch 防御性获取）注册侧边栏 Tab 并监听外部链接。关键 API 引入版本：
 
@@ -36,7 +36,7 @@
 
 **登录态导入（v0.8.5 新增）**：工具 `bcdp_login_import`，把你日常 Chrome/Edge/Brave 里的登录 cookie **按域名**复制进 agent 浏览器（真实二进制无头启动 + CDP 透传读取，兼容 Chrome 127+ 的 App-Bound Encryption，不做离线解密；源浏览器运行中可选择优雅关闭后导入，窗口下次启动自动恢复）。cookie 值不出现在任何日志与输出中；导入前自动备份源 cookie 库，异常清空自动还原。配合默认的磁盘持久化 Profile，导入的登录态跨重启永久保留。
 
-一款 **CDP 浏览器代理**：把 [CitroLabs/ego-lite](https://github.com/CitroLabs/ego-lite)（给 AI Agent 用的 Chromium）作为内置运行时接入 DeepSeek Harness，以 **38 个结构化 `bcdp_*` 工具**驱动浏览器，并配一套**实时观察前端口**——agent 后台操作网页时，你能像看直播一样看到它正在浏览的每个页面，还能直接操作它。
+一款 **CDP 浏览器代理**：把 [CitroLabs/ego-lite](https://github.com/CitroLabs/ego-lite)（给 AI Agent 用的 Chromium）作为内置运行时接入 DeepSeek Harness，以 **34 个结构化 `bcdp_*` 工具**驱动浏览器，并配一套**实时观察前端口**——agent 后台操作网页时，你能像看直播一样看到它正在浏览的每个页面，还能直接操作它。
 
 **一点私藏的独特之处（self-observation）**：agent 用的就是这一个 Chromium——连它操作 **DSH 自身**（管理会话、任务看板、调设置）时，观察窗也实时显示、你能随时接手。不只是"看得见 agent 在网页上干活"，连 agent 操作 DSH 界面本身都是全程可见、可掌控的。
 
@@ -50,7 +50,7 @@
 
 | 能力 | 本插件（本仓库） | 同类插件（Da1dr1em/dsh-ego-browser） |
 |---|---|---|
-| 结构化工具数 | **38 个**，职责单一、可确定性调用 | **3 个**（`run`/`help`/`status`） |
+| 结构化工具数 | **34 个**，职责单一、可确定性调用 | **3 个**（`run`/`help`/`status`） |
 | 实时观察窗（CDP JPEG / FFmpeg H.264 双后端 + 标签条 + 历史抽屉） | ✅ 有 | ❌ 无 |
 | 监控窗鼠标**直接操作**真实浏览器（点击/拖拽/滚动回传 CDP） | ✅ 有 | ❌ 无 |
 | **观察窗点选元素 → 捕获并引用进对话输入框**（`[CDP-PICKS]` 结构化块，人工指认目标） | ✅ 有 | ❌ 无 |
@@ -64,7 +64,7 @@
 - **控得住**：别家只读；我们监控窗**直接驱动**同一个 agent 浏览器，需要时你亲手接管（缩放/拖拽/点击），不必打断 agent 重来。
 - **指得准**：你在观察窗里**点选**页面元素，插件捕获其 `backendNodeId`/`tag`/`id` 与语义描述，以 `[CDP-PICKS]` 结构化块并入对话输入框草稿（同页多元素自动合并编号）——agent 拿到的是精确目标，不用猜"你说的按钮是哪个"。
 
-> 以上对比基于公开可见的可核实事实：本仓库代码（`bin/cdp-cast-worker.mjs` 实时推流 + CDP 输入回传、`lib/index.js` 38 个注册工具、`lib/cast-server.js` host 桥接、`lib/client.js` 的 `deliverPickToConversation` 点选引用）与同类插件的源码/README（其 `src/tools.ts` 仅注册 `ego_browser_run` / `ego_browser_help` / `ego_browser_status`）。此文档不含对任何他人的贬低——我们只陈述自己多实现并验证了哪些能力。
+> 以上对比基于公开可见的可核实事实：本仓库代码（`bin/cdp-cast-worker.mjs` 实时推流 + CDP 输入回传、`lib/index.js` 34 个注册工具、`lib/cast-server.js` host 桥接、`lib/client.js` 的 `deliverPickToConversation` 点选引用）与同类插件的源码/README（其 `src/tools.ts` 仅注册 `ego_browser_run` / `ego_browser_help` / `ego_browser_status`）。此文档不含对任何他人的贬低——我们只陈述自己多实现并验证了哪些能力。
 
 **相对 [ego-lite](https://github.com/CitroLabs/ego-lite) 本体，我们多做了这些（都可对照本仓库代码核实）：**
 
@@ -161,8 +161,12 @@ dshx list                                                # 应显示：[on] dsh-
 
 两个默认值值得知道：
 
-- **`--sdk-path` 默认关闭**：默认用 CLI 自带的 harness（官方配对的那套）；打开后才注入本插件的 harness 包。若 CLI 不认这个旗标，插件会记一条提示并**自动重试一次不带它**——不会因此废掉整条链路。
-- **就绪探测会走一次真实的 heredoc**（与我们干活用的是同一条通道），所以它**不是免费的**：探测可能冷启动后端浏览器（实测内置移植版约 1.3 s）。
+- **`useSdkPath` 默认关闭**：关闭时用 CLI 自带的 harness（官方配对的那套）；打开后，**探测与每一次工具执行**都会注入 `--sdk-path <插件内置 harness>`。这一点很关键：只在探测时带、执行时不带，脚本首行就会崩 `ReferenceError: taskSpaces is not defined`（1.2.4 修复的 P0）。若 CLI 不认这个旗标，探测会记一条提示并**自动重试一次不带它**；此时只有 CLI 自带的 harness 确实暴露 `taskSpaces` / `browser` 门面才算就绪，否则显式判失败并给出缺失的门面名——不再假阳性。
+- **就绪探测是 `nodejs` 通道上的 facade 探针**（与干活同一条通道）：只检查注入后的 `taskSpaces` / `browser` / `page` 全局，不启动也不等待浏览器，实测约 300 ms；`bcdp_status` 走同一判据。
+
+### 双 API 面共存风险
+
+本插件通过注入 SDK 使用 `taskSpaces.*`（插件侧 API），而官方 `ego-browser skill` 脚本使用原生 `taskSpace()`（app 侧 API）。二者驱动的是**同一个** ego lite，task space 也是共享的：同时用插件工具和官方 skill 脚本操作同一空间，可能互相抢控制权。**建议二选一，以插件为准**；确需跑官方脚本时，先停用本插件的 ego-cli link。
 
 与其它开关的关系：
 
@@ -172,19 +176,127 @@ dshx list                                                # 应显示：[on] dsh-
 
 `bcdp_doctor` 会报告当前序列类型计数、CLI 实际解析到的路径与形态，以及（若同机装了上游 `dsh-ego-browser`）一条共存提示。
 
-## 工具清单（38 个，前缀 `bcdp_`，完整索引见 `bcdp_help`）
+## Lightpanda 后端（可选引擎，beta）
+
+[Lightpanda](https://lightpanda.io) 是面向 AI 的无头文本渲染浏览器（AGPL-3.0，本插件仅作 CDP 客户端使用）。它对插件来说就是一个**普通 CDP 端点**：设置面板添加并激活后，probe 会从 `/json/version` 的 `Browser: Lightpanda/…` **自动识别引擎**，badge 与 `bcdp_doctor` 显示 engine，能力降级自动生效（无需任何配置）。
+
+### 分系统安装
+
+| 系统 | 方式 |
+|---|---|
+| **Linux**（建议本机直装测试） | `curl -fsSL https://pkg.lightpanda.io/install.sh \| bash`（装入 `~/.local/bin`，确保 PATH 含它）→ `lightpanda serve --host 127.0.0.1 --port 9222` |
+| **macOS**（建议本机直装测试） | 同上一键脚本（aarch64）→ 同 serve 命令 |
+| **Windows**（内置方案 = WSL2，无原生版） | 管理员 PowerShell `wsl --install` → 重启 → `wsl --install -d Ubuntu` → WSL 内同 Linux 一键脚本 → WSL 内 `lightpanda serve …`；WSL2 自动把端口映射到 Windows localhost（**二进制只存在于 WSL 内，宿主侧没有文件，属预期**） |
+| **Docker（备选）** | `docker run -d --name lightpanda -p 127.0.0.1:9222:9222 lightpanda/browser:nightly` |
+
+装好后在本插件设置面板添加 CDP 端点 `http://127.0.0.1:9222` 并激活即可。可选：`export LIGHTPANDA_DISABLE_TELEMETRY=true` 关遥测。
+
+### 能力降级矩阵（识别后自动生效）
+
+| 能力 | Lightpanda 上的行为 |
+|---|---|
+| 导航 / JS / 点击 / 填表 / 键鼠 / 快照（AX 树）/ HTTP / 登录导入 / 等待族 | **无损可用** |
+| `bcdp_screenshot` | PNG **文本级渲染**（无像素引擎，视觉保真低于 Chrome；runtime 本就发 png，零改动兼容） |
+| jev 视觉链（`bcdp_jev_frame` 等） | 投影自动改发 PNG；输出带 `engine` / `rendering: text` 元数据 |
+| 观察窗实时画面 | **关闭**——无 screencast 且无窗口，worker 不启动采集循环，面板显示降级提示 |
+| 面板点选（inspect 路径） | **关闭**——无 Overlay 域 / bindingCalled 事件，返回 `engine-unsupported`（i18n）；坐标回退路径保留 |
+| `bcdp_download` | **关闭**——无 Page 下载事件，调用即返回结构化错误（不会挂起超时） |
+| `bcdp_auth_flush` | 返回 `degraded: true`——引擎无 `Storage.flushCookies`，cookie 仅随引擎进程存活 |
+
+识别失败的端点（`engine: unknown`）保持**全能力**——误判只应"少给"，不应"错给"。
+
+## 工具清单（34 个，前缀 `bcdp_`，完整索引见 `bcdp_help`）
 
 | 类别 | 工具 |
 |---|---|
-| 任务空间 | `bcdp_space_open` `bcdp_space_close` `bcdp_status` |
+| 任务空间 | `bcdp_space`（open / close / list / handoff / takeover） `bcdp_status` |
 | 页面读取 | `bcdp_snapshot`（语义树） `bcdp_page_info` `bcdp_read_element` |
-| 导航/等待 | `bcdp_navigate`（复用 tab） `bcdp_wait` `bcdp_wait_for_selector` `bcdp_wait_for_url` `bcdp_wait_for_response` |
-| 交互 | `bcdp_click` `bcdp_fill` `bcdp_hover` `bcdp_drag` `bcdp_select` `bcdp_check` `bcdp_key` `bcdp_scroll` |
-| 执行/调试 | `bcdp_js`（页面求值） `bcdp_cdp`（原始 CDP） `bcdp_cli`（任意 heredoc） `bcdp_script`（多步脚本） |
+| 导航/标签/等待 | `bcdp_navigate`（复用 tab / reload） `bcdp_tab`（list/current/new/switch/close） `bcdp_wait`（duration / selector / url / response / load / function / request / event） |
+| 交互 | `bcdp_click` `bcdp_fill` `bcdp_hover` `bcdp_drag` `bcdp_select` `bcdp_check` `bcdp_key`（type/insert） `bcdp_scroll` |
+| 执行/调试 | `bcdp_js`（页面求值） `bcdp_cdp`（原始 CDP） `bcdp_script`（多步脚本；`verbatim:true` = 原 `bcdp_cli` 的裸 heredoc） |
 | 输出 | `bcdp_screenshot` `bcdp_download` `bcdp_upload` |
 | 会话/安全 | `bcdp_auth_flush`（登录落盘） `bcdp_login_import`（跨浏览器登录态导入） `bcdp_captcha` `bcdp_dialog` |
 | 元工具 | `bcdp_help` `bcdp_doctor` `bcdp_http` |
 | 评审（JEV/Laya，外接判定服务可选） | `bcdp_jev_status` `bcdp_jev_frame` `bcdp_jev_ask` `bcdp_jev_run` `bcdp_jev_attempt` |
+
+
+### 1.5.0 迁移表（旧名 → 新调用）
+
+wait / space / escape 三族已按 `op` 合并，旧工具名**移除**（不保留别名——别名同样吃 schema 预算，等于没省）。其余工具名不变。
+
+| 旧调用 | 新调用 |
+|---|---|
+| `bcdp_wait` `{ms}` | `bcdp_wait` `{op:"duration", ms}` |
+| `bcdp_wait_for_selector` `{selector, state, timeout}` | `bcdp_wait` `{op:"selector", selector, state, timeout}` |
+| `bcdp_wait_for_url` `{pattern, timeout}` | `bcdp_wait` `{op:"url", pattern, timeout}` |
+| `bcdp_wait_for_response` `{url, body, timeout}` | `bcdp_wait` `{op:"response", url, body, timeout}` |
+| `bcdp_wait_page` `{op:"load"\|"function"\|"request"\|"event", …}` | `bcdp_wait` 同名 op（`op` 取值不变，直接搬家） |
+| `bcdp_space_open` `{name}` | `bcdp_space` `{op:"open", name}` |
+| `bcdp_space_close` `{name, keep}` | `bcdp_space` `{op:"close", name, keep}` |
+| `bcdp_cli` `{script}` | `bcdp_script` `{script, verbatim:true}` |
+
+> `op` 合并后各 op 的必需参数写在工具描述里；缺参会返回带 op 名的 `reason`（如 `bcdp_wait: selector is required for op=selector`），不会静默降级。
+
+## 工具注入分级（懒注册 / 分级 / 锁定）
+
+34 个工具全量注册时，**每个会话每一轮**都要为它们的 schema 付费（挂载级实测 `description` + `parameters` 序列化 = **22,224 字符** ≈ 6.4K token；1.3.2 的 38 工具基线用同一口径实测为 20,951，1.5.0 三族合并后仅高出 **＋6.1%**，远低于 ≤＋15% 门禁），而不碰浏览器的会话一个也用不上。插件因此把「谁能出现在模型面前」收成一处策略（`src/toolTiers.ts`），分**八批**注入。
+
+> **8 批 ≠ 8 个开关**。批次是*注入时机*，开关是*用户面*（§9.3「开关与批次解耦」）。当前 4 个开关管 8 批：`toolBrowse` 管 act+observe+wait 三批并按波次放行，`toolExtended` 管 power+session，`toolEscape`、`toolJudge` 各管一批。所以「`toolBrowse` = 14 个」指的是**并集上限**，实际第一波只放 9 个。
+
+| 批次 | 成员 | schema | 何时出现 |
+|---|---|---:|---|
+| **core** 常驻（6） | `bcdp_status` `bcdp_doctor` `bcdp_help` `bcdp_space` `bcdp_navigate` `bcdp_snapshot` | 3,589 | 永远在场，不可封印——否则 lazy 模式连解锁入口都没有 |
+| **act** 动手（9） | click / fill / key / hover / scroll / select / check / drag / tab | 5,243 | `lazy` 下首次活动放第一波 |
+| **observe** 观察（4） | screenshot / page_info / read_element / js | 2,037 | 第二次活动 |
+| **wait** 等待（1） | `bcdp_wait`（duration / selector / url / response / load / function / request / event） | 1,925 | 第三次活动 |
+| **power** 重量级（5） | raw CDP / http / upload / download / dialog | 3,283 | 首次活动（同 `toolExtended`） |
+| **session** 登录态（3） | captcha / auth_flush / login_import | 1,694 | 首次活动（同 `toolExtended`） |
+| **escape** 逃生舱（1） | `bcdp_script`（`verbatim:true` = 原 cli 的裸 heredoc） | 1,389 | **冷启动即在**，不吃活动闸（见下） |
+| **judge** 评审链（5） | `bcdp_jev_*` | 3,064 | 除解锁外，**还要求配了 JEV 或 Laya Key** |
+| **合计** | 34 | **22,224** | — |
+
+设置项在插件设置页**最上方**的「工具封印」分块（全部 volatile，翻完当场生效，不重启插件）——一个开关管一组批次，形状照 dsh-prime-memory 的「工具封印」：
+
+- **`toolInjection`** `lazy`（**默认**：常驻 core + escape，其余首次 `bcdp_*` 调用后按开关注入）/ `always`（挂载即全量，历史行为）。
+- **`toolBrowse`**（act + observe + wait = 14）/ **`toolExtended`**（power + session = 8）/ **`toolEscape`**（script = 1）/ **`toolJudge`**（5）：开 = 开放注册，关 = 该批从模型工具列表移除。四组各自独立，封一组不波及别组；`core` 级不给开关（封了就没了活动入口）。
+
+**escape 批为什么单独成组、且不等活动**：`bcdp_script` 是唯一能在一次调用里干完任意多步任务的入口（`page` / `browser` / `taskSpaces` / `fetch` / `cdp` 全预置），其余 33 个工具能做的事它都能做。所以它必须始终可达——否则模型遇到「结构化工具没覆盖」的情形时手里没有任何逃生手段。这也让它成为**按需只开逃生舱**的合法姿势：关掉 `toolExtended`、留着 `toolEscape`，只留 1 个工具。
+
+行为要点：
+
+- **封印 = 反注册**（工具从模型的工具列表里消失），不是执行期拒绝。解锁信号挂在 `bcdp_*` 调用的公共出口上，工具体不知道分级存在；`bcdp_status` / `bcdp_help` / `bcdp_doctor` 自身也算活动信号（读了指南就得有工具可用）。
+- **闲置自动收回**：`lazy` + `idleTimeoutMin > 0` 时，空闲回收把后台浏览器停掉的同一刻收回扩展面；下次活动重新铺开。`always` 模式不受影响。
+- `legacyEgoToolNames` 的 `ego_*` 别名跟随其 `bcdp_*` 本体的级别。
+- 当前注入面写在 `bcdp_doctor` 报告首行（`tool injection: mode=lazy browse=open extended=open escape=open judge=open judgeKey=none active=no → live 7 / sealed 27`），不用猜。
+- 默认档下不碰浏览器的会话只有 **7** 个工具在场（core 6 + escape 1 = 4,978 字符 ≈ 1,430 token，−77.6%）；要回到历史行为把 `toolInjection` 改成 `always`（34 件全在场需再配一个评审 Key）。
+- **各档实测注入面**（挂载级口径，1.5.0；字符为实测，token 按同一比例折算）：默认 7 个 / 4,978 字符 ≈1,430 tok → 首次活动 24 个 / 15,198 ≈4,370 tok → 第 2 波（observe）28 个 / 17,235 ≈4,955 tok → 第 3 波（wait）29 个 / 19,160 ≈5,509 tok → 全量 34 个 / 22,224 ≈6,389 tok。
+- 五个字段都带 schema `.default()`：volatile 字段的表单描述符直接拿 schema 默认值，不写默认会出现「面板显示 A、运行时用 B」。
+
+> 取舍提醒：窄工具（一个动作一个工具）是模型写对参数、少重试的护栏。1.5.0 只合并了 **wait / space / escape** 三族同源冗余（41 → 34，省 1,869 字符 schema）：五个 wait 共用同一 preamble 与 timeout 语义、三个 space 本就是同一个 op 工具的碎片、cli/script 是同一 heredoc 运行时。代价是这三族的旧工具名不再存在（见上方迁移表）；交互原子（click/fill/key…）**不合并**，因为它们是模型写对参数的护栏。
+
+## 任务空间命名与并发隔离（1.6.0）
+
+> **默认就是会话隔离**：不传 `space` 的调用落在**本会话自己的**任务空间 `dsh-agent-<会话id前8位>`，两个会话永远不会共用或抢占同一个浏览上下文。**只有显式写 `space: 'default'`（或 `bcdp_space op=open name='default'`）才会用那个跨会话共享的具名槽。**
+
+| 你怎么写 | 落到哪个空间 |
+|---|---|
+| 省略 `space`（默认，`defaultSpace` 未设 = `:auto`） | `dsh-agent-<会话id前8位>`，每会话独立 |
+| `space: 'default'` / `op=open name='default'` | 共享具名槽 `default`（此后该会话固定用它） |
+| `defaultSpace: 'default'`（配置项改成具名） | 所有会话默认都用 `default`（退回旧行为，全局生效） |
+| 无 session 的调用（`__global__`） | `default`，保证向后兼容 |
+
+- **`defaultSpace`（A）**：volatile 标量，**留空/缺失折叠为 `:auto`**（1.6.0 起，此前折叠为 `default`），热更新不重注册。注意区分两个概念：配置值 `cfg.defaultSpace`（schema 里那个，可以是 `:auto` 或具名）与运行时**当前会话活值** `cfg.activeSpace`（命令实际用的 `useSpace(...)` 入参）；前者是设置，后者随会话与显式选择切换。
+- **`:auto` 派生（C）**：`:auto` 在**两种模式**下都派生 `dsh-agent-<sid8>` —— 空间**命名**与 `isolateSpaces`（那个只管 Profile 落盘还是内存沙箱）是两条独立的轴。会话 id 会先剥掉 `session-` 前缀再取 8 位：真实 DSH id 形如 `session-52adc205-…`，直接 `slice(0,8)` 会得到 `session-`，让**所有会话撞成同一个空间**——这正是隔离失效的经典坑，已用 `sessionSpaceToken()` 修掉并有回归测试。
+- **会话级隔离（B）**：活动空间追踪器按 `sessionId` 键控成一张槽位表（`Map<string,Slot>`，无 session 的调用落 `__global__` 槽保持向后兼容）。每个 `bcdp_*` 调用一进来就 `setCurrentSession(callingSessionId(exec))`，所以**并发多会话各开各的空间互不漂移**——A 会话重启空间不波及 B。
+- **不要再手动建编号空间**：不需要 `#4`/`#5` 这类手工命名，隔离已经由会话派生自动完成；需要共享就走显式 `default`。
+
+### 跨调用稳定定位（D1）
+
+`bcdp_snapshot` 现在带稳定 locator：输出里每个可交互节点除了 `[ref=N]` 还附 `loc=css:…` / `loc=role:…` / `loc:href:…`。**跨调用请优先用 `loc=` 而非 `@N`**——`@N` 每次快照重新编号且其 ref 映射只活在取快照的那个子进程里，而 `loc=` 稳定、能跨子进程命中（`bcdp_click` / `bcdp_fill` 直接吃 `loc=...`）。这是插件层解法，未改上游 SDK 的 ref 编号生成。
+
+### navigate 卡死自愈（F）
+
+`bcdp_navigate` 包了一层 watchdog：当一次导航因页面主线程挂死而 eval 超时 / `no active tab` 时，先**开一个空白 tab 再关掉挂死那个**（顺序关键：先关会触发末-tab 守卫留下死 tab），然后重试一次，结果附 `recoveredFrom`（正常路径为 `null`）。重试**硬上限一次**，二次仍卡如实返回，不用反复换 tab 掩盖真错误。
 
 ## 观察窗怎么用
 

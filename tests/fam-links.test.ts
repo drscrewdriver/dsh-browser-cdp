@@ -4,7 +4,10 @@ import {
   applyProbe,
   buildCdpRow,
   buildCliRow,
+  buildLpRow,
   hasCliLink,
+  hasLpLink,
+  LP_LABEL,
   isFull,
   isValidEndpoint,
   MAX_LINKS,
@@ -152,5 +155,26 @@ describe("isValidEndpoint: the card-side gate against silent row loss", () => {
     for (const bad of ["", "   ", "127.0.0.1:9222", "ftp://x", null, 42]) {
       expect(isValidEndpoint(bad)).toBe(false);
     }
+  });
+});
+
+describe("lightpanda rows (managed serve kind)", () => {
+  it("builds a full-field row and enforces the local singleton on add", () => {
+    expect(buildLpRow({ servePath: " /opt/lp " })).toMatchObject({ kind: "lightpanda", servePath: "/opt/lp", label: LP_LABEL, enabled: true });
+    const first = addRow([], buildLpRow({}));
+    expect(first.code).toBeUndefined();
+    const second = addRow(first.links, buildLpRow({ servePath: "x" }));
+    expect(second.code).toBe("lightpanda-already-exists");
+    expect(second.links).toHaveLength(1);
+    expect(hasLpLink(first.links)).toBe(true);
+    expect(hasLpLink([cdpRow("a")])).toBe(false);
+  });
+
+  it("applyProbe persists the recognized engine alongside the probe family", () => {
+    const links = addRow([], buildLpRow({})).links;
+    const next = applyProbe(links, links[0]!.id!, { ok: true, code: "ok", latencyMs: 4, engine: "lightpanda" }, 123);
+    expect(next[0]).toMatchObject({ probeStatus: "ok", probeLatencyMs: 4, probeEngine: "lightpanda", probeAt: 123 });
+    const unknown = applyProbe(next, next[0]!.id!, { ok: true, code: "ok", latencyMs: 1 }, 200);
+    expect(unknown[0]!.probeEngine).toBe("lightpanda"); // spread-safe: engine survives
   });
 });

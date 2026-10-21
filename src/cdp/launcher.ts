@@ -33,7 +33,7 @@ export interface LaunchIo {
   removeFile?: (path: string) => void
   isAlive?: (pid: number) => boolean
   killTree?: (pid: number) => void
-  spawn?: (bin: string, args: readonly string[]) => { pid: number }
+  spawn?: (bin: string, args: readonly string[], env?: Record<string, string>) => { pid: number }
   fetchVersion?: (url: string) => Promise<{ ok: boolean }>
   now?: () => number
   sleep?: (ms: number) => Promise<void>
@@ -61,8 +61,12 @@ const defaultIo = (): Required<LaunchIo> => ({
     }
     try { process.kill(pid, 'SIGKILL') } catch { /* already gone */ }
   },
-  spawn: (bin, args) => {
-    const child: ChildProcess = nodeSpawn(bin, args, { detached: true, stdio: 'ignore' })
+  spawn: (bin, args, env) => {
+    const child: ChildProcess = nodeSpawn(bin, args, {
+      detached: true,
+      stdio: 'ignore',
+      ...(env === undefined ? {} : { env: { ...process.env, ...env } }),
+    })
     child.unref()
     return { pid: child.pid ?? 0 }
   },
@@ -137,6 +141,87 @@ export function buildLaunchArgs(options: {
   ]
 }
 
+// ── Lightpanda serve engine (managed, per-OS) ───────────────────────────────
+
+export type LaunchEngine = 'chrome' | 'lightpanda'
+
+/** Flags the user must never smuggle into a managed `lightpanda serve`. */
+const LP_BLOCKED_ARGS = ['--host', '--port', '--address']
+
+/**
+ * Assemble `lightpanda serve --host 127.0.0.1 --port <port>` + user args.
+ * No profile/headless flags exist on the serve CLI — nothing to block there.
+ */
+export function buildServeArgs(options: { port: number; lightpandaArgs?: string }): string[] {
+  const tokens = (options.lightpandaArgs ?? '')
+    .split(/\s+/)
+    .map((arg) => arg.trim())
+    .filter((arg) => arg !== '')
+  const userArgs: string[] = []
+  let skipNext = false
+  for (const arg of tokens) {
+    if (skipNext) { skipNext = false; continue }
+    const blocked = LP_BLOCKED_ARGS.find((b) => arg === b || arg.startsWith(`${b}=`))
+    if (blocked !== undefined) {
+      // A bare managed flag swallows its value too (`--port 9223`).
+      if (arg === blocked) skipNext = true
+      continue
+    }
+    userArgs.push(arg)
+  }
+  return ['serve', '--host', '127.0.0.1', '--port', String(options.port), ...userArgs]
+}
+
+/**
+ * win32 sentinel returned by `discoverLightpandaBinary`: Lightpanda has no
+ * native Windows build, so the launch argv goes through `wsl.exe --` and the
+ * binary lives inside the WSL2 filesystem (host `exists()` cannot see it —
+ * the readiness gate is the real check).
+ */
+export const WSL_LAUNCH = 'wsl'
+
+/**
+ * Lightpanda discovery. unix: explicit → common install roots (the official
+ * installer targets `~/.local/bin`) → bare PATH name. win32: the WSL sentinel
+ * when `wsl.exe` exists (the serve runs inside the default distro).
+ */
+export function discoverLightpandaBinary(explicit: string, platform: string, exists: (path: string) => boolean): string {
+  if (platform === 'win32') {
+    return exists('C:/Windows/System32/wsl.exe') ? WSL_LAUNCH : ''
+  }
+  if (explicit !== '') return explicit
+  const home = homedir()
+  for (const candidate of [
+    `/usr/local/bin/lightpanda`,
+    `/usr/bin/lightpanda`,
+    join(home, '.local', 'bin', 'lightpanda'),
+    join(home, '.dsh', 'cache', 'dsh-browser-cdp', 'bin', 'lightpanda'),
+  ]) {
+    if (exists(candidate)) return candidate
+  }
+  return 'lightpanda'
+}
+
+/** Spawn argv for one engine on one platform. */
+export function buildEngineArgv(options: {
+  engine: LaunchEngine
+  platform: string
+  bin: string
+  serveArgs: readonly string[]
+}): readonly string[] {
+  if (options.engine === 'lightpanda' && options.platform === 'win32' && options.bin === WSL_LAUNCH) {
+    return ['wsl.exe', '--', 'lightpanda', ...options.serveArgs]
+  }
+  return [options.bin, ...options.serveArgs]
+}
+
+/** Env handed to a managed Lightpanda serve (telemetry opt-out; WSLENV carries it into WSL). */
+export function lightpandaSpawnEnv(platform: string): Record<string, string> {
+  const env: Record<string, string> = { LIGHTPANDA_DISABLE_TELEMETRY: 'true' }
+  if (platform === 'win32') env.WSLENV = 'LIGHTPANDA_DISABLE_TELEMETRY/u'
+  return env
+}
+
 // ── registry (T2.13 singleton) ──────────────────────────────────────────────
 
 export interface LauncherRecord {
@@ -145,6 +230,8 @@ export interface LauncherRecord {
   userDataDir: string
   endpoint: string
   startedAt: number
+  /** Lightpanda backend — which engine this record owns. Absent on pre-Lightpanda rows = 'chrome'. */
+  engine?: LaunchEngine
 }
 
 export function defaultLauncherStatePath(): string {
@@ -167,6 +254,7 @@ function readRecord(path: string, io: ReturnType<typeof defaultIo>): LauncherRec
       userDataDir: typeof parsed.userDataDir === 'string' ? parsed.userDataDir : '',
       endpoint: typeof parsed.endpoint === 'string' ? parsed.endpoint : '',
       startedAt: typeof parsed.startedAt === 'number' ? parsed.startedAt : 0,
+      engine: parsed.engine === 'lightpanda' ? 'lightpanda' : 'chrome',
     }
   } catch {
     return null
@@ -177,17 +265,25 @@ function readRecord(path: string, io: ReturnType<typeof defaultIo>): LauncherRec
 
 export type LaunchOutcome =
   | { ok: true; reused: boolean; endpoint: string; pid: number; port: number }
-  | { ok: false; code: 'chrome-not-found' | 'launch-exited' | 'not-ready' | 'spawn-failed'; message: string }
+  | { ok: false; code: 'chrome-not-found' | 'binary-not-found' | 'launch-exited' | 'not-ready' | 'spawn-failed'; message: string }
 
 /**
- * Launch (or reuse) the managed local browser. The readiness gate is the
- * three-step check from T2.12: process alive → port responds → `/json/version`
- * returns 200. `timeoutMs` bounds the readiness wait (default 20s).
+ * Launch (or reuse) the managed local browser for ONE engine. The readiness
+ * gate is the three-step check from T2.12: process alive → port responds →
+ * `/json/version` returns 200. `timeoutMs` bounds the readiness wait
+ * (default 20s).
+ *
+ * Engine exclusivity: the registry holds ONE managed instance — a record for
+ * the OTHER engine is stopped first, so Chrome and Lightpanda never fight
+ * over the singleton.
  */
 export async function launchLocalBrowser(
   options: {
+    engine?: LaunchEngine
     chromePath?: string
     chromeArgs?: string
+    lightpandaPath?: string
+    lightpandaArgs?: string
     localHeadless?: boolean
     userDataDir?: string
     statePath?: string
@@ -200,35 +296,69 @@ export async function launchLocalBrowser(
   const now = ioImpl.now
   const sleep = ioImpl.sleep
   const statePath = options.statePath ?? defaultLauncherStatePath()
-
-  // T2.13 — reuse only OUR recorded instance, and only while it still answers.
-  const record = readRecord(statePath, ioImpl)
-  if (record && ioImpl.isAlive(record.pid) && (await ioImpl.fetchVersion(`http://127.0.0.1:${record.port}/json/version`)).ok) {
-    return { ok: true, reused: true, endpoint: record.endpoint, pid: record.pid, port: record.port }
-  }
-
+  const engine = options.engine === 'lightpanda' ? 'lightpanda' : 'chrome'
   const platform = options.platform ?? process.platform
-  const bin = discoverChromeBinary(options.chromePath ?? '', platform, ioImpl.exists)
-  if (bin === '') {
-    return { ok: false, code: 'chrome-not-found', message: 'No Chrome/Chromium/Edge binary found. Set chromePath in the settings panel.' }
+
+  // T2.13 — reuse only OUR recorded instance, and only while it still answers
+  // — and only when it is the SAME engine the caller asked for.
+  const record = readRecord(statePath, ioImpl)
+  if (record && record.engine !== engine && ioImpl.isAlive(record.pid)) {
+    // Engine switch: the previous managed instance loses the singleton slot.
+    ioImpl.killTree(record.pid)
+    ioImpl.removeFile(statePath)
   }
+  const live = readRecord(statePath, ioImpl)
+  if (live && live.engine === engine && ioImpl.isAlive(live.pid) && (await ioImpl.fetchVersion(`http://127.0.0.1:${live.port}/json/version`)).ok) {
+    return { ok: true, reused: true, endpoint: live.endpoint, pid: live.pid, port: live.port }
+  }
+
+  let bin: string
+  let spawnEnv: Record<string, string> | undefined
+  if (engine === 'lightpanda') {
+    bin = discoverLightpandaBinary(options.lightpandaPath ?? '', platform, ioImpl.exists)
+    if (bin === '') {
+      return {
+        ok: false,
+        code: 'binary-not-found',
+        message: 'wsl.exe not found — Lightpanda has no native Windows build. Install WSL2 (`wsl --install` as admin), then inside WSL: `curl -fsSL https://pkg.lightpanda.io/install.sh | bash`.',
+      }
+    }
+    spawnEnv = lightpandaSpawnEnv(platform)
+  } else {
+    bin = discoverChromeBinary(options.chromePath ?? '', platform, ioImpl.exists)
+    if (bin === '') {
+      return { ok: false, code: 'chrome-not-found', message: 'No Chrome/Chromium/Edge binary found. Set chromePath in the settings panel.' }
+    }
+  }
+
   const userDataDir = options.userDataDir && options.userDataDir !== '' ? options.userDataDir : defaultManagedProfileDir()
   const port = await ioImpl.makePort()
-  const args = buildLaunchArgs({ userDataDir, port, headless: options.localHeadless === true, chromeArgs: options.chromeArgs })
+  let spawnBin: string
+  let args: readonly string[]
+  if (engine === 'lightpanda') {
+    // The port is only known after makePort — assemble the serve argv now.
+    const full = buildEngineArgv({ engine, platform, bin, serveArgs: buildServeArgs({ port, lightpandaArgs: options.lightpandaArgs }) })
+    spawnBin = full[0]!
+    args = full.slice(1)
+  } else {
+    spawnBin = bin
+    args = buildLaunchArgs({ userDataDir, port, headless: options.localHeadless === true, chromeArgs: options.chromeArgs })
+  }
 
   let pid = 0
   try {
-    pid = ioImpl.spawn(bin, args).pid
+    pid = ioImpl.spawn(spawnBin, args as string[], spawnEnv).pid
   } catch (error) {
     return { ok: false, code: 'spawn-failed', message: String((error as Error).message ?? error) }
   }
   if (!pid) return { ok: false, code: 'spawn-failed', message: 'spawn returned no pid' }
 
   const endpoint = `http://127.0.0.1:${port}`
+  const engineName = engine === 'lightpanda' ? 'lightpanda' : 'chrome'
   const deadline = now() + (options.timeoutMs ?? 20000)
   for (;;) {
     if (!ioImpl.isAlive(pid)) {
-      return { ok: false, code: 'launch-exited', message: `chrome exited before opening the debugging port (pid ${pid})` }
+      return { ok: false, code: 'launch-exited', message: `${engineName} exited before opening the debugging port (pid ${pid})${engine === 'lightpanda' && platform === 'win32' ? ' — is lightpanda installed inside WSL? (`wsl` then `curl -fsSL https://pkg.lightpanda.io/install.sh | bash`)' : ''}` }
     }
     let versionOk = false
     try { versionOk = (await ioImpl.fetchVersion(`${endpoint}/json/version`)).ok } catch { /* not up yet */ }
@@ -236,7 +366,7 @@ export async function launchLocalBrowser(
     if (now() >= deadline) {
       ioImpl.killTree(pid)
       ioImpl.removeFile(statePath)
-      return { ok: false, code: 'not-ready', message: `chrome did not answer ${endpoint}/json/version within the readiness window` }
+      return { ok: false, code: 'not-ready', message: `${engineName} did not answer ${endpoint}/json/version within the readiness window` }
     }
     await sleep(250)
   }
@@ -244,6 +374,7 @@ export async function launchLocalBrowser(
   ioImpl.writeFile(statePath, JSON.stringify({
     pid, port, userDataDir, endpoint, startedAt: now(),
     headless: options.localHeadless === true,
+    engine,
   } satisfies LauncherRecord & { headless: boolean }, null, 2))
   return { ok: true, reused: false, endpoint, pid, port }
 }
@@ -251,6 +382,8 @@ export async function launchLocalBrowser(
 /**
  * Stop the managed instance: kill-tree, wait for the pid to disappear, drop
  * the registry entry. T2.14 — the reaper and plugin unmount both call this.
+ * Lightpanda on win32 rides `wsl.exe`, and taskkill /T does not reach the
+ * Linux-side process — add a targeted pkill of OUR serve argv as backstop.
  */
 export async function stopLocalBrowser(
   options: { statePath?: string; graceMs?: number } = {},
@@ -262,6 +395,11 @@ export async function stopLocalBrowser(
   if (!record) return { ok: true, code: 'not-running' }
   if (ioImpl.isAlive(record.pid)) {
     ioImpl.killTree(record.pid)
+    if (record.engine === 'lightpanda' && process.platform === 'win32') {
+      try {
+        nodeSpawn('wsl.exe', ['--', 'sh', '-c', `pkill -f 'lightpanda serve --host 127.0.0.1 --port ${record.port}' || true`], { stdio: 'ignore' }).unref()
+      } catch { /* best-effort */ }
+    }
     const deadline = ioImpl.now() + (options.graceMs ?? 5000)
     while (ioImpl.isAlive(record.pid) && ioImpl.now() < deadline) {
       await ioImpl.sleep(100)

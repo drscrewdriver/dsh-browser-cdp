@@ -21,6 +21,17 @@ import { sanitizeLinks } from './cdp-targets.ts'
 const backend = z.union(['auto', 'cdp', 'ffmpeg'])
 const profile = z.union(['low', 'balanced', 'high'])
 const cdpMode = z.union(['auto', 'local', 'remote'])
+const toolInjection = z.union(['lazy', 'always'])
+
+// A/C — the single named default space. Aligning the code constant with the
+// docs ("ALWAYS use the single 'default' space") closes the old `default` (docs)
+// ↔ `dsh-agent` (constant) split that made a user who followed the docs open an
+// empty second slot.
+export const DEFAULT_SPACE = 'default'
+// C — the config-level sentinel that turns on per-session derivation. Kept in
+// config.ts (next to resolveConfig, which preserves it verbatim) so both the
+// fold and the tracker read one definition.
+export const AUTO_SPACE_SENTINEL = ':auto'
 const encoder = z.union([
   'auto', 'software', 'h264_mf', 'h264_nvenc', 'h264_qsv', 'h264_amf',
   'h264_videotoolbox', 'h264_vaapi',
@@ -30,6 +41,21 @@ const encoder = z.union([
 // a schema default before the one-release migration runs.
 export const Config = z.object({
   isolateSpaces: z.boolean().description('Space isolation: false = persistent profile (keep logins across restarts); true = isolated sandbox.').volatile(),
+  // A — defaultSpace was read by index.ts but missing from the schema, so it
+  // could only be set through a raw profile patch with no GUI form entry.
+  // Now promoted to a `.volatile()` scalar: the settings page projects it,
+  // a value change is delivered through the bridge as a live-ref update (no
+  // remount — the mount reads `cfg.configuredDefaultSpace` as a getter).
+  //
+  // v1.6.0 — SESSION ISOLATION IS THE DEFAULT. `resolveConfig` now folds an
+  // empty/absent value to the `:auto` sentinel, which derives a per-session
+  // task space `dsh-agent-<sid8>`: a call that omits `space` can no longer
+  // land in another session's browsing context. The sentinel is honoured in
+  // BOTH modes on purpose — space NAMING is orthogonal to `isolateSpaces`,
+  // which only decides whether the browser PROFILE is persisted on disk or is
+  // an in-memory sandbox. A caller that wants the old shared slot sets this to
+  // a named value (e.g. `default`) or passes `space: 'default'` explicitly.
+  defaultSpace: z.string().description('Task space used when an bcdp_* call omits `space`. Default `:auto` = derive a per-session space `dsh-agent-<sessionId8>`, so concurrent sessions never share or hijack each other\'s browsing context. Set a fixed name (e.g. `default`) to reuse ONE shared slot across sessions — pass `space: "default"` on a single call for the same effect. Note this only names spaces; whether the browser profile itself persists is controlled by isolateSpaces.').volatile(),
   idleTimeoutMin: z.number().min(0).max(1440).step(1).description('Auto-stop the backing browser after N minutes without an bcdp_* call (0 = off). Relaunches on demand at the next call.').volatile(),
   chromePath: z.string().description('Path to Chrome/Chromium. Empty = auto-detect.').volatile(),
   captureBackend: backend.description('Capture backend: auto, cdp, or ffmpeg.').volatile(),
@@ -73,6 +99,7 @@ export const Config = z.object({
       probeError: z.string(),
       probeCode: z.string(),
       probeAt: z.number(),
+      probeEngine: z.union(['chrome', 'lightpanda', 'unknown']),
     }),
     z.object({
       kind: z.string(),
@@ -87,6 +114,21 @@ export const Config = z.object({
       probeError: z.string(),
       probeCode: z.string(),
       probeAt: z.number(),
+      probeEngine: z.union(['chrome', 'lightpanda', 'unknown']),
+    }),
+    z.object({
+      kind: z.string(),
+      id: z.string(),
+      label: z.string(),
+      servePath: z.string(),
+      enabled: z.boolean(),
+      note: z.string(),
+      probeStatus: z.union(['unknown', 'ok', 'error']),
+      probeLatencyMs: z.number(),
+      probeError: z.string(),
+      probeCode: z.string(),
+      probeAt: z.number(),
+      probeEngine: z.union(['chrome', 'lightpanda', 'unknown']),
     }),
   ])).description('Ordered connection sequence: CDP endpoints and (at most one) local ego CLI link. Only the ACTIVATED and enabled entry receives every bcdp_* call. Order IS the priority order.').volatile(),
   activeTargetId: z.string().description('Id of the activated entry in links. Empty = nothing activated.').volatile(),
@@ -98,9 +140,23 @@ export const Config = z.object({
   // ── M0.9 local launcher knobs (declared now, launcher lands in T2.11+) ──
   allowLocalFallback: z.boolean().description('auto mode may fall back to launching a local browser when the activated target is unreachable. Off by default: the fallback must be explicit.').volatile(),
   legacyEgoToolNames: z.boolean().description('ALSO register the tools under their old ego_* names for scripts written before the bcdp_* rename. Off by default; mutually exclusive with installing the upstream ego-browser plugin (same tool names).'),
+  // ── 工具分级注入（src/toolTiers.ts）─────────────────────────────────
+  // 41 个 bcdp_* 工具每个会话每一轮都要付 schema 成本，而多数会话不碰
+  // 浏览器。每个字段都带 `.default()`：volatile 字段的表单描述符直接把 schema
+  // 默认值画出来，不写默认就会出现「面板显示 A、运行时用 B」。本插件其余
+  // 字段靠 resolveConfig 兑底是因为它们有迁移史；这几个新字段没这份包被。
+  toolInjection: toolInjection.default('lazy').description('lazy = keep only the core tier resident and inject the rest after the first bcdp_* activity (the idle reaper seals them back); always = register every allowed tool at mount (the historical behaviour).').volatile(),
+  // 一级一个开关，ON = 开放注册，OFF = 封印（从模型工具列表移除）。core 级不给
+  // 开关：封掉它 lazy 模式就没有解锁入口了。
+  toolBrowse: z.boolean().default(true).description('Basic browsing tier (14 tools: click / fill / key / hover / scroll / select / check / screenshot / page_info / read_element / js / wait / wait_for_selector / space_close). Off = sealed: removed from the model tool list.').volatile(),
+  toolExtended: z.boolean().default(true).description('Extended tier (13 tools: drag / upload / download / dialog / raw CDP / http / cli / script / captcha / auth_flush / login_import / wait_for_url / wait_for_response). Off = sealed even after browser activity.').volatile(),
+  toolEscape: z.boolean().default(true).description('Escape-hatch tier (2 tools: cli / script — run an arbitrary heredoc with page/browser/taskSpaces/fetch/cdp preloaded). Unlike every other non-core tier it is NOT held back until browser activity: the one tool that can do anything in a single call must always be reachable. Off = sealed.').volatile(),
+  toolJudge: z.boolean().default(true).description('Judgement tier (5 bcdp_jev_* tools). On still requires a JEV or Laya key: without one they can only answer "not configured", so they stay sealed anyway.').volatile(),
   localHeadless: z.boolean().description('Run the locally launched browser headless.'),
   remoteEnabled: z.boolean().description('Master switch for REMOTE attach. Off = the configured target sequence is preserved but inert (nothing probes or connects remotely); flip back on any time. Does not affect cdpMode=local.').volatile(),
   localUserDataDir: z.string().description('Profile dir for the locally launched browser. Empty = managed dir; never point at your daily Chrome profile.'),
+  // ── Lightpanda backend: managed-serve knob (the row carries its own path) ──
+  lightpandaArgs: z.string().description('Extra args appended to a managed `lightpanda serve` argv. --host/--port are managed and cannot be overridden.').volatile(),
   // Deprecated read-compatible keys. The settings UI only writes canonical keys.
   castFpsCap: z.number().min(0).max(60).step(1),
   screencastQuality: z.number().min(1).max(100).step(1),
@@ -323,6 +379,15 @@ export function judgeSettingsOf(config: ResolvedConfig): JudgeSettings {
   }
 }
 
+/**
+ * 分级开关的默认极性 = 开放。只有显式的假值才是封印：`undefined`（用户从没碰
+ * 过表单）与手改 YAML 写出的 `'false'` / `0` 都得认，否则一个空字段就会把
+ * 14 个工具静默封掉。prime-memory 的 `v.toolRoom !== false` 同式，只是这里把
+ * 手改形状一并接住。
+ */
+const tierOpenByDefault = (value: unknown): boolean =>
+  !(value === false || value === 'false' || value === 0)
+
 export function resolveConfig(config: RawConfig = {}): ResolvedConfig {
   // 0.1.7: volatile fields arrive as live refs in the composition entry —
   // deref them once here so the whole resolution below sees plain data.
@@ -360,6 +425,15 @@ export function resolveConfig(config: RawConfig = {}): ResolvedConfig {
         : '',
     chromeArgs: typeof config.chromeArgs === 'string' ? config.chromeArgs : '',
     isolateSpaces: typeof config.isolateSpaces === 'boolean' ? config.isolateSpaces : config.isolateSpaces === 'true' || config.isolateSpaces === '1' || config.isolateSpaces === 1,
+    // A + C: `:auto` is kept verbatim here (the tracker is the one that knows
+    // the sessionId). v1.6.0 — an empty/absent value folds to `:auto`, i.e.
+    // session isolation is the DEFAULT behaviour; a named value (e.g. `default`)
+    // is the opt-in to one shared slot. A legacy profile-patch value (any
+    // non-empty string) is read unchanged — resolveConfig never overrides a
+    // persisted value.
+    defaultSpace: typeof config.defaultSpace === 'string' && config.defaultSpace.trim() !== ''
+      ? config.defaultSpace.trim()
+      : AUTO_SPACE_SENTINEL,
     idleTimeoutMin: finiteIn(config.idleTimeoutMin, 0, 1440) ? config.idleTimeoutMin : 0,
     // Connection sequence (R1/R7): every entry is sanitized (unusable rows
     // dropped, the ego-cli singleton enforced) and probe state normalized so a
@@ -378,8 +452,19 @@ export function resolveConfig(config: RawConfig = {}): ResolvedConfig {
     cursorName: typeof config.cursorName === 'string' && config.cursorName.trim() !== '' ? config.cursorName : 'DeepSeek',
     allowLocalFallback: config.allowLocalFallback === undefined ? false : Boolean(config.allowLocalFallback),
     legacyEgoToolNames: Boolean(config.legacyEgoToolNames),
+    // ── 工具分级注入 ──────────────────────────────────────────────
+    // 默认值同时写在这里和 schema `.default()` 上：schema 默认让设置表单与生效
+    // 值同源，这里的兑底让手改/缺失/老宿主不写值时也能解出同一个答案。
+    // `!== false` 是 prime-memory 的写法（settings.ts 的 toolRoom 同式）：
+    // undefined 一律当作「开放」，只有显式 false 才是封印。
+    toolInjection: oneOf(config.toolInjection, ['lazy', 'always'], 'lazy'),
+    toolBrowse: tierOpenByDefault(config.toolBrowse),
+    toolExtended: tierOpenByDefault(config.toolExtended),
+    toolEscape: tierOpenByDefault(config.toolEscape),
+    toolJudge: tierOpenByDefault(config.toolJudge),
     localHeadless: config.localHeadless === undefined ? false : Boolean(config.localHeadless),
     localUserDataDir: typeof config.localUserDataDir === 'string' ? config.localUserDataDir : '',
+    lightpandaArgs: trimmed(config.lightpandaArgs),
     remoteEnabled: config.remoteEnabled === undefined ? true : Boolean(config.remoteEnabled),
     // ── 阶段 10: JEV/Laya judge ───────────────────────────────────────────
     // `layaUrl` defaults to the sidecar's real port. JevLoop ships 7789 here,
@@ -428,5 +513,8 @@ export function normalizeProbeState<T extends LinkBase>(link: T): T {
     probeError: typeof link.probeError === 'string' ? link.probeError : '',
     probeCode: typeof link.probeCode === 'string' ? link.probeCode : '',
     probeAt: typeof link.probeAt === 'number' && Number.isFinite(link.probeAt) ? link.probeAt : 0,
+    // Lightpanda backend: rows written before recognition carry no engine —
+    // converge to 'unknown' (= full capabilities) instead of null-check ladders.
+    probeEngine: link.probeEngine === 'chrome' || link.probeEngine === 'lightpanda' ? link.probeEngine : 'unknown',
   }
 }

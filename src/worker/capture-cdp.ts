@@ -138,6 +138,8 @@ export interface CdpCaptureBackendOptions {
   getConfig: () => CdpConfig
   onStatus: (status: Record<string, unknown>) => void
   onJpegFrame: (frame: JpegFrame) => void
+  /** Lightpanda backend — wire format for screencast + backstop shots. Default 'jpeg' (= pre-Lightpanda behavior). */
+  imageFormat?: 'jpeg' | 'png'
   now?: () => number
   setTimer?: (fn: () => void, ms: number) => NodeJS.Timeout
   clearTimer?: (timer: NodeJS.Timeout) => void
@@ -149,6 +151,7 @@ export class CdpCaptureBackend {
   getConfig: () => CdpConfig
   onStatus: (status: Record<string, unknown>) => void
   onJpegFrame: (frame: JpegFrame) => void
+  imageFormat: 'jpeg' | 'png'
   now: () => number
   setTimer: (fn: () => void, ms: number) => NodeJS.Timeout
   clearTimer: (timer: NodeJS.Timeout) => void
@@ -161,12 +164,13 @@ export class CdpCaptureBackend {
   offFrame: (() => void) | null
   offDestroyed: (() => void) | null
 
-  constructor({ cdp, sessions, getConfig, onStatus, onJpegFrame, now = Date.now, setTimer = setTimeout, clearTimer = clearTimeout }: CdpCaptureBackendOptions) {
+  constructor({ cdp, sessions, getConfig, onStatus, onJpegFrame, imageFormat = 'jpeg', now = Date.now, setTimer = setTimeout, clearTimer = clearTimeout }: CdpCaptureBackendOptions) {
     this.cdp = cdp
     this.sessions = sessions
     this.getConfig = getConfig
     this.onStatus = onStatus
     this.onJpegFrame = onJpegFrame
+    this.imageFormat = imageFormat
     this.now = now
     this.setTimer = setTimer
     this.clearTimer = clearTimer
@@ -193,8 +197,10 @@ export class CdpCaptureBackend {
     this.onStatus({ backend: 'cdp', state: 'starting', targetId })
     try {
       await this.cdp.call('Page.startScreencast', {
-        format: 'jpeg',
-        quality: config.cdpQuality,
+        format: this.imageFormat,
+        // quality is a JPEG-only knob; Lightpanda rejects the call outright,
+        // so the png projection never sends it (capabilities single decision).
+        ...(this.imageFormat === 'jpeg' ? { quality: config.cdpQuality } : {}),
         maxWidth: config.cdpMaxWidth,
         everyNthFrame: 1,
       }, session.sessionId)
@@ -298,8 +304,8 @@ export class CdpCaptureBackend {
           const session = await this.sessions.updateViewport(current.targetId)
           const scale = session.viewportW! > this.getConfig().cdpMaxWidth ? this.getConfig().cdpMaxWidth / session.viewportW! : 1
           const result = await this.cdp.call('Page.captureScreenshot', {
-            format: 'jpeg',
-            quality: this.getConfig().cdpQuality,
+            format: this.imageFormat,
+            ...(this.imageFormat === 'jpeg' ? { quality: this.getConfig().cdpQuality } : {}),
             captureBeyondViewport: false,
             ...(session.viewportW && session.viewportH ? { clip: { x: 0, y: 0, width: session.viewportW, height: session.viewportH, scale } } : {}),
           }, current.sessionId) as { data?: string }

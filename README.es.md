@@ -173,11 +173,11 @@ Relación con otros interruptores:
 
 | Categoría | Herramientas |
 |---|---|
-| Espacios de tareas | `bcdp_space_open` `bcdp_space_close` `bcdp_status` |
+| Espacios de tareas | `bcdp_space` (open/close/list/handoff/takeover) `bcdp_status` |
 | Lectura de páginas | `bcdp_snapshot` (árbol semántico) `bcdp_page_info` `bcdp_read_element` |
-| Navegación/espera | `bcdp_navigate` (reutiliza la pestaña) `bcdp_wait` `bcdp_wait_for_selector` `bcdp_wait_for_url` `bcdp_wait_for_response` |
+| Navegación/espera | `bcdp_navigate` (reutiliza la pestaña) `bcdp_wait` (duration/selector/url/response/load/function/request/event) |
 | Interacción | `bcdp_click` `bcdp_fill` `bcdp_hover` `bcdp_drag` `bcdp_select` `bcdp_check` `bcdp_key` `bcdp_scroll` |
-| Ejecución/depuración | `bcdp_js` (evaluación en la página) `bcdp_cdp` (CDP crudo) `bcdp_cli` (heredoc arbitrario) `bcdp_script` (script multietapa) |
+| Ejecución/depuración | `bcdp_js` (evaluación en la página) `bcdp_cdp` (CDP crudo) `bcdp_script` (heredoc; verbatim = raw, no preamble) |
 | Salidas | `bcdp_screenshot` `bcdp_download` `bcdp_upload` |
 | Sesión/seguridad | `bcdp_auth_flush` (persistencia de sesión) `bcdp_login_import` (importación de sesión entre navegadores) `bcdp_captcha` `bcdp_dialog` |
 | Metaherramientas | `bcdp_help` `bcdp_doctor` `bcdp_http` |

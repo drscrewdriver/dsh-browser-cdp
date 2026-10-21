@@ -1,7 +1,9 @@
 /** Injected by the DSH ModuleLoader factory wrapper (tsdown banner). */
 declare function require(id: string): any
 
-import { addRow, applyProbe, buildCdpRow, buildCliRow, hasCliLink, isFull, isValidEndpoint, MAX_LINKS, moveRow, removeRow, updateRow } from './fam-links'
+import { addRow, applyProbe, buildCdpRow, buildCliRow, buildLpRow, hasCliLink, hasLpLink, isFull, isValidEndpoint, MAX_LINKS, moveRow, removeRow, updateRow } from './fam-links'
+import { claimFamilyHostIfOrphaned } from './family-host'
+import { commitField } from './fam-write'
 
 		// #region CDP browser bridge client: realtime watch-bubble
 		//
@@ -41,8 +43,29 @@ import { addRow, applyProbe, buildCdpRow, buildCliRow, hasCliLink, isFull, isVal
 		// module graph now resolves the store as a static module under the plain
 		// package id (no `/client` subpath). createSnapshotStore kept its shape.
 		var React = require('react')
-		var runtimeClient = require('@deepseek-ai/dsh-client-store')
-		var createSnapshotStore = runtimeClient.createSnapshotStore
+		// 0.1.0/0.1.1 宿主模块表没有 @deepseek-ai/dsh-client-store——静态 require
+		// 会让整个 client 模块加载即砖。改为懒加载:有包用宿主的,没包用本地
+		// 极简快照仓(subscribe/getSnapshot/update 三件套,watch 面板够用)。
+		var runtimeClient: any = null
+		var createSnapshotStore: any = null
+		function ensureSnapshotStoreCreator(): any {
+			if (createSnapshotStore !== null) return createSnapshotStore
+			try {
+				runtimeClient = require('@deepseek-ai/dsh-client-store')
+				createSnapshotStore = runtimeClient.createSnapshotStore
+			} catch (e) {
+				createSnapshotStore = function (initial: any) {
+					var value = initial
+					var listeners: any[] = []
+					return {
+						subscribe: function (fn: any) { listeners.push(fn); return function () { listeners = listeners.filter(function (l: any) { return l !== fn }) } },
+						getSnapshot: function () { return value },
+						update: function (fn: any) { value = fn(value); for (var i = 0; i < listeners.length; i++) listeners[i]() },
+					}
+				}
+			}
+			return createSnapshotStore
+		}
 		// bindSnapshotSelector inlined from dsh-client-ui-renderer (shell-only
 		// glue; business plugins depend on runtime + ui-slots only). Uses
 		// React 18's built-in useSyncExternalStore with per-snapshot selector
@@ -86,6 +109,8 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 			pinned: 'Pinned',
 			realtime: 'Live',
 			noScreenshot: '(no screenshot — about:blank or browser not rendering)',
+			engineUnsupportedBanner: '(live view unsupported on this engine — Lightpanda renders text; use bcdp_snapshot / bcdp_screenshot instead)',
+			engineUnsupportedPick: 'picking is unsupported on this engine (no Overlay / no live view) — use bcdp_snapshot to locate elements',
 			noActivePages: 'No active browser pages',
 			noActiveHint: 'Pages will appear here as the agent browses with bcdp_*',
 			openExternal: 'Open real page',
@@ -140,6 +165,11 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 			linksActive: 'active',
 			linksAddCdp: 'Add CDP endpoint',
 			linksAddCli: 'Add local ego CLI',
+			linksAddLp: 'Add Lightpanda (managed)',
+			linksAddLpExists: 'The Lightpanda link already exists — local-only, one per machine',
+			linksLpPathHint: 'Empty = auto (PATH → ~/.local/bin; Windows runs it inside WSL2)',
+			linksLpHeadlessHint: 'Headless quick-trial engine — no manual fallback (login/captcha). Early in the order = quick trials use it; after the headed kinds (CDP / local Chrome / ego CLI) = backstop first.',
+			linksLpRemoteWarn: 'Activating a Lightpanda link under cdpMode=remote fails with mode-kind-mismatch',
 			linksAddCliExists: 'The local ego CLI link already exists — local-only, one per machine',
 			linksEndpoint: 'Endpoint',
 			linksEndpointHint: 'http(s)://host:port or ws(s)://…',
@@ -173,6 +203,8 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 			pinned: '已固定查看',
 			realtime: '正在实时浏览',
 			noScreenshot: '（暂无截图 — about:blank 或浏览器未渲染）',
+			engineUnsupportedBanner: '（当前引擎不支持实时画面 — Lightpanda 为文本渲染，可用 bcdp_snapshot / bcdp_screenshot 查看）',
+			engineUnsupportedPick: '当前引擎不支持面板点选（无 Overlay/无实时画面）— 请用 bcdp_snapshot 定位元素',
 			noActivePages: '暂无活跃浏览器页',
 			noActiveHint: '当 agent 开始用 bcdp_* 操作网页时，这里会实时显示',
 			openExternal: '⧉ 打开真实页',
@@ -227,6 +259,11 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 			linksActive: '已激活',
 			linksAddCdp: '添加 CDP 端点',
 			linksAddCli: '添加本机 ego CLI',
+			linksAddLp: '添加 Lightpanda（受管）',
+			linksAddLpExists: 'Lightpanda 连接已存在——仅限本机，一台机器只允许一条',
+			linksLpPathHint: '留空 = 自动检测（PATH → ~/.local/bin；Windows 经 WSL2）',
+			linksLpHeadlessHint: '无头快速试验引擎：无法人工兜底（登录/验证码）。排前面 = 快速场景优先用它；排在有头类型（CDP/本机 Chrome/ego CLI）后 = 兜底优先。',
+			linksLpRemoteWarn: 'cdpMode=remote 时激活 Lightpanda 行会报 mode-kind-mismatch',
 			linksAddCliExists: '本机 ego CLI 连接已存在——仅限本机，一台机器只允许一条',
 			linksEndpoint: '端点',
 			linksEndpointHint: 'http(s)://主机:端口 或 ws(s)://…',
@@ -671,16 +708,134 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 		// 6-dot drag grip for the panel's title bar.
 		const ICON_GRIP = `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="8" cy="6" r="1.8"/><circle cx="16" cy="6" r="1.8"/><circle cx="8" cy="12" r="1.8"/><circle cx="16" cy="12" r="1.8"/><circle cx="8" cy="18" r="1.8"/><circle cx="16" cy="18" r="1.8"/></svg>`;
 
+		// ── 设置卡双轨数据源的桥轨（session-guard BridgeDocHandle 同式收缩版）──
+		// ≤0.1.5 宿主无 configForms 服务（代际切分：configForms 属 rc.1+ 代），
+		// 卡的原生数据臂坐死 → 改走自家 webServer 桥 describe/mutate 读写宿主
+		// settings 服务。快照形状对齐原生 scope（value/writable 两字段卡面消费）；
+		// 路由与 server 侧 registerSettingsBridge（src/settings.ts）逐字符一致。
+		var BRIDGE_ROUTES = { describe: '/api/dsh-browser-cdp/settings/describe', mutate: '/api/dsh-browser-cdp/settings/mutate' }
+
+		// ≤0.1.5 describe 的 descriptor.value 是「每字段 → {}」骨架（真值拆在
+		// base+user 两层）——命中即以 {...base, ...user} 重组（本卡字段全是
+		// 顶层标量/数组，浅合并即语义；session-guard isFieldSkeleton 同款）。
+		function bridgeDescriptorPlainValue(d: any) {
+			var v = d && d.value
+			if (v !== null && typeof v === 'object' && !Array.isArray(v)) {
+				var values = Object.keys(v)
+				var skeleton = values.length > 0 && values.every(function (k) {
+					var x = v[k]
+					return x !== null && typeof x === 'object' && !Array.isArray(x) && Object.keys(x).length === 0
+				})
+				if (skeleton) {
+					var merged: any = {}
+					var pull = function (layer: any) {
+						if (layer !== null && typeof layer === 'object' && !Array.isArray(layer)) {
+							for (var k in layer) merged[k] = layer[k]
+						}
+					}
+					pull(d.base)
+					pull(d.user)
+					return merged
+				}
+			}
+			return v
+		}
+
+		function makeBridgeScope() {
+			var listeners: any[] = []
+			var snapshot: any = { status: 'loading', value: undefined, writable: true, mode: 'bridge' }
+			var revision: any = undefined
+			var retriesLeft = 4
+			var inflight: any = undefined
+			function notify() { for (var i = 0; i < listeners.length; i++) listeners[i]() }
+			function applyDescriptor(d: any, writable: boolean) {
+				revision = typeof d.revision === 'number' ? d.revision : undefined
+				snapshot = { status: 'ready', value: bridgeDescriptorPlainValue(d), writable: writable, mode: 'bridge' }
+			}
+			function request(path: string, body: any) {
+				return fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body ?? {}) })
+					.then(function (r) {
+						if (!r.ok) throw new Error('bridge ' + path + ' HTTP ' + r.status)
+						return r.json()
+					})
+			}
+			function retryOrFail() {
+				if (retriesLeft > 0) {
+					retriesLeft -= 1
+					inflight = undefined
+					setTimeout(function () { void refresh() }, 1500)
+					return true
+				}
+				snapshot = { status: 'unavailable', value: undefined, writable: false, mode: 'bridge' }
+				return false
+			}
+			function refresh(): any {
+				if (inflight !== undefined) return inflight
+				inflight = request(BRIDGE_ROUTES.describe, {}).then(function (body: any) {
+					if (body && body.ok && body.value && body.value.descriptor !== undefined) {
+						retriesLeft = 4
+						applyDescriptor(body.value.descriptor, body.value.writable !== false)
+					} else if (!(body && body.code && (body.code === 'settings-unavailable' || body.code === 'ns-not-registered') && retryOrFail())) {
+						snapshot = { status: 'unavailable', value: undefined, writable: false, mode: 'bridge' }
+					}
+					inflight = undefined
+					notify()
+				}, function () {
+					retryOrFail() // 网络异常按瞬态处理；预算耗尽落终态
+					inflight = undefined
+					notify()
+				})
+				return inflight
+			}
+			void refresh()
+			return {
+				subscribe: function (listener: any) {
+					listeners.push(listener)
+					return function () {
+						var i = listeners.indexOf(listener)
+						if (i >= 0) listeners.splice(i, 1)
+					}
+				},
+				getSnapshot: function () { return snapshot },
+				set: function (field: string, value: any): Promise<boolean> {
+					return request(BRIDGE_ROUTES.mutate, { ops: [{ op: 'set', path: [field], value: value }], expectedRevision: revision })
+						.then(function (body: any) {
+							if (body && body.ok && body.value && body.value.descriptor !== undefined) {
+								applyDescriptor(body.value.descriptor, snapshot.writable)
+								notify()
+								return true
+							}
+							// 拒写（revision 冲突 / 宿主瞬态错 / 非法值）时不能直接返回 false：
+							// 上层重试带的是 `revision`，它还是陈的。先把 describe 等到底
+							// （拿到新 revision 与宿主真值）再交回失败，重试才有意义。
+							return Promise.resolve(refresh()).then(function () { return false }, function () { return false })
+						}, function () {
+							// 网络异常同路：重读后报失败，交给上层重试预算
+							return Promise.resolve(refresh()).then(function () { return false }, function () { return false })
+						})
+				},
+			}
+		}
+
+		// 所有字段写入走 ./fam-write 的 commitField：带 revision、被拒（并发编辑
+		// 冲突或瞬态故障）则有限次重试，预算用尽报 false 给调用方回滚乐观态。
+		// 桥轨的 set 在返回 false 前已经把 describe 等到底，所以重试带的是新 revision。
+
 		// ── 插件族共用设置 tab（「起子插件设置」）──────────────────────────
 		// dsh-thinking-levels 的顶级 settings.section 声明 `dsh-family.tab` 子席位；
-		// 本卡全量渲染 Config 的用户可调 volatile 字段（分组 + links 连接目标），
-		// configForms 直用原生句柄（快照身份稳定）。thinking-levels 缺席时
-		// inject 静默等待，不阻塞客户端半。
+		// 本卡全量渲染 Config 的用户可调 volatile 字段（分组 + links 连接目标）。
+		// 数据臂双轨：rc.1+ 用 configForms 原生句柄（快照身份稳定）；≤0.1.5 无
+		// configForms 服务 → 落 webServer 桥轨。thinking-levels 缺席时 inject
+		// 静默等待，不阻塞客户端半。
 		function mountFamilySettingsCard(ctx: any) {
 			var forms = typeof ctx.get === 'function' ? ctx.get('configForms') : undefined
-			if (!forms || typeof forms.get !== 'function') return
-			var scope = forms.get('dsh-browser-cdp')
+			var scope = forms && typeof forms.get === 'function' ? forms.get('dsh-browser-cdp') : undefined
+			if (!scope) scope = makeBridgeScope()
+			// 探针：宿主执行过本工厂 == 有人声明了 `dsh-family.tab`（插件侧唯一合法的
+			// 「容器在不在」判据：槽门面不暴露 spec 查询，entriesOfSlot 也不区分空与未声明）。
+			var familyTabHeld = false
 			ctx.slots.inject('dsh-family.tab', function () {
+				familyTabHeld = true
 				return ctx.slots.register({
 					name: 'dsh-family.tab',
 					id: 'dsh-browser-cdp',
@@ -689,6 +844,16 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 					inject: function () { return { scope: scope } },
 				}, FamilySettingsCard)
 			}, 'dsh-browser-cdp: family settings tab')
+			// 家族容器兜底：thinking-levels/guard/steward/mcp 全部让位或声明失败时，
+			// 上面的 inject 会静默等待——本卡整轮启动不可见且不报错。到分级时刻自己上位。
+			// declare-or-withdraw：声明失败就放弃，绝不裸注册不带 children 的残废节。
+			var claim = claimFamilyHostIfOrphaned(
+				ctx.slots,
+				function () { return familyTabHeld },
+				function () { return '起子插件设置' },
+				'[dsh-browser-cdp]',
+			)
+			if (typeof ctx.effect === 'function') ctx.effect(function () { return claim }, 'dsh-browser-cdp: family host backstop')
 		}
 
 		// ── 插件详情页设置卡（plugins.bundle.config keyed 席位）─────────────
@@ -700,8 +865,8 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 		// renderSlot），无需 b660785 的缺席守卫。
 		function mountPluginsPageCard(ctx: any) {
 			var forms = typeof ctx.get === 'function' ? ctx.get('configForms') : undefined
-			if (!forms || typeof forms.get !== 'function') return
-			var scope = forms.get('dsh-browser-cdp')
+			var scope = forms && typeof forms.get === 'function' ? forms.get('dsh-browser-cdp') : undefined
+			if (!scope) scope = makeBridgeScope()
 			ctx.slots.inject('plugins.bundle.config', function () {
 				return ctx.slots.register({
 					name: 'plugins.bundle.config',
@@ -715,6 +880,15 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 		// kind: bool=checkbox / num=数字 / str=文本 / secret=密码 / sel=下拉。
 		// 文案直接内联 en/zh（跟随 wt 的 _egoLocale），不再膨胀字典键。
 		var FAM_FIELD_GROUPS = [
+			// 工具封印：放在最前（与 prime-memory 的「工具封印」节同一位置）——
+			// 它是“今天这个会话能看到多少个工具”的唯一开关面。
+			{ gk: 'gTools', en: 'Tool sealing', zh: '工具封印', fields: [
+				{ k: 'toolInjection', kind: 'sel', options: ['lazy', 'always'], en: ['Injection mode', 'lazy (default) = the 7 core tools plus the 2 escape-hatch tools stay resident; the rest are injected after the first bcdp_* call and sealed back on idle reaping. always = every tool registered at mount (historical)'], zh: ['工具注入模式', 'lazy（默认）= 常驻核心 7 个 + 逃生舱 2 个，其余在首次 bcdp_* 调用后铺开、闲置回收时收回；always = 挂载即注册全部（历史行为）'] },
+				{ k: 'toolBrowse', kind: 'bool', en: ['Basic browsing tools (16)', 'On (default) = released in three waves after browser activity (act → observe → wait); off = 16 tools removed from the model tool list (click / fill / key / drag / screenshot / read / wait ...)'], zh: ['基础操作工具（16 个）', '开（默认）= 浏览器活动后按 act → observe → wait 三波放行；关 = 16 个工具从模型工具列表移除（点击/填写/键鼠/拖拽/截图/读取/等待…）'] },
+				{ k: 'toolExtended', kind: 'bool', en: ['Extended tools (8)', 'On (default) = registered after browser activity; off = 8 tools removed (raw CDP / http / upload / download / dialog / captcha / auth flush / login import)'], zh: ['扩展能力工具（8 个）', '开（默认）= 浏览器活动后注册；关 = 8 个工具移除（裸 CDP/HTTP/上传/下载/对话框/验证码/登录落盘/登录导入）'] },
+				{ k: 'toolEscape', kind: 'bool', en: ['Escape hatch (2: cli / script)', 'Always available — unlike the other tiers it does not wait for browser activity, because one heredoc can do what any of the other 36 tools do. Off = sealed'], zh: ['逃生舱（2 个：cli / script）', '始终可用——与其它档不同，它不等浏览器活动，因为一个 heredoc 就能做到其余 36 个工具的事。关 = 封印'] },
+				{ k: 'toolJudge', kind: 'bool', en: ['Judgement tools bcdp_jev_* (5)', 'On still requires a JEV or Laya key — without one they can only answer "not configured", so they stay sealed anyway'], zh: ['评审工具 bcdp_jev_*（5 个）', '开仍需配了 JEV/Laya Key；没 Key 它们本来也只能回答「未配置」，依旧不注入'] },
+			] },
 			{ gk: 'gBasic', en: 'Basics', zh: '基础', fields: [
 				{ k: 'isolateSpaces', kind: 'bool', en: ['Space isolation', 'Off = persistent profile (logins survive restarts); on = isolated sandbox'], zh: ['空间隔离', '关 = 持久化配置（重启保留登录态）；开 = 每次隔离沙箱'] },
 				{ k: 'idleTimeoutMin', kind: 'num', min: 0, max: 1440, step: 1, en: ['Auto-stop idle browser (minutes, 0 = off)', 'Stops the backing browser after N minutes without a bcdp_* call; relaunches on demand'], zh: ['空闲自动停止（分钟，0 = 不停）', '超过 N 分钟没有 bcdp_* 调用即停止后台浏览器，下次调用按需重启'] },
@@ -810,9 +984,7 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 				h('span', { style: titleStyle }, famText(f, 'title')),
 				f.desc === false || !famText(f, 'desc') ? null : h('span', { style: descStyle }, famText(f, 'desc')))
 			if (f.kind === 'bool') {
-				return h('div', { style: rowStyle }, label,
-					h('input', { type: 'checkbox', checked: value[f.k] === true, disabled: !writable,
-						onChange: function (e: any) { void scope.set(f.k, e.target.checked) } }))
+				return h(FamBoolRow, { f: f, value: value, writable: writable, scope: scope })
 			}
 			if (f.kind === 'num') {
 				return h('div', { style: rowStyle }, label,
@@ -822,12 +994,87 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 				return h('div', { style: rowStyle }, label,
 					h('select', { value: String(value[f.k] ?? f.options[0]), disabled: !writable,
 						style: { font: 'inherit', color: 'inherit', background: 'var(--dsw-alias-bg-module-platform, rgba(127,127,127,.08))', border: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.35))', borderRadius: '8px', padding: '4px 8px' },
-						onChange: function (e: any) { void scope.set(f.k, e.target.value) } },
+						onChange: function (e: any) { void commitField(scope, f.k, e.target.value) } },
 						f.options.map(function (o: any) { return h('option', { key: o, value: o }, o) })))
 			}
 			// str / secret：文本行（宽度占满，失焦提交）
 			return h('div', { style: { display: 'grid', gap: '2px', padding: '6px 0' } }, label,
 				h(FamStrInput, { f: f, v: value[f.k], writable: writable, scope: scope }))
+		}
+
+		// 胶囊开关。宿主没有可借的共享 switch 组件（自动表单页是另一套 DOM），所以按
+		// --dsw-alias 令牌自绘：用原生 <button role="switch"> 自带聚焦与回车/空格，
+		// 不重造键盘轮子；尺寸固定 38×22、旋钮 18px，border-box 下位移 16px 刚好贴右。
+		function FamSwitch(props: any) {
+			var h = React.createElement
+			var on = props.checked === true
+			var busy = props.busy === true
+			var disabled = props.writable !== true || busy
+			return h('button', {
+				type: 'button', role: 'switch', 'aria-checked': on, 'aria-label': props.ariaLabel || '',
+				disabled: disabled, title: props.title || '',
+				style: {
+					flex: '0 0 auto', width: '38px', height: '22px', padding: 0, boxSizing: 'border-box',
+					position: 'relative', cursor: disabled ? 'default' : 'pointer',
+					borderRadius: '999px', border: '1px solid transparent',
+					background: on ? 'var(--dsw-alias-bg-brand, #3a76f0)' : 'var(--dsw-alias-bg-module-platform, rgba(127,127,127,.28))',
+					opacity: busy ? 0.55 : 1, transition: 'background .16s ease, opacity .16s ease',
+				},
+				onClick: function () { props.onToggle(!on) },
+			}, h('span', {
+				style: {
+					position: 'absolute', top: '1px', left: '1px', width: '18px', height: '18px',
+					borderRadius: '999px', boxSizing: 'border-box',
+					background: 'var(--dsw-alias-label-inverse, #fff)', boxShadow: '0 1px 2px rgba(0,0,0,.35)',
+					transform: on ? 'translateX(16px)' : 'translateX(0)', transition: 'transform .16s ease',
+				},
+			}))
+		}
+
+		// 布尔行 = 乐观态 + 胶囊开关 + 失败回滚。
+		// 点下去先本地翻转（pending），提交走 commitField（带重试）；宿主快照追上来
+		// 就清掉 pending，重试预算用尽则回滚到宿主真值并亮一行提示——开关停在“看起
+		// 来改了其实没改”是最坑的状态，宁可弹回去并说一一声。
+		function FamBoolRow(props: any) {
+			var f = props.f
+			var scope = props.scope
+			var writable = props.writable
+			var h = React.createElement
+			var host = props.value[f.k] === true
+			var pendingState = React.useState(undefined)
+			var pending = pendingState[0], setPending = pendingState[1]
+			var errState = React.useState(false)
+			var failed = errState[0], setFailed = errState[1]
+			React.useEffect(function () {
+				if (pending !== undefined && props.value[f.k] === pending) setPending(undefined)
+			}, [props.value[f.k]])
+			var shown = pending === undefined ? host : pending === true
+			var rowStyle = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', padding: '6px 0' }
+			var textCol = { display: 'flex', flexDirection: 'column', gap: '2px', minWidth: 0 }
+			var titleStyle = { fontSize: '13px', color: 'var(--dsw-alias-label-primary, inherit)' }
+			var descStyle = { fontSize: '12px', color: 'var(--dsw-alias-label-tertiary, rgba(127,127,127,.8))', lineHeight: 1.5 }
+			function toggle(next: boolean) {
+				if (writable !== true || pending !== undefined) return
+				setFailed(false)
+				setPending(next)
+				void commitField(scope, f.k, next).then(function (ok: any) {
+					if (ok === true) return
+					setPending(undefined)
+					setFailed(true)
+				})
+			}
+			return h('div', { style: { display: 'grid', gap: '2px' } },
+				h('div', { style: rowStyle },
+					h('div', { style: textCol },
+						h('span', { style: titleStyle }, famText(f, 'title')),
+						f.desc === false || !famText(f, 'desc') ? null : h('span', { style: descStyle }, famText(f, 'desc'))),
+					h(FamSwitch, {
+						checked: shown, busy: pending !== undefined, writable: writable,
+						ariaLabel: famText(f, 'title'), onToggle: toggle,
+					})),
+				failed ? h('span', { style: { fontSize: '12px', color: 'var(--dsw-alias-text-danger, #e5534b)' } },
+					_egoLocale === 'zh' ? '保存未成功（已重试），开关已回到宿主当前值。' : 'Save failed after retries; the switch is back to the host value.') : null,
+			)
 		}
 
 		function FamNumInput(props: any) {
@@ -846,7 +1093,7 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 					n = Math.round(n / (f.step || 1)) * (f.step || 1)
 					if (f.min !== undefined) n = Math.max(f.min, n)
 					if (f.max !== undefined) n = Math.min(f.max, n)
-					void props.scope.set(f.k, n)
+					void commitField(props.scope, f.k, n)
 				} })
 		}
 
@@ -859,8 +1106,8 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 			return h('input', { type: f.kind === 'secret' ? 'password' : 'text', value: v, disabled: !props.writable,
 				style: { width: '100%', font: 'inherit', color: 'inherit', background: 'var(--dsw-alias-bg-module-platform, rgba(127,127,127,.08))', border: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.35))', borderRadius: '8px', padding: '5px 10px', boxSizing: 'border-box' },
 				onChange: function (e: any) { setV(e.target.value) },
-				onBlur: function () { void props.scope.set(f.k, v) },
-				onKeyDown: function (e: any) { if (e.key === 'Enter') { void props.scope.set(f.k, v) } } })
+				onBlur: function () { void commitField(props.scope, f.k, v) },
+				onKeyDown: function (e: any) { if (e.key === 'Enter') { void commitField(props.scope, f.k, v) } } })
 		}
 
 		// 连接目标（links）：按行渲染启用开关 + 激活按钮（写 activeTargetId）。
@@ -882,7 +1129,7 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 		}
 
 		// 连接目标（links）v2：启用 / 激活 / 就位编辑 / 探测 / 增删 / 排序。
-		// 写回只有一条通道：整组 scope.set('links', next)（行级 volatile 写不存在），
+		// 写回只有一条通道：整组 commitField(scope, 'links', next)（行级 volatile 写不存在），
 		// 每个离散动作恰好一次 set。守卫规则在 ./fam-links（与宿主 sanitize/upsert
 		// 同构）：ego-cli 单例、MAX_LINKS 上限、endpoint 轻校验——空/非法端点行能过
 		// 设置写入，却会在宿主下次 resolve 时被 coerceLink 静默丢弃，必须写前挡住。
@@ -905,13 +1152,15 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 			var addEndpoint = addEndpointState[0], setAddEndpoint = addEndpointState[1]
 			var addCliPathState = React.useState('')
 			var addCliPath = addCliPathState[0], setAddCliPath = addCliPathState[1]
+			var addLpPathState = React.useState('')
+			var addLpPath = addLpPathState[0], setAddLpPath = addLpPathState[1]
 
 			var btnStyle = { font: 'inherit', fontSize: '12px', cursor: writable ? 'pointer' : 'not-allowed', border: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.35))', background: 'none', color: 'var(--dsw-alias-label-primary, inherit)', borderRadius: '8px', padding: '2px 8px', flex: '0 0 auto' }
 			var badgeStyle = { fontSize: '10px', fontWeight: 600, letterSpacing: '.04em', flex: '0 0 auto', color: 'var(--dsw-alias-label-tertiary, rgba(127,127,127,.7))', border: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.25))', borderRadius: '6px', padding: '0 5px', lineHeight: '16px' }
 			var inputStyle = { font: 'inherit', fontSize: '12px', color: 'inherit', background: 'var(--dsw-alias-bg-module-platform, rgba(127,127,127,.08))', border: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.35))', borderRadius: '8px', padding: '3px 8px' }
 
 			function writeLinks(next: any) {
-				Promise.resolve(scope.set('links', next)).then(function (ok: any) {
+				commitField(scope, 'links', next).then(function (ok: any) {
 					if (ok === false) setErrText(wt('linksWriteFailed'))
 				}, function () { setErrText(wt('linksWriteFailed')) })
 			}
@@ -923,7 +1172,7 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 				writeLinks(res.links)
 				if (activeId === '') {
 					// 空序列的第一个目标入列即激活（无歧义）；后续行保持不自动激活。
-					void scope.set('activeTargetId', res.links[res.links.length - 1].id)
+					void commitField(scope, 'activeTargetId', res.links[res.links.length - 1].id)
 				}
 				setAddLabel(''); setAddEndpoint(''); setErrText('')
 			}
@@ -933,9 +1182,19 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 				writeLinks(res.links)
 				if (activeId === '') {
 					// 空序列的第一个目标入列即激活（无歧义）；后续行保持不自动激活。
-					void scope.set('activeTargetId', res.links[res.links.length - 1].id)
+					void commitField(scope, 'activeTargetId', res.links[res.links.length - 1].id)
 				}
 				setAddCliPath(''); setErrText('')
+			}
+			function addLp() {
+				var res = addRow(links, buildLpRow({ label: '', servePath: addLpPath }))
+				if (res.code) { setErrText(res.code === 'link-limit-reached' ? limitText() : wt('linksAddLpExists')); return }
+				writeLinks(res.links)
+				if (activeId === '') {
+					// 空序列的第一个目标入列即激活（无歧义）；后续行保持不自动激活。
+					void commitField(scope, 'activeTargetId', res.links[res.links.length - 1].id)
+				}
+				setAddLpPath(''); setErrText('')
 			}
 			function removeOne(row: any) {
 				var res = removeRow(links, row.id)
@@ -943,7 +1202,7 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 				// 删激活行 = 清空激活，不顺延（先 links 后 activeId；两次触发被
 				// 宿主 inFlight/pending 合并，瞬态悬挂无害）。
 				if (res.removed && res.removed.id !== undefined && res.removed.id === activeId) {
-					void scope.set('activeTargetId', '')
+					void commitField(scope, 'activeTargetId', '')
 				}
 			}
 			function probeOne(row: any) {
@@ -954,6 +1213,8 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 						var outcome = data && data.value && data.value.outcome
 							? data.value.outcome
 							: { ok: false, code: 'probe-failed', message: 'no outcome' }
+						// Lightpanda backend — persist the recognized engine with the probe state.
+						if (outcome && outcome.engine === undefined && outcome.ok === true) outcome.engine = 'chrome'
 						writeLinks(applyProbe(links, row.id, outcome, Date.now()))
 					})
 					.catch(function (error: any) {
@@ -967,15 +1228,15 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 			var localActive = cdpMode === 'local'
 			var localRow = h('div', { key: 'fam-links-local', style: { borderTop: '1px dashed var(--dsw-alias-border-l2, rgba(127,127,127,.18))', padding: '6px 0', display: 'grid', gap: '4px' } },
 				h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
-					h('input', { type: 'checkbox', checked: value.allowLocalFallback === true, disabled: !writable,
+					h(FamSwitch, { checked: value.allowLocalFallback === true, writable: writable,
 						title: wt('linksLocalEnableHint'),
-						onChange: function (e: any) { void scope.set('allowLocalFallback', e.target.checked) } }),
+						onToggle: function (next: boolean) { void commitField(scope, 'allowLocalFallback', next) } }),
 					h('span', { style: badgeStyle }, 'LOCAL'),
 					h('span', { style: { fontSize: '13px', color: 'var(--dsw-alias-label-primary, inherit)', flex: '1 1 120px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, wt('linksLocalRow')),
 					localActive
 						? h('span', { style: { fontSize: '11px', color: '#30d158', flex: '0 0 auto' } }, wt('linksActive'))
 						: h('button', { type: 'button', disabled: !writable, style: btnStyle,
-							onClick: function () { void scope.set('cdpMode', 'local') } },
+							onClick: function () { void commitField(scope, 'cdpMode', 'local') } },
 							wt('linksActivate'))))
 			return h('div', { style: { borderTop: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.25))', paddingTop: '6px', display: 'grid', gap: '4px' } },
 				h('div', { style: { fontSize: '12px', fontWeight: 600, color: 'var(--dsw-alias-label-secondary, rgba(127,127,127,.9))', padding: '2px 0 4px' } },
@@ -985,6 +1246,7 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 						wt('linksEmpty'))
 					: links.map(function (row: any, idx: any) {
 						var isCli = row.kind === 'ego-cli'
+						var isLp = row.kind === 'lightpanda'
 						var isActive = row.id !== undefined && row.id === activeId
 						var probeBadge: any = null
 						if (row.probeStatus === 'ok' || row.probeStatus === 'error') {
@@ -995,10 +1257,10 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 						}
 						return h('div', { key: row.id || idx, style: { borderTop: '1px dashed var(--dsw-alias-border-l2, rgba(127,127,127,.18))', padding: '6px 0', display: 'grid', gap: '4px' } },
 							h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
-								h('input', { type: 'checkbox', checked: row.enabled === true, disabled: !writable,
+								h(FamSwitch, { checked: row.enabled === true, writable: writable,
 									title: wt('linksEnabled'),
-									onChange: function (e: any) { writeLinks(updateRow(links, row.id, { enabled: e.target.checked })) } }),
-								h('span', { style: badgeStyle }, isCli ? 'CLI' : 'CDP'),
+									onToggle: function (next: boolean) { writeLinks(updateRow(links, row.id, { enabled: next })) } }),
+								h('span', { style: badgeStyle }, isCli ? 'CLI' : isLp ? 'LP·无头' : 'CDP'),
 								h(FamRowInput, { v: row.label || '', writable: writable, placeholder: wt('linksLabel'),
 									onCommit: function (v: any) { writeLinks(updateRow(links, row.id, { label: v })) } }),
 								probeBadge,
@@ -1007,25 +1269,26 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 									: h('button', { type: 'button', disabled: !writable || row.enabled === false,
 										title: row.enabled === false ? wt('linksDisabledHint') : undefined, style: btnStyle,
 										onClick: function () {
-											void scope.set('activeTargetId', row.id)
+											void commitField(scope, 'activeTargetId', row.id)
 											// 从受管本地切回目标序列：local 模式无视激活项，不同步模式就是点了没反应。
-											if (cdpMode === 'local') { void scope.set('cdpMode', 'auto') }
+											if (cdpMode === 'local') { void commitField(scope, 'cdpMode', 'auto') }
 										} },
 										wt('linksActivate'))),
 							h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
-								h(FamRowInput, { v: (isCli ? row.cliPath : row.endpoint) || '', writable: writable,
-									placeholder: isCli ? wt('linksCliPathHint') : wt('linksEndpointHint'),
+								h(FamRowInput, { v: (isCli ? row.cliPath : isLp ? row.servePath : row.endpoint) || '', writable: writable,
+									placeholder: isCli ? wt('linksCliPathHint') : isLp ? wt('linksLpPathHint') : wt('linksEndpointHint'),
 									onCommit: function (v: any) {
 										if (isCli) { writeLinks(updateRow(links, row.id, { cliPath: v })); return }
+										if (isLp) { writeLinks(updateRow(links, row.id, { servePath: v })); return }
 										if (!isValidEndpoint(v)) { setErrText(wt('linksEndpointInvalid')); return }
 										writeLinks(updateRow(links, row.id, { endpoint: v }))
 									} }),
 								isCli ? h('label', { style: { display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: 'var(--dsw-alias-label-tertiary, rgba(127,127,127,.7))', flex: '0 0 auto' } },
-									h('input', { type: 'checkbox', checked: row.useSdkPath === true, disabled: !writable,
+									h(FamSwitch, { checked: row.useSdkPath === true, writable: writable,
 										title: wt('linksCliSdk'),
-										onChange: function (e: any) { writeLinks(updateRow(links, row.id, { useSdkPath: e.target.checked })) } }),
+										onToggle: function (next: boolean) { writeLinks(updateRow(links, row.id, { useSdkPath: next })) } }),
 									wt('linksCliSdk')) : null,
-								!isCli ? h('button', { type: 'button', disabled: !writable || probingId === row.id, style: btnStyle,
+								!isCli && !isLp ? h('button', { type: 'button', disabled: !writable || probingId === row.id, style: btnStyle,
 									onClick: function () { probeOne(row) } },
 									probingId === row.id ? wt('linksProbing') : wt('linksProbe')) : null,
 								h('button', { type: 'button', disabled: !writable || idx === 0, title: wt('linksMoveUp'), style: btnStyle,
@@ -1034,8 +1297,10 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 									onClick: function () { writeLinks(moveRow(links, row.id, 1)) } }, '↓'),
 								h('button', { type: 'button', disabled: !writable, title: wt('linksRemove'), style: btnStyle,
 									onClick: function () { removeOne(row) } }, '✕'),
-								isCli && cdpMode === 'remote'
-									? h('span', { style: { fontSize: '11px', color: '#ff9f0a', flex: '1 1 100%' } }, wt('linksCliRemoteWarn'))
+								(isCli || isLp) && cdpMode === 'remote'
+									? h('span', { style: { fontSize: '11px', color: '#ff9f0a', flex: '1 1 100%' } }, wt(isCli ? 'linksCliRemoteWarn' : 'linksLpRemoteWarn'))
+									: null,
+								isLp ? h('span', { style: { fontSize: '11px', color: 'var(--dsw-alias-label-tertiary, rgba(127,127,127,.7))', flex: '1 1 100%' } }, wt('linksLpHeadlessHint'))
 									: null))
 					}),
 				localRow,
@@ -1056,9 +1321,18 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 							style: Object.assign({ flex: '1 1 160px', minWidth: 0 }, inputStyle),
 							onChange: function (e: any) { setAddCliPath(e.target.value) },
 							onKeyDown: function (e: any) { if (e.key === 'Enter') { addCli() } } }),
-						h('button', { type: 'button', disabled: !writable || isFull(links) || hasCliLink(links),
+h('button', { type: 'button', disabled: !writable || isFull(links) || hasCliLink(links),
 							title: hasCliLink(links) ? wt('linksAddCliExists') : (isFull(links) ? limitText() : undefined),
 							style: btnStyle, onClick: addCli }, wt('linksAddCli'))),
+						h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' } },
+							h('input', { type: 'text', value: addLpPath, disabled: !writable || isFull(links) || hasLpLink(links),
+								placeholder: wt('linksLpPathHint'),
+								style: Object.assign({ flex: '1 1 160px', minWidth: 0 }, inputStyle),
+								onChange: function (e: any) { setAddLpPath(e.target.value) },
+								onKeyDown: function (e: any) { if (e.key === 'Enter') { addLp() } } }),
+							h('button', { type: 'button', disabled: !writable || isFull(links) || hasLpLink(links),
+								title: hasLpLink(links) ? wt('linksAddLpExists') : (isFull(links) ? limitText() : undefined),
+								style: btnStyle, onClick: addLp }, wt('linksAddLp'))),
 					errText ? h('div', { style: { fontSize: '11px', color: '#ff453a' } }, errText) : null))
 		}
 
@@ -1071,10 +1345,24 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 		// on DSH 0.1.2-rc.1). Probe with ctx.get; when absent, mount the
 		// floating watch panel immediately and upgrade to the sidebar tab if
 		// the service appears later (dynamic ctx.inject, same pattern as PR #45).
-		mountFamilySettingsCard(ctx)
-		mountPluginsPageCard(ctx)
-		mountPicksDockCard(ctx)
-		mountPicksBadge(ctx)
+		// Per-surface isolation: any single mount may throw on a given host line
+		// (absent service/slot variants) — on 0.1.x cordis surfaces that throw
+		// inside apply take every later mount down with them, so each one is
+		// isolated and failures degrade to a console.warn only.
+		var mounts: Array<[string, (c: any) => void]> = [
+			['family settings tab', mountFamilySettingsCard],
+			['plugins-page config card', mountPluginsPageCard],
+
+			['picks dock', mountPicksDockCard],
+			['picks badge', mountPicksBadge],
+		]
+		for (var mi = 0; mi < mounts.length; mi++) {
+			try {
+				mounts[mi][1](ctx)
+			} catch (e: any) {
+				console.warn('[dsh-browser-cdp] mount failed:', mounts[mi][0], e && e.message ? e.message : String(e))
+			}
+		}
 		var betterSidebarService: any
 		try { betterSidebarService = typeof ctx.get === 'function' ? ctx.get('betterSidebar') : undefined } catch (e) { betterSidebarService = undefined }
 		if (betterSidebarService !== undefined) {
@@ -1289,6 +1577,7 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 				const watchClientId = 'floating-' + Math.random().toString(36).slice(2)
 				let watchStarted = false, watchTargetId: any = null, watchRenewTimer: any = null, watchStopTimer: any = null, watchRequest: any = null
 				let captureBackend = 'cdp', streamGeneration = 0, streamState = 'idle', streamMessage = '', streamMime = 'video/mp4; codecs="avc1.42E01E"', videoCleanup: any = null
+				let streamEngineUnsupported = false
 				const effectiveVisible = () => !panel.hidden
 				const stopVideo = () => { if (videoCleanup) try { videoCleanup() } catch {}; videoCleanup = null }
 				const applyCaptureStatus = (status: any) => {
@@ -1299,8 +1588,9 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 					const nextGeneration = status.generation ?? streamGeneration
 					const nextState = status.state || streamState
 					const nextMime = status.mime || streamMime
-					const changed = captureBackend !== nextBackend || streamGeneration !== nextGeneration || streamState !== nextState || streamMime !== nextMime
-					captureBackend = nextBackend; streamGeneration = nextGeneration; streamState = nextState; streamMessage = status.message || status.code || ''; streamMime = nextMime
+					const nextUnsupported = status.engineUnsupported === true
+					const changed = captureBackend !== nextBackend || streamGeneration !== nextGeneration || streamState !== nextState || streamMime !== nextMime || streamEngineUnsupported !== nextUnsupported
+					captureBackend = nextBackend; streamGeneration = nextGeneration; streamState = nextState; streamMessage = status.message || status.code || ''; streamMime = nextMime; streamEngineUnsupported = nextUnsupported
 					if (changed) { stopVideo(); const current = lastList.find((s) => s.targetId === (selectedTabId || currentActiveId)); if (current) renderLiveMain(current, selectedTabId !== null) }
 				}
 				const requestWatch = (route: any, body: any) => {
@@ -1612,7 +1902,7 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 					} else {
 						const n = document.createElement('div')
 						n.className = 'dsh-ego-liveurl'
-						n.textContent = wt('noScreenshot')
+						n.textContent = streamEngineUnsupported ? wt('engineUnsupportedBanner') : wt('noScreenshot')
 						view.appendChild(n)
 					}
 					view.appendChild(t)
@@ -1770,7 +2060,7 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 					} else {
 						const n = document.createElement('div')
 						n.className = 'dsh-ego-liveurl'
-						n.textContent = wt('noScreenshot')
+						n.textContent = streamEngineUnsupported ? wt('engineUnsupportedBanner') : wt('noScreenshot')
 						view.appendChild(n)
 					}
 					view.appendChild(t)
@@ -1901,7 +2191,7 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 								const cur = pageMeta.get(m.targetId) || { targetId: m.targetId }
 								pageMeta.set(m.targetId, { ...cur, vw: m.vw, vh: m.vh })
 							}
-							applyFrame(m.targetId, `data:image/jpeg;base64,${m.data}`, m.vw, m.vh)
+							applyFrame(m.targetId, `data:image/${m.fmt === 'png' ? 'png' : 'jpeg'};base64,${m.data}`, m.vw, m.vh)
 						} catch {}
 					})
 				// The worker also sends the live list on open (and on tab
@@ -2455,6 +2745,7 @@ clearTimeout((panel as any)._dshHideT)
 			 }))
 		}
 		
+
 		// ── 点选引用徽标（conversation.input.overlay 贡献者）────────────────
 		// 草稿含我们的引用行时，composer 卡内浮出 🌐 徽标（paste-dock 文档徽标的
 		// 同位）——悬停显示连接/页面/元素数。组件按会话探测，解析不了渲染 null。
@@ -2760,6 +3051,9 @@ clearTimeout((panel as any)._dshHideT)
 				post(true, targetId).then(function (res) {
 					var state = res && res.ok !== false ? res.state : null
 					if (!state || state.enabled !== true) {
+						// Lightpanda backend — the worker returns the engine-aware code;
+						// map it so the panel shows a localized reason, not raw text.
+						if (res && res.code === 'engine-unsupported') { emit('failed', wt('engineUnsupportedPick')); return }
 						emit('failed', (state && state.message) || (res && res.error) || wt('pickFailed'))
 						return
 					}
@@ -2804,7 +3098,7 @@ clearTimeout((panel as any)._dshHideT)
 
 		function LivePreviewController(ctx: any) {
 			this.ctx = ctx
-			this.store = createSnapshotStore(this._initialState())
+			this.store = ensureSnapshotStoreCreator()(this._initialState())
 			this.frameCache = new Map()
 			this.pageMeta = new Map()
 			this.lastList = []
@@ -2826,6 +3120,7 @@ clearTimeout((panel as any)._dshHideT)
 			this.streamGeneration = 0
 			this.streamState = 'idle'
 			this.streamMessage = ''
+			this.engineUnsupported = false
 			this.streamMime = 'video/mp4; codecs="avc1.42E01E"'
 			this.liveVideo = null
 			this.videoCleanup = null
@@ -2869,7 +3164,7 @@ clearTimeout((panel as any)._dshHideT)
 				historyOpen: false,
 				zoomHint: null,
 				wiringStale: false,
-				backend: 'cdp', streamState: 'idle', streamMessage: '', streamGeneration: 0, streamMime: 'video/mp4; codecs="avc1.42E01E"',
+				backend: 'cdp', streamState: 'idle', streamMessage: '', streamGeneration: 0, streamMime: 'video/mp4; codecs="avc1.42E01E"', engineUnsupported: false,
 				pick: 'off', pickMessage: '',
 			}
 		}
@@ -2953,6 +3248,7 @@ clearTimeout((panel as any)._dshHideT)
 				s.streamMessage = self.streamMessage
 				s.streamGeneration = self.streamGeneration
 				s.streamMime = self.streamMime
+				s.engineUnsupported = self.engineUnsupported
 				s.pick = self._pick
 				s.pickMessage = self._pickMessage
 			})
@@ -3028,6 +3324,7 @@ clearTimeout((panel as any)._dshHideT)
 			var nextState = status.state || this.streamState
 			var generationChanged = this.streamGeneration !== nextGeneration
 			this.backend = nextBackend; this.streamState = nextState; this.streamMessage = status.message || status.code || ''; this.streamGeneration = nextGeneration; this.streamMime = status.mime || this.streamMime
+			this.engineUnsupported = status.engineUnsupported === true
 			if (generationChanged || this.backend !== 'ffmpeg') this._destroyVideo()
 			this._recompute()
 		}
@@ -3156,7 +3453,7 @@ clearTimeout((panel as any)._dshHideT)
 						var cur = self.pageMeta.get(m.targetId) || { targetId: m.targetId }
 						self.pageMeta.set(m.targetId, Object.assign({}, cur, { vw: m.vw, vh: m.vh }))
 					}
-					self.applyFrame(m.targetId, 'data:image/jpeg;base64,' + m.data, m.vw, m.vh)
+					self.applyFrame(m.targetId, 'data:image/' + (m.fmt === 'png' ? 'png' : 'jpeg') + ';base64,' + m.data, m.vw, m.vh)
 				} catch (e) {}
 			})
 			this.sse.addEventListener('spaces', function (ev: any) {
@@ -3668,13 +3965,13 @@ clearTimeout((panel as any)._dshHideT)
 						onPointerCancel: function (e: any) { controller.handlePointerUp(e) },
 						onDoubleClick: function (e: any) { controller.handleDoubleClick(e) },
 					})
-					: h('div', { className: 'dsh-ego-side-liveurl' }, state.streamMessage || wt('noScreenshot'))
+					: h('div', { className: 'dsh-ego-side-liveurl' }, state.engineUnsupported ? wt('engineUnsupportedBanner') : (state.streamMessage || wt('noScreenshot')))
 
 				body = h('div', { className: 'dsh-ego-side-body' },
 					h('div', { className: 'dsh-ego-side-liveview' },
 						h('div', { className: 'dsh-ego-side-livebadge' },
 							h('span', { className: 'dsh-ego-side-state-dot' + (state.pinned ? ' pin' : state.busy ? ' busy' : '') }),
-							h('span', { style: { flex: 1 } }, (state.backend === 'ffmpeg' ? 'FFmpeg · H.264' : 'CDP') + ' · ' + (state.streamState === 'failed' ? (state.streamMessage || wt('failed')) : state.streamState) + (state.currentTargetId ? (state.wiringStale ? ' · ' + wt('stale') : ' · ' + wt('captured')) : '')),
+							h('span', { style: { flex: 1 } }, (state.backend === 'ffmpeg' ? 'FFmpeg · H.264' : 'CDP') + ' · ' + (state.streamState === 'failed' ? (state.streamMessage || wt('failed')) : state.streamState === 'unsupported' ? wt('engineUnsupportedBanner') : state.streamState) + (state.currentTargetId ? (state.wiringStale ? ' · ' + wt('stale') : ' · ' + wt('captured')) : '')),
 							state.pinned
 								? h('button', {
 									className: 'dsh-ego-side-back', type: 'button',

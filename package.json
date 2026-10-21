@@ -1,7 +1,7 @@
 {
   "name": "dsh-browser-cdp",
-  "version": "0.18.19",
-  "description": "dsh-browser-cdp: DSH browser plugin — attach to a running Chrome/Edge over CDP (no bundled browser needed); structured browser-automation tools (30+ bcdp_*) that drive the vendored ego runtime through ctx.subprocess, plus a realtime watch panel (live SSE screencast + direct mouse interaction + download capture + human-verification notice). Web shell: floating watch panel without dsh-better-sidebar, sidebar tab with it. Headless/TUI hosts: tools-only. [DSH 0.2.0-rc.1+ line: declarative settings via Config .volatile() fields; for DSH 0.1.2-rc.1 ~ 0.1.7 use the 0.17.x line]",
+  "version": "1.6.0",
+  "description": "dsh-browser-cdp: DSH browser plugin — attach to a running Chrome/Edge over CDP (no bundled browser needed); structured browser-automation tools (30+ bcdp_*) that drive the vendored ego runtime through ctx.subprocess, plus a realtime watch panel (live SSE screencast + direct mouse interaction + download capture + human-verification notice). Web shell: floating watch panel without dsh-better-sidebar, sidebar tab with it. Headless/TUI hosts: tools-only. [DSH 0.1.7-rc.1 ~ 0.2.1-rc.1 line (exact rc enumeration): declarative settings via Config .volatile() fields; for DSH 0.1.2-rc.1 ~ 0.1.5-rc.3 use the 0.17.x line]",
   "type": "module",
   "main": "./lib/index.js",
   "exports": {
@@ -21,31 +21,43 @@
   ],
   "dsh": {
     "engines": {
-      "dsh": ">=0.2.0-rc.1 <0.2.1-0"
+      "dsh": "0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-rc.1 || 0.2.1-rc.2"
     },
     "bundle": {
       "patch": "./cordis.patch.yml"
     },
     "client": {
       "platform": "web",
-      "inject": []
+      "inject": [
+        "@deepseek-ai/dsh-client-locale"
+      ]
+    },
+    "compatibility": {
+      "dshReleases": {
+        "0.1.7-rc.1": "compatible",
+        "0.1.7-rc.2": "compatible",
+        "0.2.0-rc.1": "compatible",
+        "0.2.0-rc.2": "compatible",
+        "0.2.1-rc.1": "compatible"
+      }
     }
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.client.json",
     "test": "vitest run",
-    "build": "tsdown -c tsdown.config.ts"
+    "build": "tsdown -c tsdown.config.ts",
+    "prepack": "npm run build"
   },
   "dependencies": {
     "@deepseek-ai/schemastery": "^3.18.4"
   },
   "peerDependencies": {
-    "@deepseek-ai/dsh-client-locale": ">=0.2.0-rc.1 <0.2.1-0",
-    "@deepseek-ai/dsh-client-store": ">=0.2.0-rc.1 <0.2.1-0",
-    "@deepseek-ai/dsh-client-ui-settings-plugins": ">=0.2.0-rc.1 <0.2.1-0",
-    "@deepseek-ai/dsh-client-ui-slots": ">=0.2.0-rc.1 <0.2.1-0",
-    "@deepseek-ai/dsh-settings": ">=0.2.0-rc.1 <0.2.1-0",
-    "@deepseek-ai/dsh-tools": ">=0.2.0-rc.1 <0.2.1-0",
+    "@deepseek-ai/dsh-client-locale": "0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-rc.1 || 0.2.1-rc.2",
+    "@deepseek-ai/dsh-client-store": "0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-rc.1 || 0.2.1-rc.2",
+    "@deepseek-ai/dsh-client-ui-settings-plugins": "0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-rc.1 || 0.2.1-rc.2",
+    "@deepseek-ai/dsh-client-ui-slots": "0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-rc.1 || 0.2.1-rc.2",
+    "@deepseek-ai/dsh-settings": "0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-rc.1 || 0.2.1-rc.2",
+    "@deepseek-ai/dsh-tools": "0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-rc.1 || 0.2.1-rc.2",
     "react": "^18.2.0"
   },
   "peerDependenciesMeta": {
@@ -66,9 +78,6 @@
     },
     "@deepseek-ai/dsh-tools": {
       "optional": true
-    },
-    "react": {
-      "optional": true
     }
   },
   "devDependencies": {
@@ -86,7 +95,7 @@
   },
   "engines": {
     "node": ">=22",
-    "dsh": ">=0.2.0-rc.1 <0.2.1-0"
+    "dsh": "0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-rc.1 || 0.2.1-rc.2"
   },
   "license": "MIT",
   "repository": {
@@ -94,6 +103,7 @@
     "url": "git+https://github.com/drscrewdriver/dsh-browser-cdp.git"
   },
   "publishConfig": {
-    "tag": "dsh-0.2.0"
+    "registry": "https://registry.npmjs.org",
+    "tag": "dsh-1.1.0"
   }
 }

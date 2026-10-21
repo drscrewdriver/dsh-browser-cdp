@@ -160,6 +160,22 @@ describe("probeEndpoint (injectable fetch)", () => {
     if (out.ok) expect(out.wsUrl).toBe("ws://127.0.0.1:9222/devtools/browser/zzz");
   });
 
+  it("recognizes the engine from the Browser field (Lightpanda backend)", async () => {
+    const lp = await probeEndpoint("http://127.0.0.1:9222", {
+      fetchVersion: fakeFetch({ webSocketDebuggerUrl: "ws://x/", Browser: "Lightpanda/0.4.1" }),
+    });
+    expect(lp.ok).toBe(true);
+    if (lp.ok) expect(lp.engine).toBe("lightpanda");
+    const chrome = await probeEndpoint("http://127.0.0.1:9222", {
+      fetchVersion: fakeFetch({ webSocketDebuggerUrl: "ws://x/", Browser: "Chrome/153.0.0.0" }),
+    });
+    if (chrome.ok) expect(chrome.engine).toBe("chrome");
+    const anonymous = await probeEndpoint("http://127.0.0.1:9222", {
+      fetchVersion: fakeFetch({ webSocketDebuggerUrl: "ws://x/" }),
+    });
+    if (anonymous.ok) expect(anonymous.engine).toBe("unknown");
+  });
+
   it("reports http-status on a non-200 response", async () => {
     const out = await probeEndpoint("http://127.0.0.1:9222", { fetchVersion: fakeFetch({}, 404) });
     expect(out.ok).toBe(false);
@@ -290,6 +306,7 @@ function cliIo(options: {
   cliFile?: string;
   status?: string;
   heredoc?: { exitCode: number | null; stdout?: string; stderr?: string; spawnErrorCode?: string; timedOut?: boolean };
+  heredocFor?: (argv: readonly string[]) => { exitCode: number | null; stdout?: string; stderr?: string };
   spawnCode?: string;
 } = {}) {
   const cliFile = options.cliFile ?? "/usr/local/bin/ego-browser";
@@ -307,8 +324,8 @@ function cliIo(options: {
       if (request.stdin === "") {
         return { exitCode: 0, stdout: options.status ?? JSON.stringify({ running: true }), stderr: "", latencyMs: 2 };
       }
-      const h = options.heredoc ?? { exitCode: 0, stdout: `${CLI_READY}\n` };
-      return { exitCode: h.exitCode, stdout: h.stdout ?? "", stderr: h.stderr ?? "", latencyMs: 3, ...(h.timedOut ? { timedOut: true } : {}), ...(h.spawnErrorCode ? { spawnErrorCode: h.spawnErrorCode } : {}) };
+      const h = options.heredocFor ? options.heredocFor(request.argv) : (options.heredoc ?? { exitCode: 0, stdout: `${CLI_READY}\n` });
+      return { exitCode: h.exitCode, stdout: h.stdout ?? "", stderr: h.stderr ?? "", latencyMs: 3, ...((h as { timedOut?: boolean }).timedOut ? { timedOut: true } : {}), ...((h as { spawnErrorCode?: string }).spawnErrorCode ? { spawnErrorCode: (h as { spawnErrorCode?: string }).spawnErrorCode } : {}) };
     },
   };
   return { io, calls };
@@ -332,6 +349,39 @@ describe("R7 refreshAttach — ego-cli link", () => {
     expect(out.endpoint).toBe("");
     expect(out.cliPath).toBe("/usr/local/bin/ego-browser");
     expect(out.cliShape).toBe("direct");
+    // R1 — no opt-in, no injection.
+    expect(out.sdkPath).toBe("");
+  });
+
+  // R1 — the P0 fix: the path the probe used must survive into AttachState so
+  // `runEgoScript` can pass the same `--sdk-path` on every tool call.
+  it("records sdkPath when the opt-in probe actually used it (R1)", async () => {
+    const cache = createAttachCache();
+    const { io: ioImpl } = cliIo({ heredoc: { exitCode: 0, stdout: `${CLI_READY} object object\n` } });
+    const out = await refreshAttach({
+      targets: [cliLink({ useSdkPath: true })], activeTargetId: "cli", mode: "auto", cache,
+      cliIo: ioImpl as never, sdkPath: "/plugin/harness.js", now: () => 0,
+    });
+    expect(out.status).toBe("ready");
+    expect(out.sdkPath).toBe("/plugin/harness.js");
+  });
+
+  // R-1 — the probe fell back to the CLI's own harness (flag rejected), so the
+  // tool path must NOT inject a flag the CLI does not accept.
+  it("leaves sdkPath empty when the CLI rejects --sdk-path and the probe falls back (R-1)", async () => {
+    const cache = createAttachCache();
+    const { io: ioImpl } = cliIo({
+      heredocFor: (argv) => (argv.includes("--sdk-path")
+        ? { exitCode: 2, stdout: "", stderr: "unknown option '--sdk-path'" }
+        : { exitCode: 0, stdout: `${CLI_READY} object object\n` }),
+    });
+    const out = await refreshAttach({
+      targets: [cliLink({ useSdkPath: true })], activeTargetId: "cli", mode: "auto", cache,
+      cliIo: ioImpl as never, sdkPath: "/plugin/harness.js", now: () => 0,
+    });
+    expect(out.status).toBe("ready");
+    expect(out.message).toContain("does not support --sdk-path");
+    expect(out.sdkPath).toBe("");
   });
 
   it("tags cli-launch when the CLI answers but its browser is down", async () => {
@@ -445,5 +495,22 @@ describe("R7 decideAttach", () => {
   it("still demands an activation for cdp links", () => {
     const out = decideAttach({ ...base, linkKind: "cdp", hasActive: false });
     expect(out).toMatchObject({ kind: "error", code: "no-active-target" });
+  });
+});
+
+describe("lightpanda kind (managed serve singleton)", () => {
+  const lpRow = (id: string, servePath = "") => ({ kind: "lightpanda", id, label: "", servePath, enabled: true, note: "" });
+  it("coerceLink keeps the row and sanitizeLinks keeps only the FIRST lightpanda row", () => {
+    const r = sanitizeLinks([lpRow("a"), lpRow("b"), "junk", { kind: "cdp", id: "c", endpoint: "http://x:1", enabled: true, note: "" }]);
+    expect(r.links.map((l) => l.id)).toEqual(["a", "c"]); // a=singleton survivor, cdp row untouched
+    expect(r.links[0]!.kind).toBe("lightpanda");
+    expect(r.droppedLightpanda).toBe(1);
+    expect(r.droppedInvalid).toBe(1);
+  });
+  it("upsertLink refuses a second lightpanda row with a structured code", () => {
+    const links = sanitizeLinks([lpRow("only")]).links;
+    const added = upsertLink(links, { kind: "lightpanda", servePath: "" });
+    expect(added.ok).toBe(false);
+    if (!added.ok) expect(added.code).toBe("lightpanda-already-exists");
   });
 });

@@ -118,7 +118,7 @@ export interface EgoContext {
  * (enforced in `sanitizeLinks` / `upsertLink` / the panel). Array order is the
  * priority order and is unchanged by this widening.
  */
-export type BrowserLinkKind = 'cdp' | 'ego-cli'
+export type BrowserLinkKind = 'cdp' | 'ego-cli' | 'lightpanda'
 
 /** Fields every sequence entry shares. */
 export interface LinkBase {
@@ -135,6 +135,8 @@ export interface LinkBase {
   probeError?: string
   probeCode?: string
   probeAt?: number
+  /** Lightpanda backend — engine recognized from the last successful probe (`/json/version` `Browser` field). Absent on pre-Lightpanda rows → read as `'unknown'`. */
+  probeEngine?: 'chrome' | 'lightpanda' | 'unknown'
 }
 
 /** `kind: 'cdp'` — exactly what R1 shipped. */
@@ -161,8 +163,23 @@ export interface EgoCliLink extends LinkBase {
   useSdkPath?: boolean
 }
 
+/**
+ * `kind: 'lightpanda'` — a MANAGED Lightpanda serve the plugin launches and
+ * owns (one per machine, like `ego-cli`). Headless text-render engine: fast,
+ * good for quick trials placed EARLY in the sequence; it can never backstop
+ * manual flows (no window → no human login/captcha), which is what the
+ * headed kinds (CDP / local Chrome / ego CLI) are for. Order is priority:
+ * Lightpanda first = quick-trial first; after the headed kinds = it simply
+ * never wins, which is the intended fallback ordering.
+ */
+export interface LightpandaLink extends LinkBase {
+  kind: 'lightpanda'
+  /** '' = auto-resolve (PATH → ~/.local/bin; win32 runs inside WSL2 via wsl.exe). */
+  servePath: string
+}
+
 /** One slot of the user's ordered connection sequence. */
-export type BrowserLink = CdpLink | EgoCliLink
+export type BrowserLink = CdpLink | EgoCliLink | LightpandaLink
 
 /** @deprecated R7 renamed this to `CdpLink`; kept so R1-era imports still resolve. */
 export type CdpTarget = CdpLink
@@ -202,6 +219,13 @@ export interface JudgeSettings {
 /** Resolved (post-defaults) runtime config — the canonical key set. */
 export interface ResolvedConfig {
   isolateSpaces: boolean
+  /**
+   * A/C — the default task-space name used when a bcdp_* call omits `space`.
+   * `':auto'` is a sentinel (honoured only in isolated-sandbox mode) that
+   * derives `dsh-agent-<sessionId8>` per session; any other non-empty string is
+   * the literal slot name. resolveConfig folds empty→`'default'`.
+   */
+  defaultSpace: string
   /** Minutes without an bcdp_* call before the backing browser is auto-stopped. 0 = off. */
   idleTimeoutMin: number
   chromePath: string
@@ -220,6 +244,16 @@ export interface ResolvedConfig {
   runtimeArgs: string
   remoteEnabled: boolean
   legacyEgoToolNames: boolean
+  // ── 工具分级注入（见 src/toolTiers.ts；字面量联合就地声明以保持本文件零 import）─
+  /** lazy = 只常驻 core 级，其余按开关注入（默认）；always = 挂载即全量注册。 */
+  toolInjection: 'always' | 'lazy'
+  /** 一级一个开关：true = 开放注册，false = 封印（从模型工具列表消失）。core 级不可封印。 */
+  toolBrowse: boolean
+  toolExtended: boolean
+  /** 逃生舱级开关（cli / script）；开时冷启动即可用，不等浏览器活动。 */
+  toolEscape: boolean
+  /** 评审级开关；开 + 配了 JEV/Laya Key 才会真的注入。 */
+  toolJudge: boolean
   chromeArgs: string
   // ── R1/R7: connection sequence + activation ─────────────────────────────
   /**
@@ -239,6 +273,8 @@ export interface ResolvedConfig {
   allowLocalFallback: boolean
   localHeadless: boolean
   localUserDataDir: string
+  /** Lightpanda backend — extra `lightpanda serve` args (managed flags filtered by the launcher). */
+  lightpandaArgs: string
   // ── 阶段 10: JEV/Laya judge (see design-jev-pipeline.md) ────────────────
   //
   // These are first-class config, not "integration prerequisites in a footnote".

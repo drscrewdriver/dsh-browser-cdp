@@ -19,6 +19,7 @@ import type { SettingsBridge } from './settings.ts'
 import type { FfmpegInstallationManager, FfmpegStatus } from './ffmpeg-installation.ts'
 import type { LoginImportOptions, LoginImportReport } from './login-import.ts'
 import { EGO_LINUX_CDP_URL } from './cdp-targets.ts'
+import { BCDP_CDP_ENGINE } from './cdp/capabilities.ts'
 
 const WORKER_BIN = fileURLToPath(new URL('../bin/cdp-cast-worker.mjs', import.meta.url))
 
@@ -31,6 +32,8 @@ const WORKER_BIN = fileURLToPath(new URL('../bin/cdp-cast-worker.mjs', import.me
 // and no resolved endpoint simply means "no remote attach" (the worker then
 // behaves exactly as it did before R1).
 let attachWsUrl: string | null = null
+/** Lightpanda backend — engine of the attached endpoint, published next to it. */
+let attachEngine: 'chrome' | 'lightpanda' | 'unknown' | null = null
 /** Logger captured in initCastServer so module-level helpers can report. */
 let castLogger: { info?: (message: string) => void; warn?: (message: string) => void } | undefined
 
@@ -39,17 +42,26 @@ let castLogger: { info?: (message: string) => void; warn?: (message: string) => 
  * half whenever the ACTIVATED target changes (new target, new endpoint, or
  * mode switching away from remote). Returns true when the value actually
  * changed, which is the caller's signal that the worker must be recycled.
+ * The engine rides along so a spawned worker gets its capability projection
+ * via env (`BCDP_CDP_ENGINE`) instead of re-deriving it.
  */
-export function setAttachEndpoint(wsUrl: string | null): boolean {
+export function setAttachEndpoint(wsUrl: string | null, engine: 'chrome' | 'lightpanda' | 'unknown' | null = null): boolean {
   const next = wsUrl && wsUrl !== '' ? wsUrl : null
-  if (next === attachWsUrl) return false
+  const nextEngine = next === null ? null : engine
+  if (next === attachWsUrl && nextEngine === attachEngine) return false
   attachWsUrl = next
+  attachEngine = nextEngine
   return true
 }
 
 /** The endpoint the worker should attach to right now (null = none). */
 export function getAttachEndpoint(): string | null {
   return attachWsUrl
+}
+
+/** The engine of the attached endpoint (null = none attached). */
+export function getAttachEngine(): 'chrome' | 'lightpanda' | 'unknown' | null {
+  return attachEngine
 }
 
 /**
@@ -109,9 +121,35 @@ export function getLastEgoActivity(): number {
   return lastEgoActivity
 }
 
+// ── activity subscribers (tool-tier injection) ────────────────────────────
+// The tier controller needs the same signal the reaper reads — "a bcdp_* call
+// just happened" — but must not have to thread a callback through the nine
+// `markEgoToolCall()` call sites in the tool bodies. One module-level fan-out
+// keeps the tools oblivious to tiers.
+const activityListeners = new Set<() => void>()
+
+/**
+ * Subscribe to "one bcdp_* call just landed".
+ * @returns the unsubscribe function.
+ */
+export function onEgoActivity(cb: () => void): () => void {
+  activityListeners.add(cb)
+  return () => {
+    activityListeners.delete(cb)
+  }
+}
+
 export function markEgoToolCall(sessionId?: string): void {
   toolCallCount += 1
   lastEgoActivity = Date.now()
+  // Tier fan-out: never let a listener throw into the tool's own result path.
+  for (const cb of [...activityListeners]) {
+    try {
+      cb()
+    } catch {
+      /* tier reapply is best-effort; the tool call stands */
+    }
+  }
   // Push the new count to every connected SSE client immediately. The event
   // payload carries the counter AND the calling session id (when the caller
   // supplied one): the client scopes its sidebar auto-open to that session, so
@@ -461,6 +499,12 @@ function workerEnv(): NodeJS.ProcessEnv {
   const ws = getAttachEndpoint()
   if (ws) base[EGO_LINUX_CDP_URL] = ws
   else delete base[EGO_LINUX_CDP_URL]
+  // Lightpanda backend — the worker cannot read the host's attach cache, so
+  // the projected engine travels as data; an absent value means "full
+  // capabilities" (the pre-Lightpanda behavior).
+  const engine = getAttachEngine()
+  if (engine) base[BCDP_CDP_ENGINE] = engine
+  else delete base[BCDP_CDP_ENGINE]
   return base
 }
 

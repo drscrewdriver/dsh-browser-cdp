@@ -173,11 +173,11 @@ dshx list                                                # должно пока
 
 | Категория | Инструменты |
 |---|---|
-| Пространства задач | `bcdp_space_open` `bcdp_space_close` `bcdp_status` |
+| Пространства задач | `bcdp_space` (open/close/list/handoff/takeover) `bcdp_status` |
 | Чтение страниц | `bcdp_snapshot` (семантическое дерево) `bcdp_page_info` `bcdp_read_element` |
-| Навигация/ожидание | `bcdp_navigate` (повторно использует вкладку) `bcdp_wait` `bcdp_wait_for_selector` `bcdp_wait_for_url` `bcdp_wait_for_response` |
+| Навигация/ожидание | `bcdp_navigate` (повторно использует вкладку) `bcdp_wait` (duration/selector/url/response/load/function/request/event) |
 | Взаимодействие | `bcdp_click` `bcdp_fill` `bcdp_hover` `bcdp_drag` `bcdp_select` `bcdp_check` `bcdp_key` `bcdp_scroll` |
-| Выполнение/отладка | `bcdp_js` (вычисление на странице) `bcdp_cdp` (сырой CDP) `bcdp_cli` (произвольный heredoc) `bcdp_script` (многошаговый скрипт) |
+| Выполнение/отладка | `bcdp_js` (вычисление на странице) `bcdp_cdp` (сырой CDP) `bcdp_script` (heredoc; verbatim = raw, no preamble) |
 | Вывод | `bcdp_screenshot` `bcdp_download` `bcdp_upload` |
 | Сессия/безопасность | `bcdp_auth_flush` (персистентность входа) `bcdp_login_import` (импорт входа между браузерами) `bcdp_captcha` `bcdp_dialog` |
 | Мета-инструменты | `bcdp_help` `bcdp_doctor` `bcdp_http` |

@@ -1,5 +1,16 @@
 import { describe, it, expect } from "vitest";
-import { createActiveSpaceTracker, runWithStaleSpaceRetry } from "../src/index.ts";
+import {
+  createActiveSpaceTracker,
+  runWithStaleSpaceRetry,
+  runWithTabRevive,
+  isTabStuckFailure,
+  createSessionSpaceTracker,
+  deriveSlotDefaultName,
+  sessionSpaceToken,
+  attachSessionHint,
+  ATTACH_SESSION_HINT,
+  GLOBAL_SESSION_KEY,
+} from "../src/index.ts";
 
 describe("active ego task space", () => {
   it("routes omitted-space calls to the most recently opened space", () => {
@@ -101,5 +112,201 @@ describe("runWithStaleSpaceRetry", () => {
     const result = await runWithStaleSpaceRetry(fakeCtx(subprocess), fakeCfg(tracker), fakeExec, () => "script");
     expect(result.ok).toBe(false);
     expect(subprocess.calls).toBe(1);
+  });
+});
+
+// ── F: navigate tab-revive watchdog (a wedged/absent tab, not a cold start) ──
+
+describe("runWithTabRevive", () => {
+  const stuck = { exitCode: 1, stderr: "Error: no active tab to attach session" };
+  const ok = { exitCode: 0, stdout: '@@DSH_RESULT@@{"ok":true,"page":{}}' };
+
+  it("isTabStuckFailure matches tab-wedge signatures but not a plain cold start", () => {
+    expect(isTabStuckFailure({ ok: false, error: "no active tab to attach session", stdout: "", stderr: "" })).toBe(true);
+    expect(isTabStuckFailure({ ok: false, error: "navigation timed out after 20000ms", stdout: "", stderr: "" })).toBe(true);
+    expect(isTabStuckFailure({ ok: false, error: "ego-browser exited with code 1", stdout: "", stderr: "some other error" })).toBe(false);
+  });
+
+  it("revives once and retries when the tab is stuck, tagging recoveredFrom", async () => {
+    const tracker = createActiveSpaceTracker("dsh-agent");
+    // first navigate fails stuck → revive script → retry succeeds.
+    const subprocess = fakeSubprocess([stuck, ok, ok]);
+    const { result, recoveredFrom } = await runWithTabRevive(
+      fakeCtx(subprocess), fakeCfg(tracker), fakeExec, () => "navigate-script",
+    );
+    expect(result.ok).toBe(true);
+    expect(recoveredFrom).toBeTruthy();
+    expect(recoveredFrom).toContain("no active tab");
+    // exactly one revive in between: first attempt + revive + retry = 3 spawns.
+    expect(subprocess.calls).toBe(3);
+  });
+
+  it("returns recoveredFrom:null and spawns once on the normal path", async () => {
+    const tracker = createActiveSpaceTracker("dsh-agent");
+    const subprocess = fakeSubprocess([ok]);
+    const { result, recoveredFrom } = await runWithTabRevive(
+      fakeCtx(subprocess), fakeCfg(tracker), fakeExec, () => "navigate-script",
+    );
+    expect(result.ok).toBe(true);
+    expect(recoveredFrom).toBeNull();
+    expect(subprocess.calls).toBe(1);
+  });
+
+  it("does NOT revive an unrelated (non-tab) failure — hard cap respected", async () => {
+    const tracker = createActiveSpaceTracker("dsh-agent");
+    const subprocess = fakeSubprocess([{ exitCode: 1, stderr: "TypeError: something else broke" }]);
+    const { result, recoveredFrom } = await runWithTabRevive(
+      fakeCtx(subprocess), fakeCfg(tracker), fakeExec, () => "navigate-script",
+    );
+    expect(result.ok).toBe(false);
+    expect(recoveredFrom).toBeNull();
+    expect(subprocess.calls).toBe(1);
+  });
+
+  it("caps at ONE revive — a second stuck attempt is returned verbatim, not looped", async () => {
+    const tracker = createActiveSpaceTracker("dsh-agent");
+    // every attempt stuck; fakeSubprocess clamps to the last behavior.
+    const subprocess = fakeSubprocess([stuck]);
+    const { result, recoveredFrom } = await runWithTabRevive(
+      fakeCtx(subprocess), fakeCfg(tracker), fakeExec, () => "navigate-script",
+    );
+    expect(result.ok).toBe(false);
+    // first + revive + one retry, then STOP (hard cap 1) = 3 spawns, not more.
+    expect(subprocess.calls).toBe(3);
+    expect(recoveredFrom).toContain("no active tab");
+  });
+});
+
+// ── C: :auto per-session derivation (task_7 — both modes) ──────────────────
+
+describe("deriveSlotDefaultName (:auto expansion, C)", () => {
+  it("expands :auto to dsh-agent-<sid8> in isolated-sandbox mode", () => {
+    expect(deriveSlotDefaultName({ defaultSpace: ":auto", isolateSpaces: true }, "sess-1234567890")).toBe("dsh-agent-sess-123");
+  });
+  // v1.6.0: session isolation is the DEFAULT, so the sentinel is honoured in
+  // persistent mode too — space NAMING is orthogonal to profile persistence
+  // (isolateSpaces only decides disk-profile vs in-memory sandbox).
+  it("expands :auto the same way in persistent mode (isolation is the default)", () => {
+    expect(deriveSlotDefaultName({ defaultSpace: ":auto", isolateSpaces: false }, "sess-1234567890")).toBe("dsh-agent-sess-123");
+  });
+  it("keeps the global (no-session) slot on 'default' in either mode", () => {
+    expect(deriveSlotDefaultName({ defaultSpace: ":auto", isolateSpaces: true }, GLOBAL_SESSION_KEY)).toBe("default");
+    expect(deriveSlotDefaultName({ defaultSpace: ":auto", isolateSpaces: false }, GLOBAL_SESSION_KEY)).toBe("default");
+  });
+  it("passes a non-:auto configured name through verbatim (opt-in to a shared slot)", () => {
+    expect(deriveSlotDefaultName({ defaultSpace: "research", isolateSpaces: true }, "sess-1")).toBe("research");
+    expect(deriveSlotDefaultName({ defaultSpace: "research", isolateSpaces: false }, "sess-1")).toBe("research");
+    expect(deriveSlotDefaultName({ defaultSpace: "default", isolateSpaces: false }, "sess-1")).toBe("default");
+  });
+});
+
+// ── v1.6.0 regression: a real DSH sessionId must NOT collapse to 'session-' ──
+//
+// The old derivation was `sessionKey.slice(0, 8)`. Real DSH ids look like
+// `session-52adc205-3251-…`, so that yielded the literal `session-` for EVERY
+// session and all sessions shared one space — silently defeating isolation.
+describe("sessionSpaceToken (prefix-collapse regression)", () => {
+  it("strips the `session-` prefix so real DSH ids separate", () => {
+    expect(sessionSpaceToken("session-52adc205-3251-4fb4-8db0-716d56053365")).toBe("52adc205");
+    expect(sessionSpaceToken("session-11111111-aaaa-bbbb-cccc-dddddddddddd")).toBe("11111111");
+  });
+  it("gives two different DSH sessions two different tokens", () => {
+    const a = sessionSpaceToken("session-52adc205-3251-4fb4-8db0-716d56053365");
+    const b = sessionSpaceToken("session-9f3e7711-0000-1111-2222-333344445555");
+    expect(a).not.toBe(b);
+  });
+  it("never returns the bare prefix (the historical failure mode)", () => {
+    for (const id of [
+      "session-52adc205-3251-4fb4-8db0-716d56053365",
+      "session-abc",
+      "s",
+      "",
+    ]) {
+      expect(sessionSpaceToken(id)).not.toBe("session-");
+    }
+  });
+  it("uses a short id as-is, and only a degenerate id hashes", () => {
+    // Short ids stay readable AND distinct.
+    expect(sessionSpaceToken("alpha")).toBe("alpha");
+    expect(sessionSpaceToken("alpha")).not.toBe(sessionSpaceToken("beta"));
+    // An id that sanitizes to nothing still yields a deterministic 8-hex token.
+    const empty1 = sessionSpaceToken("");
+    const empty2 = sessionSpaceToken("");
+    expect(empty1).toBe(empty2);
+    expect(empty1).toMatch(/^[0-9a-f]{8}$/);
+  });
+  it("produces a space-name-safe token (alphanumerics/hyphens, at most 8 chars)", () => {
+    for (const id of ["session-52adc205-3251-4fb4-8db0-716d56053365", "weird id!!with spaces", "session-x"]) {
+      const tok = sessionSpaceToken(id);
+      expect(tok).toMatch(/^[A-Za-z0-9-]+$/);
+      expect(tok.length).toBeLessThanOrEqual(8);
+      expect(tok.length).toBeGreaterThan(0);
+    }
+    // A real DSH id consumes the full 8 chars.
+    expect(sessionSpaceToken("session-52adc205-3251-4fb4-8db0-716d56053365")).toHaveLength(8);
+  });
+});
+
+// ── B: session-keyed slots (task_11 resetToName scope, task_12 isolation) ───
+
+describe("createSessionSpaceTracker", () => {
+  const mk = () =>
+    createSessionSpaceTracker((key) => deriveSlotDefaultName({ defaultSpace: ":auto", isolateSpaces: true }, key));
+
+  it("isolates two sessions' active spaces (task_12)", () => {
+    const t = mk();
+    t.setCurrentSession("alpha");
+    expect(t.current()).toBe("dsh-agent-alpha"); // derived from sid
+    t.opened({ name: "vid" }, { ok: true, id: 7, name: "vid" });
+    expect(t.current()).toBe(7);
+
+    t.setCurrentSession("beta");
+    expect(t.current()).toBe("dsh-agent-beta"); // fresh slot, no bleed from alpha
+    t.selected("notes");
+    expect(t.current()).toBe("notes");
+
+    t.setCurrentSession("alpha");
+    expect(t.current()).toBe(7); // alpha's slot untouched by beta
+  });
+
+  it("routes no-session calls through the __global__ slot (backward compat)", () => {
+    const t = mk();
+    expect(t.current()).toBe("default");
+    t.selected("x");
+    expect(t.current()).toBe("x");
+    t.setCurrentSession(undefined);
+    expect(t.current()).toBe("x"); // still the global slot
+  });
+
+  it("resetToName only touches the current session slot (task_11)", () => {
+    const t = mk();
+    t.setCurrentSession("alpha");
+    t.opened({ name: "task" }, { ok: true, id: 3, name: "task" });
+    t.setCurrentSession("beta");
+    t.opened({ name: "other" }, { ok: true, id: 9, name: "other" });
+    // Beta restarts its space; reset must drop BETA to its name, not alpha's.
+    t.resetToName();
+    expect(t.current()).toBe("other");
+    t.setCurrentSession("alpha");
+    expect(t.current()).toBe(3); // alpha keeps the stale numeric id untouched
+  });
+});
+
+// ── G: heredoc attach-session escape hint (task_3) ─────────────────────────
+
+describe("attachSessionHint (G)", () => {
+  it("appends the useOrCreate guidance when the signature is present", () => {
+    const hinted = attachSessionHint("boom: no active tab to attach session");
+    expect(hinted).toContain("no active tab to attach session");
+    expect(hinted).toContain(ATTACH_SESSION_HINT);
+    expect(hinted).toContain("taskSpaces.useOrCreate");
+  });
+  it("is idempotent — never double-appends the hint", () => {
+    const once = attachSessionHint("no active tab to attach session");
+    expect(attachSessionHint(once)).toBe(once);
+  });
+  it("leaves unrelated errors untouched", () => {
+    expect(attachSessionHint("TypeError: nope")).toBe("TypeError: nope");
+    expect(attachSessionHint(undefined)).toBe("");
   });
 });

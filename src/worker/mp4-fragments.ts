@@ -1,11 +1,20 @@
+/**
+ * Incremental parser for fragmented-MP4 streams produced by FFmpeg
+ * (`empty_moov+default_base_moof+frag_keyframe`). Splits the byte stream on
+ * box boundaries and emits two callback events: the init segment
+ * (ftyp+moov) once, then each media fragment (moof+mdat) as it completes.
+ * Only 32-bit box headers are supported; any other box order is an error.
+ */
 const MAX_BOX_BYTES = 64 * 1024 * 1024
 
+/** Callback sinks + safety cap for Mp4FragmentParser. */
 export interface Mp4ParserOptions {
   onInit: (data: Buffer) => void
   onFragment: (data: Buffer) => void
   maxBoxBytes?: number
 }
 
+/** Stateful box splitter: feed via push(), close with end() to detect truncation. */
 export class Mp4FragmentParser {
   onInit: (data: Buffer) => void
   onFragment: (data: Buffer) => void
@@ -25,6 +34,7 @@ export class Mp4FragmentParser {
     this.ready = false
   }
 
+  /** Append a raw chunk and emit every MP4 box that is now fully buffered. */
   push(chunk: Uint8Array | Buffer): void {
     this.buffer = Buffer.concat([this.buffer, Buffer.from(chunk)])
     while (this.buffer.length >= 8) {
@@ -39,10 +49,12 @@ export class Mp4FragmentParser {
     }
   }
 
+  /** Signal end of stream; throws if a partial box is still buffered. */
   end(): void {
     if (this.buffer.length !== 0) throw new Error('truncated MP4 stream')
   }
 
+  /** Route one complete box: init phase collects ftyp/moov, media phase pairs moof+mdat. */
   #box(type: string, box: Buffer): void {
     if (!this.ready) {
       if (type !== 'ftyp' && type !== 'moov') throw new Error(`unexpected MP4 init box ${type}`)

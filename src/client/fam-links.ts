@@ -30,6 +30,9 @@ export const MAX_LINKS = 32
 /** Local ego CLI singleton default label — mirrors host `EGO_CLI_LABEL`. */
 export const EGO_CLI_LABEL = '本机 ego CLI'
 
+/** Lightpanda managed-serve singleton default label — mirrors host `LP_LABEL`. */
+export const LP_LABEL = 'Lightpanda（受管）'
+
 /**
  * Loose view of one stored row. Every field is optional because the settings
  * union's keys are runtime-optional and rows may predate a field; rows we
@@ -42,6 +45,7 @@ export interface FamLinkRow {
 	endpoint?: string
 	cliPath?: string
 	useSdkPath?: boolean
+	servePath?: string
 	enabled?: boolean
 	note?: string
 	probeStatus?: 'unknown' | 'ok' | 'error'
@@ -49,10 +53,11 @@ export interface FamLinkRow {
 	probeError?: string
 	probeCode?: string
 	probeAt?: number
+	probeEngine?: string
 }
 
 /** Structured rejection codes — mirror the host `upsertLink` vocabulary. */
-export type FamAddErrorCode = 'ego-cli-already-exists' | 'link-limit-reached' | 'unusable-row'
+export type FamAddErrorCode = 'ego-cli-already-exists' | 'lightpanda-already-exists' | 'link-limit-reached' | 'unusable-row'
 
 /** Flat add result: `code` present = rejected (mirror of upsertLink's `{ok,code}`). */
 export interface FamAddResult {
@@ -120,9 +125,32 @@ export function buildCliRow(input: { label?: string; cliPath?: string }): FamLin
 	}
 }
 
+/** Full-field lightpanda row (`servePath` '' = host auto-resolve chain). */
+export function buildLpRow(input: { label?: string; servePath?: string }): FamLinkRow {
+	const servePath = trimmed(input.servePath)
+	return {
+		kind: 'lightpanda',
+		id: newLinkId(),
+		label: trimmed(input.label) || LP_LABEL,
+		servePath,
+		enabled: true,
+		note: '',
+		probeStatus: 'unknown',
+		probeLatencyMs: 0,
+		probeError: '',
+		probeCode: '',
+		probeAt: 0,
+	}
+}
+
 /** Second ego-cli anywhere in the array would be silently dropped on read. */
 export function hasCliLink(links: FamLinkRow[]): boolean {
 	return links.some(function (row) { return row.kind === 'ego-cli' })
+}
+
+/** Second lightpanda anywhere in the array would be silently dropped on read. */
+export function hasLpLink(links: FamLinkRow[]): boolean {
+	return links.some(function (row) { return row.kind === 'lightpanda' })
 }
 
 export function isFull(links: FamLinkRow[]): boolean {
@@ -136,6 +164,7 @@ export function isFull(links: FamLinkRow[]): boolean {
  */
 export function addRow(links: FamLinkRow[], row: FamLinkRow): FamAddResult {
 	if (row.kind === 'ego-cli' && hasCliLink(links)) return { links, code: 'ego-cli-already-exists' }
+	if (row.kind === 'lightpanda' && hasLpLink(links)) return { links, code: 'lightpanda-already-exists' }
 	if (links.length >= MAX_LINKS) return { links, code: 'link-limit-reached' }
 	if (row.kind === 'cdp' && !isValidEndpoint(row.endpoint)) return { links, code: 'unusable-row' }
 	return { links: links.concat([row]) }
@@ -179,7 +208,7 @@ export function moveRow(links: FamLinkRow[], id: string, delta: -1 | 1): FamLink
 export function applyProbe(
 	links: FamLinkRow[],
 	id: string,
-	outcome: { ok: boolean; code?: string; message?: string; latencyMs?: number },
+	outcome: { ok: boolean; code?: string; message?: string; latencyMs?: number; engine?: string },
 	at: number,
 ): FamLinkRow[] {
 	return updateRow(links, id, {
@@ -188,5 +217,6 @@ export function applyProbe(
 		probeError: outcome.ok ? '' : (outcome.message || ''),
 		probeCode: outcome.ok ? '' : (outcome.code || ''),
 		probeAt: at,
+		...(outcome.engine === undefined ? {} : { probeEngine: outcome.engine }),
 	})
 }

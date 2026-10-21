@@ -1,4 +1,193 @@
+## 1.6.0 (2026-10-21)
+
+**默认行为变更：会话隔离成为默认。** 一个 `bcdp_*` 调用**省略 `space`** 时，不再落到跨会话共享的 `default`，而是落到**本会话自己的**任务空间 `dsh-agent-<会话id前8位>`；只有**显式**写 `space: 'default'`（或 `op=open name='default'`）才使用共享具名槽。
+
+### 变更：默认任务空间改为按会话派生
+- `resolveConfig` 中 `defaultSpace` 的**空值折叠目标**由 `'default'` 改为 `':auto'`：不配置即为会话隔离，无需额外开关。
+- `deriveSlotDefaultName` **取消 `isolateSpaces` 门**：`:auto` 在持久模式与沙箱模式下**都**派生 `dsh-agent-<sid8>`。空间**命名**与 `isolateSpaces`（只管 Profile 落盘 vs 内存沙箱）是两条独立的轴，此前把两者绑死，导致「持久模式下配 `:auto` 也永远得到 `default`」。
+- 显式 `space: 'default'` / `op=open name='default'` 仍完全可用：该会话随后固定用这个共享槽。把 `defaultSpace` 设成具名值（如 `default`）可全局退回旧行为。
+- 无 session 的调用（`__global__` 槽）仍回落 `default`，向后兼容。
+
+### 修复：真实 DSH 会话 id 会塌缩成同一个空间
+- 旧派生用 `sessionKey.slice(0, 8)`。真实 DSH id 形如 `session-52adc205-3251-…`，前 8 位恒为字面量 **`session-`**，于是**所有会话撞进同一个 `dsh-agent-session-` 空间**，隔离在无声中完全失效（不报错，只是共用上下文）。
+- 新增 `sessionSpaceToken()`：先剥掉 `session-` 前缀、去掉非 `[A-Za-z0-9-]` 字符，再取 8 位；短 id 原样使用（仍唯一）；退化/空 id 用 FNV-1a 哈希兜底保证非空。
+- 补 5 条回归测试：真实 id 正确分离（`session-52adc205-…` → `52adc205`）、两会话 token 不同、永不返回裸前缀 `session-`、短 id 原样、token 合法且 ≤8 位。
+
+### 文档与描述
+- `bcdp_space` 描述改为教新默认语义：省略 `space` = 本会话空间；要共享才显式传 `default`。
+- `Config.defaultSpace` 的 schema 描述同步；`README` 的「任务空间命名与并发隔离」小节重写为 1.6.0 口径，附「你怎么写 → 落到哪个空间」对照表，并记录 `session-` 塌缩这个坑。
+
+### 迁移指引
+- **无需任何操作**：默认即隔离。
+- 想维持「所有会话共用一个空间」的旧行为：把 `defaultSpace` 设为 `default`，或在调用里显式 `space: 'default'`。
+- 注意：会话空间是**按会话命名**的命名空间，不是「每个会话独立 Cookie」。是否把登录态落盘仍由 `isolateSpaces` 决定；Profile 持久模式下登录态依然跨重启保留。
+
+### 验证
+- `npm run typecheck` EXIT 0；`npm run test` **866 passed / 12 skipped（878）**（较 1.5.0 的 861 增 5 项 token 回归）；`npm run build` 三 bundle complete。
+- 确认 profile / 设置存储中无持久化的 `defaultSpace` 残留，新默认会生效（`~/.dsh` 全量扫过，命中均在记忆库与会话缓存，非插件配置）。
+
+## 1.5.0 (2026-10-21)
+
+**破坏性变更**：工具面三族合并（计划组 `bcdp-tool-consolidation`）。`wait` / `space` / `escape` 三族按 `op` 收口，工具数 **41 → 34**，全量 schema **24,093 → 22,224 字符**（净省 1,869，天花板 24,094 未上调）。旧工具名**直接移除**，不保留薄别名——别名同样占 schema 预算，保留等于没省。迁移表见 README「1.5.0 迁移表」。
+
+### 移除（破坏性）：8 个旧工具名
+- `bcdp_wait_for_selector` / `bcdp_wait_for_url` / `bcdp_wait_for_response` / `bcdp_wait_page` → 并入 `bcdp_wait` 的 `op=selector|url|response|load|function|request|event`。
+- `bcdp_space_open` / `bcdp_space_close` → 并入 `bcdp_space` 的 `op=open|close`（原有 `op=list|handoff|takeover` 不变）。
+- `bcdp_cli` → 并入 `bcdp_script` 的 `verbatim:true`（裸 heredoc、无 preamble、返回含 `output` 合并文本）。
+
+### 变更：三族为何可合（同源证据）
+- **wait（5 → 1）**：五个工具共用同一 `useSpace(...)` + `ensureRealTab()` preamble、同一 `timeout` 语义、同一 `space` 参数；`bcdp_wait_page` 本身已是 `op` 多动作形态，合并是把既有范式用完，不是新范式。
+- **space（3 → 1）**：`bcdp_space` 本就是 op 工具（list/handoff/takeover），open/close 只是没并进去。
+- **escape（2 → 1）**：`bcdp_cli` 与 `bcdp_script` 是同一 heredoc 运行时，唯一差异是 preamble（script 先选空间 + 激活真实 tab）。
+
+### 修复：空间追踪的分派基准随合并调整
+- 共享 `t()` 包装器的 `afterExecute` 原按**工具名**分派 tracker（`bcdp_space_open` → `spaceTracker.opened`、`bcdp_space_close` → `spaceTracker.closed`）。三族合并后工具名不再携带动作信息，改为按 `args.op` 分派。若不改，活动空间追踪会**静默失效**（不报错、只是状态不对）。已补三条单测直接观察该唯一用户可见效应（后续调用解析到的默认空间）。
+
+### 保留的守卫（逐字未动）
+- `op=function` 仍用 `safeEvalWrap(expr, true)`（preserveFalsy）——否则 DOM/window 返回值会撞 SDK 的 `Object reference chain is too long`。
+- `timeout` 默认值分档不变：普通 op 10,000ms、页面级 op（load/function/request/event）30,000ms。
+- 各 op 的失败均可归因：`reason` 带 op 名（如 `bcdp_wait: selector is required for op=selector`），不退化为裸 `ok:false`。
+- `handoff` 后同脚本不碰 `page.*` 的硬停（P0-5）、`ensureRealTab`、`attachSessionHint` 全部保留。
+
+### 变更：默认注入面更窄
+- `lazy` 默认档下不碰浏览器的会话在场工具 **10 → 7**（core 6 + escape 1 = 4,978 字符 ≈ 1,430 token）；`always` 全量 34 件 = 22,224 字符。
+- `core` 批次 **8 → 6**、`wait` 批次 **5 → 1**、`escape` 批次 **2 → 1**。
+
+### 文档
+- 6 个 README（`README.md` + de/es/fr/it/ru）工具表、分级表、注入面实测值、core 计数全部同步；主 README 新增「1.5.0 迁移表」。
+- `help.ts` 工具清单与 `navigate` / `wait` / `network` / `script` 四个 topic 改为合并后口径。
+
+### 验证
+- `npm run typecheck` EXIT 0；`npm run test` **861 passed / 12 skipped（873）**（三族合并新增 11 项断言）；`npm run build` 三 bundle complete。
+- 全量 schema 门：**34 工具 / 22,224 字符 ≤ 24,094**（实测落值，非估算）。
+- `npm pack --ignore-scripts` 出 `dsh-browser-cdp-1.5.0.tgz`，解包 `lib/index.js` SHA256 与本地构建逐字节一致。
+
+## 1.4.1 (2026-10-21)
+
+空间命名与并发隔离加固（计划组 `bcdp-space-ns-hardening`，A/B/C/D1/E/F/G）。按风险分级落地，SDK 快照编号生成逻辑（D3）不在本轮改，以 D1 插件层解法替代。
+
+### 新增（A）：可配置默认空间
+- `Config.defaultSpace`（zod `.volatile()` 标量）：空值折叠为 `DEFAULT_SPACE='default'`，热更新无需重注册。`resolveConfig` 出的字段与运行时活值分离——`cfg.activeSpace` 是**当前会话槽**的实时值，`cfg.defaultSpace` 是**配置/schema** 值，避免二者撞名引发的 `EgoRuntimeConfig ↔ ResolvedConfig` 结构镜像类型断裂。
+
+### 新增（B）：会话级空间隔离
+- `createSessionSpaceTracker` + `GLOBAL_SESSION_KEY='__global__'`：把单一 `ActiveSpaceTracker` 升级为按 sessionId 键控的 `Map<string,Slot>`，`SessionSpaceTracker extends ActiveSpaceTracker` 增 `setCurrentSession` / `currentSession`。每个 `bcdp_*` execute 顶部先 `cfg.spaceTracker.setCurrentSession(callingSessionId(exec))`，并发多会话各开各空间互不漂移；无 session 调用落 `__global__` 槽保持向后兼容。
+
+### 新增（C）：`:auto` 派生名
+- `AUTO_SPACE_SENTINEL=':auto'`：沙箱模式（`isolateSpaces:true`）下默认名派生为 `dsh-agent-${sessionId.slice(0,8)}`（`AUTO_SPACE_PREFIX='dsh-agent-'`，沿用历史前缀）；持久模式折叠为具名单槽。
+
+### 变更（D1）：跨调用稳定定位
+- `bcdp_snapshot` 三处 `snapshotRaw` 统一带 `includeStableLocator: true`，输出含 `loc=css:/loc=role:/loc:href:` token；subtree 解析优先 `loc=`（跨子进程稳定）而非 `@N`（每次快照重编）。零 SDK 改动，活体验证：`bcdp_click` 吃 `loc=...` 命中。schema 预算门（≤+15%）以压缩描述守住，未放宽天花板。
+
+### 修复（E）：页内返回值防御序列化
+- `safeEvalWrap(expr, preserveFalsy)`：根因是 SDK 自身 `handleMessage` 序列化在 `page.evaluate` 返回 DOM/window 时抛 `Object reference chain is too long`（硬拒在 SDK 内层，早于任何外层 `safe()`），故修复必须在页内完成。`bcdp_wait_page op=function` 与 `bcdp_js` 套同款返回值降级包裹，返回 window/DOM 时 `ok:true` 且 value 为描述串。
+
+### 修复（G）：heredoc 错误引导
+- `attachSessionHint` / `ATTACH_SESSION_HINT`：`bcdp_cli` / `bcdp_script` 错误含 `no active tab to attach session` 时追加一行「先 `await taskSpaces.useOrCreate(name)`」引导，把裸 heredoc 缺 preamble 的坑点名给出，不留模型重新踩。
+
+### 新增（F）：navigate 卡死自愈 watchdog
+- `runWithTabRevive` + `isTabStuckFailure`（`TAB_STUCK_RE`）：复刻 `runWithStaleSpaceRetry` 骨架但换触发条件为 eval 超时 / `no active tab` / 主线程挂死特征，复位动作为先开新空白 tab 再关挂死 tab（顺序关键：先关会触发末-tab 守卫留下死 tab），重试**硬上限一次**，二次仍卡如实返回不循环（拒绝假绿）。`bcdp_navigate` 经 `tabRevive:true` opt-in，结果附 `recoveredFrom`（正常路径为 `null`）。
+
+### 测试
+- 新增 `runWithTabRevive` 5 条（tab-stuck 特征识别、恢复一次打标记、正常路径单次 spawn 不复活、非 tab 失败不复活、硬上限一次不循环）。全量 **832 passed / 12 skipped**，两套 `tsc` 通过，`tsdown` build 过，schema 预算门绿。
+
+## 1.2.4 (2026-10-21)
+
+### 修复（P0）
+- **`--sdk-path` 贯通到工具执行**：此前只有探测路径带 `--sdk-path`，`runEgoScript` 拼 argv 时不带，`ego-cli` + `useSdkPath: true` 下每个脚本首行都崩 `ReferenceError: taskSpaces is not defined`。现在 `AttachState.sdkPath` 记录探测实际用过的 harness，`buildEgoToolArgv()` 统一为探测与执行构造 argv。写入条件带 R-1 守卫（`useSdkPath && probe.warning === undefined`）：CLI 不认该旗标并回退时，执行侧不会强塞一个它不认的参数。
+
+### 修复（P1）
+- **`bcdp_status` 改 facade 探针**：不再 spawn 官方 CLI 不存在的 `--status`，改为与干活同通道的 `nodejs` 探针，检查 `taskSpaces`/`browser`/`page` 三个 facade；输出新增 `facades` 字段，超时 25s → 15s（实测约 300ms）。
+- **就绪探针不再假阳性**：`useSdkPath` 打开时，除 sentinel 外还要求 `taskSpaces`/`browser` 均为 `object`；未打开时保持原判据，vendored runtime 不受影响。
+- **`--open` / `--stop` 按 link kind 门控**：`ego-cli` 下浏览器本就可见，`--open` 直接返回成功；空闲回收与卸载清理**绝不**对用户自己的 ego lite 发 `--stop`（三处均带明确日志）。
+
+### 变更（P2）
+- `bcdp_space_close` 从 browse 归入 core，与 `bcdp_space_open` 配对。
+- **Schema 压缩**：按 AST 实测成本压缩 Top 工具（`login_import` / `jev_ask` / `http` / `download` / `click` / `jev_run` / `jev_attempt` / `wait_for_selector` / `key` / `read_element` / `wait_for_response`），全量 22,836 → 18,834 字符（-17.5%）。测量口径见 `ego-browser-cdp-issues.md` §9.0。
+- **browse 注入批次**：内部按 `act → observe → wait` 顺序放行，对外仍是 4 个开关；`always` 模式不受影响。
+
+### 文档
+- `runtime/skills/ego-browser/SKILL.md` 更新为官方 `ego-browser skill` v2.1.0（550 行，ego lite 0.6.0.16）。
+- README 补 `useSdkPath` / `--sdk-path` 语义与「双 API 面共存风险」（插件 `taskSpaces.*` vs 官方 `taskSpace()`）。
+
+### 验证
+- 全测 **779 passed / 12 skipped**；两套 `tsc` 通过；`tsdown` build 过。
+
+## 1.2.2 (2026-10-18)
+
+- hosts: 追加 0.2.1-rc.2 声明面枚举（34/34 @deepseek-ai/* 宿主 peer 逐包 npm 实测 rc.2 在版；本插件不触 ctx.web provider 与 conversation.input.model.label 槽，代码零改动，纯元数据发版；农场 rc.2 格挂账待命）
+
 > ⚠️ **0.18.10 已被 registry 烧号**：npmjs 受理后长期停留在 staged 状态从未提交（读路径 404、重发 `EPUBLISHCONFLICT: previously staged`），版本号永久不可安装——**安装请用 0.18.11**（内容 = 0.18.10 全部 + dock 注册诊断 `__dshBrowserCdpDeco` + locale 补齐 + 点选卡片正则放宽）。0.18.5 同前例。
+
+## [1.2.0] - 2026-10-15 — 工具分级注入（默认 lazy）+ 设置开关胶囊化与乐观锁写入
+
+> **升级影响（从 1.1.5）**：默认档从「挂载即注册 38 个」变为 **`lazy`**——不碰浏览器的会话只常驻 6 个核心工具，首次 `bcdp_*` 调用后按开关注入。工具**名字与签名零改动**，只改出现时机；若你有脚本期望任一 `bcdp_*` 无条件在场，把设置页 `toolInjection` 改回 `always` 即可（volatile 热更，不需重启）。另外评审级（`bcdp_jev_*` 5 件）现在额外要求配了 JEV/Laya Key 才注入——没 Key 它们本来也只能回答「未配置」。
+
+### 新增：工具分级注入
+- **`src/toolTiers.ts`**：把「哪个工具在什么条件下允许注册」收成一处纯函数策略，附 `createTierInjector` 控制器（`offer`/`reapply`/`surface`），只接一个 `register` 回调、不依赖 Cordis，可脱离宿主单测。四级：**core**（6：`status`/`doctor`/`help`/`space_open`/`navigate`/`snapshot`，常驻不可封印——否则 lazy 连解锁入口都没有）/ **browse**（14）/ **extended**（13）/ **judge**（5）。
+- **一级一个封印开关**（学 prime-memory 的「工具封印」同形同极性）：`toolInjection`（`lazy` 默认 / `always`）、`toolBrowse`、`toolExtended`、`toolJudge`，全部 volatile + schema `.default()`；ON = 开放注册、OFF = 封印（反注册，从模型工具列表消失，不是执行期拒绝）。封一级不波及别级。
+- **活动驱动注入**：解锁信号挂在 `markEgoToolCall()` 的模块级 fan-out（新 `onEgoActivity()`）上，九个工具体零改动；`bcdp_status`/`bcdp_help`/`bcdp_doctor` 走独立 `pulse`（不借 `markEgoToolCall`，那会顺带弹开侧栏观察面板）。`bridge.onChange(() => tiers.reapply())` 让设置页翻开关当场重算注入面。
+- **闲置自动收回**：`lazy` + `idleTimeoutMin > 0` 时，reaper 停掉后台浏览器的同一刻收回扩展面，下次活动重新铺开。
+- **`bcdp_doctor` 首行报注入面**：`tool injection: mode=lazy browse=open extended=open judge=open judgeKey=none active=no → live 6 / sealed 32`；`bcdp_help` 新增 `topic=injection`（含「工具不在列表里就先跑 status/doctor，别猜不存在的工具名」）。
+- 设置面：GUI 卡片新增首位分块「工具封印」（原在「基础」背后），TUI `SettingsSection` 四字段同样排到 `fields` 最前。
+
+### 新增：设置卡开关形态与写路径
+- **胶囊开关 `FamSwitch`**：布尔项不再用原生 `type='checkbox'`，改为 38×22 主题令牌胶囊（`--dsw-alias-bg-brand` / `--dsw-alias-bg-module-platform`，带 fallback），旋钮 `translateX(16px)` + 0.16s 过渡；用原生 `<button role="switch" aria-checked>` 自带聚焦与回车/空格。卡内三处裸 checkbox（links 行启用 / CLI sdk 路径 / auto 回落许可）一并换形。
+- **`FamBoolRow` 乐观态**：点下去先本地翻转（pending 半透、锁重复点击），宿主快照追上来才清 pending；重试预算用尽则**弹回宿主真值 + 亮一行提示**（中英双语）——开关停在「看起来改了其实没改」是最坑的状态。
+- **乐观锁写入 `src/client/fam-write.ts`**：`commitField(scope, field, value)` 默认 3 次尝试、间隔 300ms；`set` 同步抛 / reject / 返回 false 三条失败路径同等处理，异常不漏进 React 事件回调。卡内 14 个写入点全部收口，`scope.set(` 裸调用清零。
+
+### 修复
+- **`src/settings.ts` 崩溃**：`installSettingsAuto` 对 `createRequire('@deepseek-ai/dsh-settings')` 的返回值直接解引用（`typeof legacyModule.installSettingsSection`）——该包不在宿主 `node_modules` 时（TUI/headless/测试）`legacyModule` 为 `undefined`，整个 `apply()` 抛 `TypeError`。改为可选链。由新挂载测试暴露。
+- **桥轨拒写先重读再报失败**：`makeBridgeScope().set` 以前在 `settings-conflict` 时 `void refresh()` 后立即 `return false`，手里 `revision` 还是陈的，上层重试等于白重。现在把 `describe` 等到底再交回失败（网络异常同路）。
+
+### 不变量
+- 38 个工具的名字、`description`、`parameters` 签名**零改动**——只改出现时机，不改手感。窄工具（一个动作一个工具）是模型写对参数、少重试的护栏，合并成脚本逃生舱不划算。
+- `runtime/` 零改动；`Browser.close` 不发目标端点等既有守卫不变。
+- 重试不会丢更新：宿主 `settings.mutate(ns, ops, expectedRevision)` 在 revision 不匹配时**拒写而不是覆盖**，所以重放的是自己这一次改动。
+
+### 测试
+- 新增 39 条：`tests/tool-tiers.test.ts`（17：分级表与源码 38 个 `name: 'bcdp_*'` 双向对齐的漂移守卫、四道闸矩阵、控制器幂等与单级封印）、`tests/tier-mount.test.ts`（9：最小宿主替身真走一遍 `apply()`，验默认 6 / `always` 33 / `always`+Key 38 / 活动后 33 / 单封 extended 后 20 / 配 Key 当场出现 / `ego_*` 别名跟随本体 / 卸载归零）、`tests/fam-write.test.ts`（6）、`tests/client-switch.test.ts`（4 条源码契约）。
+- `tests/fam-links.contract.test.ts` 三处钉住旧 `scope.set(...)` 形态的契约断言同步换为 `commitField(scope, …)`。
+
+### 验证
+- 全测 **749 passed / 12 skipped**；两套 `tsc` 通过；`tsdown` build 过；`npm pack` 走 `prepack` 重建，包内 `lib` 与仓库逐字节一致（V6a）。
+
+> 本机验证迭代 1.1.6-local.1 / 1.1.7-local.1 / 1.1.8-local.1 已折叠进上面的 1.2.0，未单独发布（那三个号只存在于本地 tgz 与 desktop profile 的 `file:` 指针）。
+
+## [0.18.21] - 2026-10-04 — Lightpanda 受管行类型：按系统拉起 serve，有头/无头分型，顺序即优先级（同 0.17.25 同源）
+
+### 新增
+- **新连接类型 `lightpanda`（本机单例，同 ego-cli 规则）**：设置面板「添加 Lightpanda（受管）」入列，可排序/激活；插件负责 serve 的拉起/复用/停止。win32 经 WSL2（`wsl.exe -- lightpanda serve …`，遥测 env 经 WSLENV 带入），linux/mac 本机直装（显式路径 → `~/.local/bin` 等安装根 → PATH）。
+- **有头/无头分型与顺序语义**（面板徽标 `LP·无头` + 行内提示）：CDP 端点/本机 Chrome/ego CLI 是有头类型——可人工兜底（手动输账号、过验证码）；Lightpanda 是无头类型——无法人工介入，只适合快速试验。顺序即优先级：LP 排前 = 快速场景优先用；排有头类型后 = 兜底优先，LP 实际不会被启用。
+- **引擎互斥单例**：登记表带 engine 字段；受管 Chrome 与 Lightpanda 抢同一受管槽。win32 停止对 WSL 内进程做定向 pkill 兜底。
+- **doctor/help**：links 计数含 lightpanda + 行状态；help topic=lightpanda 更新。
+
+### 变更
+- `cdpMode=remote` 下激活 LP 行显式报 `mode-kind-mismatch`；probe 回写 `probeEngine`；`lightpandaArgs` 设置键（受管旗标过滤）。
+
+### 验证
+- 全测 714 passed / 12 skipped；两套 `tsc` 通过；build 过；`runtime/` 零改动。
+
+## [0.18.20] - 2026-10-04 — Lightpanda 作为可选后端（P0）：识别投影 + 全链降级（同 0.17.24 同源）
+
+### 新增
+- **引擎识别与能力投影**：`src/cdp/capabilities.ts` 单点权威（`engineOf` 认 `/json/version` 的 `Browser: Lightpanda/…` 前缀，`capabilitiesFor` 出投影；unknown/chrome 恒=全能力）。probe/attach 双时机识别：link 新增 `probeEngine` 探针字段 + `AttachState.engine`，面板 badge / `cdp-status` / `cdp-probe` / `bcdp_doctor` 可见，旧行收敛 `'unknown'`。
+- **engine 跨进程传递**：spawn env `BCDP_CDP_ENGINE`（循 `EGO_LINUX_CDP_URL` 先例）——host 侧投影一次，worker/render 子进程只读不重算。
+- **真机探针** `tests/cdp-probe/lightpanda.probe.test.ts`（`LP_PROBE_URL` 自跳过；8 断言：识别 / navigate+lifecycleEvent / evaluate+AXTree / png 出图 + jpeg 结构化 -32000 / cookies 往返 / Overlay UnknownMethod 且 session 不受污染 / Input 注入 / Network 事件五件套）。
+
+### 变更（识别 lightpanda 后自动降级，无需配置）
+- **format 四处收口**：worker screencast + backstop、**jev capture（不修则 LP 上 jev 视觉链 -32000 全链硬失败）**、worker `/api/marks`——LP 下 wire 全 `format:'png'` 且无 `quality`；`bcdp_captcha`/jev 输出带 `engine`/`rendering:'text'` 元数据。
+- **观察窗**：无 screencast 时拒绝启动采集循环，status/SSE 带 `engineUnsupported`，两面板降级提示条；SSE 帧按 `fmt` 选用 png/jpeg data URL。
+- **pick**：`/api/pick` engine-gate 返回 `engine-unsupported`（i18n）；坐标回退 `/api/pick/click` 经依赖验证**保留可用**。
+- **`bcdp_download`**：注册处 gate，结构化报错不挂起；**`bcdp_auth_flush`** LP 下返回 `degraded: true`。
+- **doctor/help**：engine + 降级清单 + 分系统安装指引（win32→WSL2 内置方案，linux/mac→一键脚本 + `~/.local/bin` PATH）；`bcdp_help` 新增 `topic=lightpanda`；工具清单补漏的 `bcdp_jev_attempt`（38 个）。
+- **README/HANDOVER/THIRD_PARTY_NOTICES**：Lightpanda 小节 + AGPL 客户端使用声明。
+- **0.2.0 线适配**：client i18n 已内联（locales.ts 本线已删），`engineUnsupportedBanner`/`engineUnsupportedPick` 并入 `watchEn`/`watchZh` 内联字典。
+
+### 不变量
+- **`Browser.close` 永不发目标端点**：唯一合法调用点 = login-import 本地临时 Chrome；`tests/browser-close-invariant.test.ts` 源码扫描钉死。`runtime/` 零改动；unknown/chrome 行为逐位不变。
+
+### 验证
+- 全测 706 passed / 12 skipped；两套 `tsc` 通过；`tsdown` build 过。
 
 ## [0.18.19] - 2026-10-03 — 真机反馈⑩：点选特征采集换轨——纯文本链接读元素自身可见文本（同 0.17.23 反向同源）
 

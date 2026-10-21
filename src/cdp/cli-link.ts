@@ -233,6 +233,20 @@ export function parseCliStatus(stdout: string): { ok: true; running: boolean } |
 }
 
 /**
+ * R4 — the ego CLI may route the embedded runtime's output to either stream.
+ * 0.6.0.16 on Windows sends everything (console.log, process.stdout.write and
+ * our sentinels) to stderr and leaves stdout empty, so every sentinel/facade
+ * reader must look at both. stdout goes first: when a CLI writes to both, the
+ * authoritative payload stays where it always was.
+ * @internal exported for tests
+ */
+export function mergeCliOutput(result: { stdout: string; stderr: string }): string {
+  if (result.stdout === '') return result.stderr
+  if (result.stderr === '') return result.stdout
+  return `${result.stdout}\n${result.stderr}`
+}
+
+/**
  * Probe one link end to end: resolve → pick a working shape → (optionally)
  * read `--status` → confirm with a real heredoc round-trip.
  *
@@ -288,13 +302,16 @@ export async function probeCliLink(input: CliProbeInput, io: CliLinkIo): Promise
   // ── opportunistic `--status` reading (may simply not exist on this CLI) ──
   let running: boolean | undefined
   if (statusRun && statusRun.exitCode === 0 && !statusRun.timedOut) {
-    const parsed = parseCliStatus(statusRun.stdout)
+    const parsed = parseCliStatus(mergeCliOutput(statusRun))
     if (parsed.ok) running = parsed.running
   }
 
   // ── authoritative heredoc probe, over the same channel work uses ─────────
   const sdkArgs = input.useSdkPath === true && (input.sdkPath ?? '') !== '' ? ['--sdk-path', input.sdkPath as string] : []
-  const script = `console.log(${JSON.stringify(CLI_READY_SENTINEL)})\n`
+  // R3 — a sentinel alone proves the CLI ran, not that the SDK harness is
+  // there. Print the facade types so the criterion below can tell "ready" from
+  // "ran but every tool would crash on line 1".
+  const script = `console.log(${JSON.stringify(CLI_READY_SENTINEL)}, typeof taskSpaces, typeof browser)\n`
   const runHeredoc = (extra: readonly string[]): Promise<CliRunResult> =>
     io.run({
       argv: spawnArgvFor(shape as SpawnShape, cliPath, ['nodejs', ...extra]),
@@ -320,12 +337,21 @@ export async function probeCliLink(input: CliProbeInput, io: CliLinkIo): Promise
   if (result.spawnErrorCode !== undefined) {
     return { ok: false, code: 'cli-not-executable', message: `spawn failed: ${result.spawnErrorCode}`, ...base }
   }
-  if (result.exitCode !== 0 || !result.stdout.includes(CLI_READY_SENTINEL)) {
+  // R3 — only an opt-in SDK probe is required to expose the facades. Without
+  // `useSdkPath` the CLI may run its own vendored harness (or none), and the
+  // historical sentinel-only criterion must keep working — do not regress it.
+  const facadeMatch = new RegExp(`${CLI_READY_SENTINEL} (\\w+) (\\w+)`).exec(mergeCliOutput(result))
+  const facadesOk = input.useSdkPath !== true ||
+    (facadeMatch?.[1] === 'object' && facadeMatch?.[2] === 'object')
+  if (result.exitCode !== 0 || !mergeCliOutput(result).includes(CLI_READY_SENTINEL) || !facadesOk) {
     const tail = (result.stderr || result.stdout).trim().slice(-400)
+    const facadeNote = facadesOk
+      ? ''
+      : `; the SDK harness did not expose the facade (taskSpaces=${facadeMatch?.[1] ?? 'undefined'}, browser=${facadeMatch?.[2] ?? 'undefined'})`
     return {
       ok: false,
       code: 'cli-probe-failed',
-      message: `the ego CLI ran but did not reach the readiness sentinel (exit ${String(result.exitCode)})${tail ? `: ${tail}` : ''}`,
+      message: `the ego CLI ran but did not reach the readiness sentinel (exit ${String(result.exitCode)})${facadeNote}${tail ? `: ${tail}` : ''}`,
       ...base,
     }
   }

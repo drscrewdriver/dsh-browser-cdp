@@ -73,6 +73,9 @@ const ALLOWED_KEYS = new Set<string>([
   // older cached panel cannot be locked out of saving the sequence.
   'links', 'cdpTargets', 'activeTargetId', 'cdpMode', 'cdpProbeTimeoutMs', 'remoteEnabled',
   'cursorHud', 'cursorName', 'allowLocalFallback', 'localHeadless', 'localUserDataDir',
+  // ── Lightpanda backend: managed-serve extra args (the link row carries its
+  // own servePath; --host/--port stay managed). ──
+  'lightpandaArgs',
   // ── 阶段 10: JEV/Laya judge ─────────────────────────────────────────────
   // The two key fields are writable here for the same reason `links` is: the
   // panel is where a user configures them, and a key that cannot be saved is a
@@ -194,9 +197,11 @@ export function registerEgoBrowserGateway(
               cliIo: createSubprocessCliIo(ctx.subprocess),
               sdkPath: fileURLToPath(new URL('../runtime/ego-browser/dist/out/index.js', import.meta.url)),
               bundledCli: fileURLToPath(new URL('../runtime/ego-linux/bin/ego-browser.mjs', import.meta.url)),
+              // Lightpanda backend — managed-serve extra args for `lightpanda` rows.
+              lightpandaArgs: cfg.lightpandaArgs,
             })
             const ws = attach.status === 'ready' && attach.wsUrl !== '' ? attach.wsUrl : null
-            if (setAttachEndpoint(ws)) {
+            if (setAttachEndpoint(ws, attach.status === 'ready' ? attach.engine ?? 'unknown' : null)) {
               void recycleWorker('cdp manual refresh').catch(() => null)
             }
             writeJson(res, 200, envelopeOk({ attach }))

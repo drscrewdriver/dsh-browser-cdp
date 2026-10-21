@@ -7,7 +7,7 @@ describe("dual capture config", () => {
       chromePath: "", captureBackend: "auto", streamProfile: "balanced",
       cdpFps: 20, cdpQuality: 55, cdpMaxWidth: 960, cdpBackstopIntervalMs: 3000,
       ffmpegFps: 20, ffmpegMaxWidth: 1280, ffmpegBitrateKbps: 4000, ffmpegEncoder: "auto", ffmpegPath: "", githubMirror: "",
-      runtimeArgs: "", chromeArgs: "", isolateSpaces: false, idleTimeoutMin: 0,
+      runtimeArgs: "", chromeArgs: "", isolateSpaces: false, idleTimeoutMin: 0, defaultSpace: "default",
       links: [], activeTargetId: "", cdpMode: "auto", cdpProbeTimeoutMs: 3000,
       cursorHud: true, cursorName: "DeepSeek", allowLocalFallback: false, localHeadless: false, localUserDataDir: "", lightpandaArgs: "", legacyEgoToolNames: false, remoteEnabled: true,
       // 工具分级注入默认：lazy + 三级全开放（core 级不可封印）。
@@ -29,7 +29,7 @@ describe("dual capture config", () => {
       chromePath: "", captureBackend: "auto", streamProfile: "balanced",
       cdpFps: 30, cdpQuality: 70, cdpMaxWidth: 1200, cdpBackstopIntervalMs: 5000,
       ffmpegFps: 20, ffmpegMaxWidth: 1280, ffmpegBitrateKbps: 4000, ffmpegEncoder: "auto", ffmpegPath: "", githubMirror: "",
-      runtimeArgs: "", chromeArgs: "", isolateSpaces: false, idleTimeoutMin: 0,
+      runtimeArgs: "", chromeArgs: "", isolateSpaces: false, idleTimeoutMin: 0, defaultSpace: "default",
       links: [], activeTargetId: "", cdpMode: "auto", cdpProbeTimeoutMs: 3000,
       cursorHud: true, cursorName: "DeepSeek", allowLocalFallback: false, localHeadless: false, localUserDataDir: "", lightpandaArgs: "", legacyEgoToolNames: false, remoteEnabled: true,
       // 工具分级注入默认：lazy + 三级全开放（core 级不可封印）。
@@ -62,6 +62,23 @@ describe("dual capture config", () => {
     expect(resolveConfig({ streamProfile: "high", ffmpegBitrateKbps: 6000 }).ffmpegBitrateKbps).toBe(6000);
     expect(resolveConfig({ streamProfile: "high", ffmpegFps: 12 }).ffmpegFps).toBe(12);
     expect(resolveConfig({ backstopIntervalMs: 200 }).cdpBackstopIntervalMs).toBe(1000);
+  });
+});
+
+// ── A/C: defaultSpace resolution (fold empty -> 'default', keep :auto verbatim) ──
+
+describe("resolveConfig.defaultSpace (A/C)", () => {
+  it("folds empty / missing / whitespace to 'default'", () => {
+    expect(resolveConfig({}).defaultSpace).toBe("default");
+    expect(resolveConfig({ defaultSpace: "" }).defaultSpace).toBe("default");
+    expect(resolveConfig({ defaultSpace: "   " }).defaultSpace).toBe("default");
+  });
+  it("keeps :auto verbatim (the tracker, not resolveConfig, expands it)", () => {
+    expect(resolveConfig({ defaultSpace: ":auto" }).defaultSpace).toBe(":auto");
+  });
+  it("trims a named value and passes a non-default name through (task_5 read path)", () => {
+    expect(resolveConfig({ defaultSpace: "  research  " }).defaultSpace).toBe("research");
+    expect(resolveConfig({ defaultSpace: "research" }).defaultSpace).toBe("research");
   });
 });
 

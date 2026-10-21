@@ -9,7 +9,7 @@ export const EGO_HELP_INDEX: Record<string, string> = {
     'CDP 浏览器代理：结构化浏览器工具。导航/交互/观察/表单/网络/等待/键鼠皆有专项工具，另提供 bcdp_help(本索引)、bcdp_doctor(体检)、bcdp_cli/bcdp_script(自由脚本逃生舱)。连接与激活见 topic=links。' +
     '分类见: tools / navigate / observe / input / keyboard-mouse / form / wait / network / login / script / doctor / lightpanda / injection。用 `topic` 查询，或直接给工具名。',
   tools:
-    '工具清单: bcdp_status, bcdp_space_open, bcdp_space_close, bcdp_snapshot, bcdp_navigate, bcdp_click(+double), bcdp_fill, bcdp_js, bcdp_cdp, bcdp_screenshot(+selector), bcdp_page_info, bcdp_wait, bcdp_wait_for_selector, bcdp_wait_for_url, bcdp_wait_for_response, bcdp_key(+text/type), bcdp_hover, bcdp_read_element, bcdp_select, bcdp_drag, bcdp_scroll, bcdp_upload, bcdp_check, bcdp_dialog, bcdp_download, bcdp_http, bcdp_captcha, bcdp_auth_flush, bcdp_login_import, bcdp_help, bcdp_doctor, bcdp_cli, bcdp_script, bcdp_jev_status, bcdp_jev_frame, bcdp_jev_attempt, bcdp_jev_ask, bcdp_jev_run。',
+    '工具清单: bcdp_status, bcdp_space_open, bcdp_space, bcdp_space_close, bcdp_snapshot, bcdp_navigate, bcdp_tab, bcdp_click(+double), bcdp_fill, bcdp_js, bcdp_cdp, bcdp_screenshot(+selector), bcdp_page_info, bcdp_wait, bcdp_wait_page, bcdp_wait_for_selector, bcdp_wait_for_url, bcdp_wait_for_response, bcdp_key(+text/type/insert), bcdp_hover, bcdp_read_element, bcdp_select, bcdp_drag, bcdp_scroll, bcdp_upload, bcdp_check, bcdp_dialog, bcdp_download, bcdp_http, bcdp_captcha, bcdp_auth_flush, bcdp_login_import, bcdp_help, bcdp_doctor, bcdp_cli, bcdp_script, bcdp_jev_status, bcdp_jev_frame, bcdp_jev_attempt, bcdp_jev_ask, bcdp_jev_run。',
   links:
     '连接序列（设置面板）：有序列表，顺序即优先级，被激活的一项驱动每一次 bcdp_* 调用。两种类型——' +
     'CDP 端点（注入 EGO_LINUX_CDP_URL，指向已开调试端口的浏览器）与 本机 ego CLI（不注入端点，由本机 ego CLI 直接驱动 ego-lite 浏览器；' +
@@ -31,7 +31,7 @@ export const EGO_HELP_INDEX: Record<string, string> = {
   script: 'bcdp_cli / bcdp_script: 原样运行任意内置运行时 heredoc 脚本(page/browser/taskSpaces/site/fetch/cdp预载)。bcdp_script额外返回 duration/timedOut。',
   doctor: 'bcdp_doctor: 体检环境（浏览器候选、vendored runtime、状态目录、CDP端口、任务空间、引擎与降级清单）；首行附工具注入面快照。',
   injection:
-    '工具分级注入（不是工具，是出现时机）：38 个 bcdp_* 分八批——core（status/doctor/help/space_open/space_close/navigate/snapshot，常驻不可封印）/ act（点击填写键鼠拖拽）/ observe（截图页面信息读取js）/ wait（等待类）/ power（裸CDP/HTTP/上传/下载/对话框）/ session（验证码/登录落盘/登录导入）/ escape（cli/script 逃生舱）/ judge（bcdp_jev_*）。' +
+    '工具分级注入（不是工具，是出现时机）：41 个 bcdp_* 分八批——core（status/doctor/help/space_open/space_close/space/navigate/snapshot，常驻不可封印）/ act（点击填写键鼠拖拽+tab 标签管理）/ observe（截图页面信息读取js）/ wait（等待类+wait_page 页面级等待）/ power（裸CDP/HTTP/上传/下载/对话框）/ session（验证码/登录落盘/登录导入）/ escape（cli/script 逃生舱）/ judge（bcdp_jev_*）。' +
     '设置旋钮（全 volatile）：toolInjection = lazy（默认，常驻 core + escape，首次 bcdp_* 调用后铺开其余）/ always（挂载即全量，历史行为）；toolBrowse（act+observe+wait，内部按 act→observe→wait 三波放行）/ toolExtended（power+session）/ toolEscape（cli+script）/ toolJudge 四把开关——开 = 开放注册，关 = 该批从工具列表移除（core 级不给开关，封了就没解锁入口）；judge 级即使开了仍需配 JEV/Laya Key。' +
     '**escape 批不吃活动闸**：cli/script 是唯一的「一次调用干完任意多步任务」的入口，必须始终可达，不排在首次活动之后。' +
     '封印 = 从工具列表里反注册，不是执行期报错；lazy 下闲置回收会把扩展面收回。' +

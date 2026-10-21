@@ -1,16 +1,16 @@
 // src/toolTiers.ts — 工具分级注入策略（纯函数，无宿主依赖）
 //
-// 动机：插件挂载时一次性注册 38 个 bcdp_* 工具，每个会话每一轮都要为它们付
+// 动机：插件挂载时一次性注册 41 个 bcdp_* 工具，每个会话每一轮都要为它们付
 // schema 成本（AST 实测 description+parameters ≈ 18.8K 字符 ≈ 5.4K token），
 // 而绝大多数会话根本不碰浏览器。这里把「哪些工具在什么条件下允许出现在模型面
 // 前」收成一处策略，注册时机交给 index.ts 的控制器执行。
 //
 // 八批（见 ego-browser-cdp-issues.md §9.2）：
-//   core     常驻：探测/诊断/指南 + 最小可用闭环（打开空间 → 导航 → 读页面）。
+//   core     常驻：探测/诊断/指南 + 最小可用闭环（打开空间/空间归属 → 导航 → 读页面）。
 //            永不封印，否则 lazy 模式下模型连「解锁」的入口都没有。
-//   act      动手：click / fill / key / select / check / hover / scroll / drag。
+//   act      动手：click / fill / key / select / check / hover / scroll / drag / tab。
 //   observe  看结果：screenshot / page_info / read_element / js。
-//   wait     等待：wait / wait_for_selector / wait_for_url / wait_for_response。
+//   wait     等待：wait / wait_for_selector / wait_for_url / wait_for_response / wait_page。
 //   power    重量级：raw CDP / http / upload / download / dialog。
 //   session  登录态：captcha / auth_flush / login_import。
 //   escape   逃生舱：cli / script。**冷启动即可用**（见下）。
@@ -44,6 +44,7 @@ const CORE = [
   'bcdp_help',
   'bcdp_space_open',
   'bcdp_space_close',
+  'bcdp_space',
   'bcdp_navigate',
   'bcdp_snapshot',
 ] as const
@@ -56,6 +57,7 @@ const ACT = [
   'bcdp_select',
   'bcdp_check',
   'bcdp_drag',
+  'bcdp_tab',
 ] as const
 const OBSERVE = [
   'bcdp_screenshot',
@@ -68,6 +70,7 @@ const WAIT = [
   'bcdp_wait_for_selector',
   'bcdp_wait_for_url',
   'bcdp_wait_for_response',
+  'bcdp_wait_page',
 ] as const
 const POWER = [
   'bcdp_cdp',

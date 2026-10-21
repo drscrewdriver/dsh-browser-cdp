@@ -92,9 +92,9 @@ describe("tool tier injection at mount", () => {
     expect(live).not.toContain("bcdp_jev_run");
   });
 
-  it("always + a configured judge key = all 38 on the surface", () => {
+  it("always + a configured judge key = all 41 on the surface", () => {
     const { live } = mount({ toolInjection: "always", layaKey: "k" });
-    expect(live.length).toBe(38);
+    expect(live.length).toBe(41);
     expect(sorted(live)).toEqual(sorted(Object.values(TIER_MEMBERS).flat()));
   });
 
@@ -161,8 +161,8 @@ describe("tool tier injection at mount", () => {
     // 其它批次一个不少。
     expect(m.live).toContain("bcdp_click");
     expect(m.live).toContain("bcdp_cdp");
-    // 38 − escape 2 − judge 5（always 下仍无 Key，评审级照旧封印）。
-    expect(m.live.length).toBe(38 - 2 - 5);
+    // 41 − escape 2 − judge 5（always 下仍无 Key，评审级照旧封印）。
+    expect(m.live.length).toBe(41 - 2 - 5);
   });
 
   it("judge tools appear the moment a key is configured (volatile reapply, no remount)", () => {

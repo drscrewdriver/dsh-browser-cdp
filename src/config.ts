@@ -22,6 +22,16 @@ const backend = z.union(['auto', 'cdp', 'ffmpeg'])
 const profile = z.union(['low', 'balanced', 'high'])
 const cdpMode = z.union(['auto', 'local', 'remote'])
 const toolInjection = z.union(['lazy', 'always'])
+
+// A/C — the single named default space. Aligning the code constant with the
+// docs ("ALWAYS use the single 'default' space") closes the old `default` (docs)
+// ↔ `dsh-agent` (constant) split that made a user who followed the docs open an
+// empty second slot.
+export const DEFAULT_SPACE = 'default'
+// C — the config-level sentinel that turns on per-session derivation. Kept in
+// config.ts (next to resolveConfig, which preserves it verbatim) so both the
+// fold and the tracker read one definition.
+export const AUTO_SPACE_SENTINEL = ':auto'
 const encoder = z.union([
   'auto', 'software', 'h264_mf', 'h264_nvenc', 'h264_qsv', 'h264_amf',
   'h264_videotoolbox', 'h264_vaapi',
@@ -31,6 +41,17 @@ const encoder = z.union([
 // a schema default before the one-release migration runs.
 export const Config = z.object({
   isolateSpaces: z.boolean().description('Space isolation: false = persistent profile (keep logins across restarts); true = isolated sandbox.').volatile(),
+  // A — defaultSpace was read by index.ts but missing from the schema, so it
+  // could only be set through a raw profile patch with no GUI form entry.
+  // Now promoted to a `.volatile()` scalar: the settings page projects it,
+  // a value change is delivered through the bridge as a live-ref update (no
+  // remount — the mount reads `cfg.configuredDefaultSpace` as a getter), and
+  // resolveConfig folds empty→`'default'` so the constant and docs match.
+  // Sentinel `:auto` (C) derives a per-session name `dsh-agent-<sid8>` —
+  // only honoured in the isolated-sandbox mode (`isolateSpaces: true`); in
+  // persistent mode the sentinel collapses back to `'default'` so a login
+  // state stays on the single named slot.
+  defaultSpace: z.string().description('Default task-space name when a bcdp_* call omits `space`. Persistent-profile mode reuses this single named slot — set it to the same value across sessions to share login state. Set `:auto` in isolated-sandbox mode to derive a per-session name (dsh-agent-<sessionId8>). Leave default ("default") unless you are running multiple agents in parallel.').volatile(),
   idleTimeoutMin: z.number().min(0).max(1440).step(1).description('Auto-stop the backing browser after N minutes without an bcdp_* call (0 = off). Relaunches on demand at the next call.').volatile(),
   chromePath: z.string().description('Path to Chrome/Chromium. Empty = auto-detect.').volatile(),
   captureBackend: backend.description('Capture backend: auto, cdp, or ffmpeg.').volatile(),
@@ -116,7 +137,7 @@ export const Config = z.object({
   allowLocalFallback: z.boolean().description('auto mode may fall back to launching a local browser when the activated target is unreachable. Off by default: the fallback must be explicit.').volatile(),
   legacyEgoToolNames: z.boolean().description('ALSO register the tools under their old ego_* names for scripts written before the bcdp_* rename. Off by default; mutually exclusive with installing the upstream ego-browser plugin (same tool names).'),
   // ── 工具分级注入（src/toolTiers.ts）─────────────────────────────────
-  // 38 个 bcdp_* 工具每个会话每一轮都要付 schema 成本，而多数会话不碰
+  // 41 个 bcdp_* 工具每个会话每一轮都要付 schema 成本，而多数会话不碰
   // 浏览器。每个字段都带 `.default()`：volatile 字段的表单描述符直接把 schema
   // 默认值画出来，不写默认就会出现「面板显示 A、运行时用 B」。本插件其余
   // 字段靠 resolveConfig 兑底是因为它们有迁移史；这几个新字段没这份包被。
@@ -400,6 +421,14 @@ export function resolveConfig(config: RawConfig = {}): ResolvedConfig {
         : '',
     chromeArgs: typeof config.chromeArgs === 'string' ? config.chromeArgs : '',
     isolateSpaces: typeof config.isolateSpaces === 'boolean' ? config.isolateSpaces : config.isolateSpaces === 'true' || config.isolateSpaces === '1' || config.isolateSpaces === 1,
+    // A + C: `:auto` is kept verbatim here (the tracker is the one that knows
+    // the sessionId and mode); empty / non-string collapses to `'default'` so
+    // the constant, the docs and the schema default all agree. A legacy
+    // profile-patch value (any non-empty string, e.g. a prior `dsh-agent`) is
+    // read unchanged — the schema default never overrides a persisted value.
+    defaultSpace: typeof config.defaultSpace === 'string' && config.defaultSpace.trim() !== ''
+      ? config.defaultSpace.trim()
+      : 'default',
     idleTimeoutMin: finiteIn(config.idleTimeoutMin, 0, 1440) ? config.idleTimeoutMin : 0,
     // Connection sequence (R1/R7): every entry is sanitized (unusable rows
     // dropped, the ego-cli singleton enforced) and probe state normalized so a

@@ -219,6 +219,13 @@ export interface JudgeSettings {
 /** Resolved (post-defaults) runtime config — the canonical key set. */
 export interface ResolvedConfig {
   isolateSpaces: boolean
+  /**
+   * A/C — the default task-space name used when a bcdp_* call omits `space`.
+   * `':auto'` is a sentinel (honoured only in isolated-sandbox mode) that
+   * derives `dsh-agent-<sessionId8>` per session; any other non-empty string is
+   * the literal slot name. resolveConfig folds empty→`'default'`.
+   */
+  defaultSpace: string
   /** Minutes without an bcdp_* call before the backing browser is auto-stopped. 0 = off. */
   idleTimeoutMin: number
   chromePath: string

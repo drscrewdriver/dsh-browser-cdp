@@ -1,3 +1,31 @@
+## 1.4.1 (2026-10-21)
+
+空间命名与并发隔离加固（计划组 `bcdp-space-ns-hardening`，A/B/C/D1/E/F/G）。按风险分级落地，SDK 快照编号生成逻辑（D3）不在本轮改，以 D1 插件层解法替代。
+
+### 新增（A）：可配置默认空间
+- `Config.defaultSpace`（zod `.volatile()` 标量）：空值折叠为 `DEFAULT_SPACE='default'`，热更新无需重注册。`resolveConfig` 出的字段与运行时活值分离——`cfg.activeSpace` 是**当前会话槽**的实时值，`cfg.defaultSpace` 是**配置/schema** 值，避免二者撞名引发的 `EgoRuntimeConfig ↔ ResolvedConfig` 结构镜像类型断裂。
+
+### 新增（B）：会话级空间隔离
+- `createSessionSpaceTracker` + `GLOBAL_SESSION_KEY='__global__'`：把单一 `ActiveSpaceTracker` 升级为按 sessionId 键控的 `Map<string,Slot>`，`SessionSpaceTracker extends ActiveSpaceTracker` 增 `setCurrentSession` / `currentSession`。每个 `bcdp_*` execute 顶部先 `cfg.spaceTracker.setCurrentSession(callingSessionId(exec))`，并发多会话各开各空间互不漂移；无 session 调用落 `__global__` 槽保持向后兼容。
+
+### 新增（C）：`:auto` 派生名
+- `AUTO_SPACE_SENTINEL=':auto'`：沙箱模式（`isolateSpaces:true`）下默认名派生为 `dsh-agent-${sessionId.slice(0,8)}`（`AUTO_SPACE_PREFIX='dsh-agent-'`，沿用历史前缀）；持久模式折叠为具名单槽。
+
+### 变更（D1）：跨调用稳定定位
+- `bcdp_snapshot` 三处 `snapshotRaw` 统一带 `includeStableLocator: true`，输出含 `loc=css:/loc=role:/loc:href:` token；subtree 解析优先 `loc=`（跨子进程稳定）而非 `@N`（每次快照重编）。零 SDK 改动，活体验证：`bcdp_click` 吃 `loc=...` 命中。schema 预算门（≤+15%）以压缩描述守住，未放宽天花板。
+
+### 修复（E）：页内返回值防御序列化
+- `safeEvalWrap(expr, preserveFalsy)`：根因是 SDK 自身 `handleMessage` 序列化在 `page.evaluate` 返回 DOM/window 时抛 `Object reference chain is too long`（硬拒在 SDK 内层，早于任何外层 `safe()`），故修复必须在页内完成。`bcdp_wait_page op=function` 与 `bcdp_js` 套同款返回值降级包裹，返回 window/DOM 时 `ok:true` 且 value 为描述串。
+
+### 修复（G）：heredoc 错误引导
+- `attachSessionHint` / `ATTACH_SESSION_HINT`：`bcdp_cli` / `bcdp_script` 错误含 `no active tab to attach session` 时追加一行「先 `await taskSpaces.useOrCreate(name)`」引导，把裸 heredoc 缺 preamble 的坑点名给出，不留模型重新踩。
+
+### 新增（F）：navigate 卡死自愈 watchdog
+- `runWithTabRevive` + `isTabStuckFailure`（`TAB_STUCK_RE`）：复刻 `runWithStaleSpaceRetry` 骨架但换触发条件为 eval 超时 / `no active tab` / 主线程挂死特征，复位动作为先开新空白 tab 再关挂死 tab（顺序关键：先关会触发末-tab 守卫留下死 tab），重试**硬上限一次**，二次仍卡如实返回不循环（拒绝假绿）。`bcdp_navigate` 经 `tabRevive:true` opt-in，结果附 `recoveredFrom`（正常路径为 `null`）。
+
+### 测试
+- 新增 `runWithTabRevive` 5 条（tab-stuck 特征识别、恢复一次打标记、正常路径单次 spawn 不复活、非 tab 失败不复活、硬上限一次不循环）。全量 **832 passed / 12 skipped**，两套 `tsc` 通过，`tsdown` build 过，schema 预算门绿。
+
 ## 1.2.4 (2026-10-21)
 
 ### 修复（P0）

@@ -12,7 +12,7 @@ export const EGO_HELP_INDEX: Record<string, string> = {
     '工具清单: bcdp_status, bcdp_space(+op:open/close/list/handoff/takeover), bcdp_snapshot, bcdp_navigate, bcdp_tab, bcdp_click(+double), bcdp_fill, bcdp_js, bcdp_cdp, bcdp_screenshot(+selector), bcdp_page_info, bcdp_wait(+op:duration/selector/url/response/load/function/request/event), bcdp_key(+text/type/insert), bcdp_hover, bcdp_read_element, bcdp_select, bcdp_drag, bcdp_scroll, bcdp_upload, bcdp_check, bcdp_dialog, bcdp_download, bcdp_http, bcdp_captcha, bcdp_auth_flush, bcdp_login_import, bcdp_help, bcdp_doctor, bcdp_script(+verbatim), bcdp_jev_status, bcdp_jev_frame, bcdp_jev_attempt, bcdp_jev_ask, bcdp_jev_run。',
   links:
     '连接序列（设置面板）：有序列表，顺序即优先级，被激活的一项驱动每一次 bcdp_* 调用。两种类型——' +
-    'CDP 端点（注入 EGO_LINUX_CDP_URL，指向已开调试端口的浏览器）与 本机 ego CLI（不注入端点，由本机 ego CLI 直接驱动 ego-lite 浏览器；' +
+    'CDP 端点（注入 EGO_LINUX_CDP_URL，指向已开调试端口的浏览器）与 本机 ego CLI（不注入端点，由本机 ego CLI 直接驱动 ego 浏览器；' +
     '仅限本机，全局至多一条）。cdpMode: auto=按激活项；remote=仅接受 CDP 端点；local=受管本地启动器。' +
     'cdpMode=remote 与「本机 ego CLI」组合会显式报 mode-kind-mismatch。remoteEnabled 只管远端 CDP，不影响本机 CLI 连接。',
   navigate: 'bcdp_navigate: 打开URL或切tab(同任务复用当前tab)。bcdp_wait op=url: 等跳转(登录/分页)。',

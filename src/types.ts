@@ -147,12 +147,12 @@ export interface CdpLink extends LinkBase {
 }
 
 /**
- * `kind: 'ego-cli'` — drive the LOCAL ego-lite browser through the ego CLI
+ * `kind: 'ego-cli'` — drive the LOCAL ego browser through the ego CLI
  * itself, instead of pointing a runtime at a CDP endpoint.
  *
  * Activating this kind means `EGO_LINUX_CDP_URL` is NOT injected: the CLI owns
- * its browser. That env var is a property of the bundled Linux port only, so
- * the native macOS `ego-browser` (which drives the real ego-lite app) ignores
+ * its browser. That env var is a property of the bundled runtime (Linux) only, so
+ * the native macOS `ego-browser` (which drives the real ego app) ignores
  * it — this kind is the only way to reach that browser.
  */
 export interface EgoCliLink extends LinkBase {

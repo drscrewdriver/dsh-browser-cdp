@@ -1,8 +1,8 @@
 /**
- * ego-browser �?DSH integration plugin for the ego-lite browser
- * (https://github.com/CitroLabs/ego-lite, MIT).
+ * ego-browser �?DSH integration plugin for the ego browser
+ * (MIT; provenance and third-party notices in THIRD_PARTY_NOTICES.md).
  *
- * ego lite is a Chromium browser built for AI agents: agents work in isolated
+ * ego is a Chromium browser built for AI agents: agents work in isolated
  * "task spaces" that inherit your real login state without stealing your tabs.
  * The official connection layer is the `ego-browser` CLI: `ego-browser nodejs`
  * reads a JS heredoc on stdin and runs it in a Node runtime with page-driving
@@ -20,8 +20,8 @@
  * Runtime requirements:
  *   - the `ego-browser` command on PATH (ego lite app, or the
  *     `ego-browser-v2` npm package; Node >= 22), and
- *   - a reachable ego lite browser (the app is macOS-only today; Linux is on
- *     the ego-lite roadmap, PR #202).
+ *   - a reachable ego browser (the app is macOS-only today; Linux is on
+ *     the ego roadmap).
  *
  * == 文件内部结构（改动前先看 docs/ARCH.md�?=
  *   顶部常量     : SENTINEL / HUMAN_CHECK_PROBE / 默认�? *   withEgoLock  : 全插件互斥锁（工具串行，防争浏览器）
@@ -287,7 +287,7 @@ export function createSessionSpaceTracker(
 
 // ── serialization ───────────────────────────────────────────────────────────
 /**
- * The ego-lite host is a single persistent browser shared by every tool call;
+ * The bundled runtime host is a single persistent browser shared by every tool call;
  * concurrent tool executions would race on the same task space / tabs. All
  * bcdp_* executions are therefore serialized through one in-process lock. This
  * guards against concurrent tool calls within this plugin instance; separate
@@ -583,7 +583,7 @@ function describeSpawnFailure(err: unknown): string {
 }
 /**
  * Error signatures that indicate a TRANSIENT browser cold-start / channel
- * not-yet-ready problem rather than a real defect. The ego-lite host is a
+ * not-yet-ready problem rather than a real defect. The bundled runtime host is a
  * single persistent Chromium that cold-starts on the first tool call of a
  * session; a probe that arrives while the DevTools/CDP channel is still
  * coming up can fail with one of these. Such failures are safe to retry
@@ -878,11 +878,11 @@ export function parseStatusFacades(stdout: string): StatusFacades | undefined {
 }
 
 /**
- * R7 �?is the upstream plugin installed anywhere under this DSH home?
+ * R7 �?is the old dsh-ego-browser plugin installed anywhere under this DSH home?
  *
  * Reported (never enforced): the two plugins can coexist now that tool names
- * and routes no longer overlap, but both driving ONE local ego-lite would
- * fight over the same task spaces, and the upstream handoff API has no
+ * and routes no longer overlap, but both driving ONE local ego browser would
+ * fight over the same task spaces, and that plugin's handoff API has no
  * ownership check. A warning is the honest limit of what we can do here.
  */
 export function findUpstreamPluginInstall(
@@ -1684,7 +1684,7 @@ bridge.onChange(() => tiers.reapply())
         // But DO give the graceful stop enough time (>= the runtime's
         // Browser.close + waitForProcessExit window) so the browser merges its
         // cookie journal into the on-disk profile before DSH is gone �?that is
-        // what keeps logins across a restart (original ego-lite behavior).
+        // what keeps logins across a restart (the bundled runtime's behavior).
         graceMs: 8_000,
       })
       // Fire and forget: do NOT return this promise from the effect cleanup.
@@ -3104,10 +3104,10 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
         }
         const toolCount = ((EGO_HELP_INDEX['tools'] ?? '').match(/bcdp_/g) ?? []).length
         const legacy = cfg.legacyEgoToolNames === true
-        lines.push(`naming: ${toolCount} bcdp_* tools; legacy ego_* aliases ${legacy ? 'ON (mutually exclusive with the upstream plugin)' : 'OFF (coexists with the upstream plugin)'}`)
+        lines.push(`naming: ${toolCount} bcdp_* tools; legacy ego_* aliases ${legacy ? 'ON (mutually exclusive with the old dsh-ego-browser plugin)' : 'OFF (coexists with the old dsh-ego-browser plugin)'}`)
         const upstream = findUpstreamPluginInstall()
         if (upstream !== '') {
-          lines.push(`conflict: upstream dsh-ego-browser installed at ${upstream} �?only one plugin should drive the local ego-lite (they would share its task spaces)`)
+          lines.push(`conflict: old dsh-ego-browser installed at ${upstream} �?only one plugin should drive the local ego browser (they would share its task spaces)`)
         }
         lines.push(`chromeArgs (effective, next cold start): ${chrArgs.length ? chrArgs.join(' ') : '(none)'}`)
         // state dir + runtime state

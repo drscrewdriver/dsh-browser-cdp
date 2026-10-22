@@ -3,8 +3,8 @@
  *
  * A `kind:'ego-cli'` link does NOT point the runtime at a CDP endpoint. It
  * hands browser ownership to the ego CLI itself, which is the only way to
- * reach the real ego-lite app: the `EGO_LINUX_CDP_URL` contract we inject for
- * `kind:'cdp'` belongs to the bundled Linux port, and the native macOS
+ * reach the real ego app: the `EGO_LINUX_CDP_URL` contract we inject for
+ * `kind:'cdp'` belongs to the bundled runtime (Linux), and the native macOS
  * `ego-browser` never reads it.
  *
  * Three things this module owns, all deliberately conservative because the

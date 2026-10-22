@@ -152,7 +152,7 @@ export function sanitizeLinks(raw: unknown, max: number = MAX_TARGETS): Sanitize
     const link = coerceLink(entry)
     if (!link) { droppedInvalid += 1; continue }
     if (link.kind === EGO_CLI_KIND) {
-      // Local-only singleton: the machine has exactly one local ego-lite, so a
+      // Local-only singleton: the machine has exactly one local ego browser, so a
       // second entry could only fight the first over the same backend.
       if (sawEgoCli) { droppedEgoCli += 1; continue }
       sawEgoCli = true

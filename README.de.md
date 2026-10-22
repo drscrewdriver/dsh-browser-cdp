@@ -8,7 +8,7 @@
   <img src="https://img.shields.io/badge/Node-%3E%3D22-brightgreen?logo=node.js&logoColor=white" alt="Node >= 22">
 </p>
 
-> **Repository**: `github.com/drscrewdriver/dsh-browser-cdp` (zuvor `dsh-ego-browser`, hervorgegangen aus dem Upstream-Projekt [Fisfzy/dsh-ego-browser](https://github.com/Fisfzy/dsh-ego-browser)) ｜ Versionshistorie: siehe [CHANGELOG.md](CHANGELOG.md)
+> **Repository**: `github.com/drscrewdriver/dsh-browser-cdp` ｜ Versionshistorie: siehe [CHANGELOG.md](CHANGELOG.md)
 
 ### Versions-Kompatibilitätsmatrix
 
@@ -36,19 +36,19 @@
 
 **Import von Login-Zuständen (neu in v0.8.5)**: Das Werkzeug `bcdp_login_import` kopiert die Login-Cookies aus Ihrem alltäglichen Chrome/Edge/Brave **domänenweise** in den Agent-Browser (echte Binary im Headless-Start + CDP-Durchreichung beim Lesen, kompatibel mit der App-Bound Encryption von Chrome 127+, keine Offline-Entschlüsselung; läuft der Quell-Browser, kann er vor dem Import sauber heruntergefahren werden — das Fenster stellt sich beim nächsten Start wieder her). Cookie-Werte erscheinen in keinem Log und keiner Ausgabe; vor dem Import wird die Cookie-Datenbank der Quelle automatisch gesichert und bei anomaler Leerung wiederhergestellt. In Kombination mit dem standardmäßigen persistenten Profile auf Disk übersteht der importierte Login-Zustang Neustarts dauerhaft.
 
-Ein **CDP-Browser-Proxy**: Er bindet [CitroLabs/ego-lite](https://github.com/CitroLabs/ego-lite) (ein Chromium für KI-Agenten) als eingebaute Laufzeit in den DeepSeek Harness ein, steuert den Browser mit **38 strukturierten `bcdp_*`-Werkzeugen** und bringt ein **Echtzeit-Beobachtungs-Frontend** mit — während der Agent im Hintergrund Webseiten bedient, sehen Sie jede Seite wie in einem Livestream und können sogar direkt eingreifen.
+Ein **CDP-Browser-Proxy**: Er bindet eine ego-kompatible eingebaute Laufzeit (ein Chromium für KI-Agenten; Herkunft und Lizenz in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)) in den DeepSeek Harness ein, steuert den Browser mit **38 strukturierten `bcdp_*`-Werkzeugen** und bringt ein **Echtzeit-Beobachtungs-Frontend** mit — während der Agent im Hintergrund Webseiten bedient, sehen Sie jede Seite wie in einem Livestream und können sogar direkt eingreifen.
 
 **Eine eigene Besonderheit (self-observation)**: Der Agent nutzt genau dieses Chromium — selbst wenn er **DSH selbst** bedient (Sitzungen verwalten, Task-Board, Einstellungen), zeigt das Beobachtungsfenster alles live an und Sie können jederzeit übernehmen. Nicht nur „sehen, wie der Agent im Web arbeitet" — auch die Bedienung der DSH-Oberfläche durch den Agenten ist durchgehend sichtbar und kontrollierbar.
 
-**Sofort einsatzbereit**: Das Plugin-Paket bringt die ego-Runtime mit (`runtime/`, MIT, siehe [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)) — kein Klonen des offiziellen Repositorys, kein manuelles Bauen; der `--no-sandbox`-Wrapper liegt dem Paket bei, root / Docker / ohne Monitor laufen auf Knopfdruck.
+**Sofort einsatzbereit**: Das Plugin-Paket bringt eine ego-kompatible Laufzeit mit (`runtime/`, MIT Dritter, siehe [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)) — kein zusätzlicher Browser, kein manuelles Bauen; der `--no-sandbox`-Wrapper liegt dem Paket bei, root / Docker / ohne Monitor laufen auf Knopfdruck.
 
 ---
 
 ## Unsere wahren Stärken (keine Schlagworte, sondern am Code und gegenüber Konkurrenz überprüfbare Fähigkeiten)
 
-Andere Plugins, die ego-lite in DSH einbinden, machen daraus nur **3 Werkzeuge** — ein `run`-Skript, ein `help`-Leitfaden, ein `status`-Check — und der Browser bleibt eine **Blackbox im Hintergrund**. Dieses Plugin geht den anderen Weg: **die Blackbox öffnen und von Anfang an „Sehen" und „Steuern" voll ausbauen**.
+Andere Plugins, die ego in DSH einbinden, machen daraus nur **3 Werkzeuge** — ein `run`-Skript, ein `help`-Leitfaden, ein `status`-Check — und der Browser bleibt eine **Blackbox im Hintergrund**. Dieses Plugin geht den anderen Weg: **die Blackbox öffnen und von Anfang an „Sehen" und „Steuern" voll ausbauen**.
 
-| Fähigkeit | Dieses Plugin (dieses Repository) | Vergleichbares Plugin (Da1dr1em/dsh-ego-browser) |
+| Fähigkeit | Dieses Plugin (dieses Repository) | Vergleichbares Plugin |
 |---|---|---|
 | Anzahl strukturierter Werkzeuge | **38**, jeweils mit klarer Verantwortung, deterministisch aufrufbar | **3** (`run`/`help`/`status`) |
 | Live-Beobachtungsfenster (Dual-Backend CDP JPEG / FFmpeg H.264 + Tab-Leiste + Verlauf-Drawer) | ✅ Ja | ❌ Nein |
@@ -64,25 +64,25 @@ Andere Plugins, die ego-lite in DSH einbinden, machen daraus nur **3 Werkzeuge**
 - **Steuern**: Andere nur lesend; unser Beobachtungsfenster **treibt denselben Agent-Browser direkt an** — bei Bedarf übernehmen Sie selbst (Zoom/Ziehen/Klick), ohne den Agenten zu unterbrechen und neu anzusetzen.
 - **Präzise bezeichnen**: Sie **klicken** ein Seitenelement im Beobachtungsfenster an; das Plugin erfasst dessen `backendNodeId`/`tag`/`id` und semantische Beschreibung und fügt es als strukturierten `[CDP-PICKS]`-Block in den Entwurf des Konversationseingabefelds ein (mehrere Auswahlen auf derselben Seite werden automatisch zusammengeführt und nummeriert) — der Agent erhält ein exaktes Ziel, ohne raten zu müssen, „welcher Button gemeint ist".
 
-> Der obige Vergleich beruht auf öffentlich überprüfbaren Fakten: dem Code dieses Repositorys (`bin/cdp-cast-worker.mjs` Live-Streaming + CDP-Eingaberückführung, `lib/index.js` mit 38 registrierten Werkzeugen, `lib/cast-server.js` Host-Brücke, `deliverPickToConversation` in `lib/client.js` für die Auswahl-Referenz) sowie dem Quellcode/README des anderen Plugins (dessen `src/tools.ts` nur `ego_browser_run` / `ego_browser_help` / `ego_browser_status` registriert). Dieses Dokument enthält keine Abwertung anderer — wir stellen nur fest, welche Fähigkeiten wir zusätzlich implementiert und verifiziert haben.
+> Der obige Vergleich beruht auf öffentlich überprüfbaren Fakten: dem Code dieses Repositorys (`bin/cdp-cast-worker.mjs` Live-Streaming + CDP-Eingaberückführung, `lib/index.js` mit 38 registrierten Werkzeugen, `lib/cast-server.js` Host-Brücke, `deliverPickToConversation` in `lib/client.js` für die Auswahl-Referenz) sowie dem öffentlich einsehbaren Quellcode/README des anderen Plugins. Dieses Dokument enthält keine Abwertung anderer — wir stellen nur fest, welche Fähigkeiten wir zusätzlich implementiert und verifiziert haben.
 
-**Gegenüber [ego-lite](https://github.com/CitroLabs/ego-lite) selbst leisten wir all dieses Mehr (alles am Code dieses Repositorys überprüfbar):**
+**Gegenüber der eingebauten Laufzeit selbst (ein headless-CLI) leisten wir all dieses Mehr (alles am Code dieses Repositorys überprüfbar):**
 
 | Fähigkeit | Beschreibung (zugehöriger Code) |
 |---|---|
-| **Beobachtungs-Frontend** | ego-lite selbst ist ein headless-CLI (nur heredoc-Skripte + Textausgabe); wir haben **SSE-Livestreaming + Tab-Leiste + Verlauf-Drawer + direkte Mausbedienung im Beobachtungsfenster + Auswahl-Referenz in die Eingabe** ergänzt (`bin/cdp-cast-worker.mjs`, `lib/cast-server.js`, `createPickControl`/`deliverPickToConversation` in `lib/client.js`) — „Sehen", „Steuern" und „Bezeichnen" werden erstklassige Fähigkeiten |
-| **Sofort einsatzbereit + plattformübergreifend autark** | `resolveEgoEnv` erkennt Chrome/Edge/Brave automatisch, eingebauter `--no-sandbox`-Wrapper, null Konfiguration unter root / Docker / ohne Monitor (`lib/index.js`); kein GUI-Host nötig, wie es die offizielle Variante verlangt |
+| **Beobachtungs-Frontend** | Die eingebaute Laufzeit allein ist ein headless-CLI (nur heredoc-Skripte + Textausgabe); wir haben **SSE-Livestreaming + Tab-Leiste + Verlauf-Drawer + direkte Mausbedienung im Beobachtungsfenster + Auswahl-Referenz in die Eingabe** ergänzt (`bin/cdp-cast-worker.mjs`, `lib/cast-server.js`, `createPickControl`/`deliverPickToConversation` in `lib/client.js`) — „Sehen", „Steuern" und „Bezeichnen" werden erstklassige Fähigkeiten |
+| **Sofort einsatzbereit + plattformübergreifend autark** | `resolveEgoEnv` erkennt Chrome/Edge/Brave automatisch, eingebauter `--no-sandbox`-Wrapper, null Konfiguration unter root / Docker / ohne Monitor (`lib/index.js`); kein GUI-Host nötig |
 | **Robustheitsschicht** | Automatische Kaltstart-Retries (nur transiente CDP-Fehler, echte Fehler werden nicht verschluckt), Single-Instance-Guard für den Worker + automatischer Neustart nach Crash, Plugin-Teardown als fire-and-forget ohne Blockieren des Host-Exits, Obergrenze für den Frontend-Frame-Cache (`withWarmupRetry` / `makeEnsureWorker` / `frameCache`) |
 | **Betriebswerkzeuge** | `bcdp_doctor` (Umgebungsdiagnose), `bcdp_captcha` (Captcha-Erkennung), `bcdp_auth_flush` (Login-Persistenz), `bcdp_login_import` (Login-Import aus Systembrowsern), `bcdp_http` (Anfragen im Browser-Kontext) usw. — eine Schicht, die native CLI-Helper nicht bieten |
 | **self-observation** | Auch wenn der Agent die DSH-Oberfläche selbst bedient, alles live sichtbar und übernehmbar |
 
-> Wir behaupten nicht, mit kernelnahen Snapshots oder dem nativen Multi-Window-Erlebnis der offiziellen macOS-App gleichzuziehen; dieses Repository löst: „dieselben Browser-Fähigkeiten in DSH + Linux/WSL bringen — sichtbar".
+> Wir behaupten nicht, mit kernelnahen Snapshots oder dem nativen Multi-Window-Erlebnis der nativen macOS-App gleichzuziehen; dieses Repository löst: „dieselben Browser-Fähigkeiten in DSH + Linux/WSL bringen — sichtbar".
 
 ---
 
 ## Welches Problem es löst
 
-Universelle Browser sind nicht für Agenten gebaut, doch ein Großteil der Web-Interaktionen (Login-Zustände, Captchas, dynamisches Rendering, Formulare, Sites mit echten Benutzersitzungen) lässt sich nur mit einem echten Browser bewältigen — genau daher stammt das Erbe der ego-Familie aus dem Upstream: **„Der Agent nutzt Ihren bereits angemeldeten Browser, ohne Sie zu stören"** ([offizielle Seite](https://github.com/CitroLabs/ego-lite)).
+Universelle Browser sind nicht für Agenten gebaut, doch ein Großteil der Web-Interaktionen (Login-Zustände, Captchas, dynamisches Rendering, Formulare, Sites mit echten Benutzersitzungen) lässt sich nur mit einem echten Browser bewältigen — genau das ist die Absicht hinter ego: **„Der Agent nutzt Ihren bereits angemeldeten Browser, ohne Sie zu stören"** — dieses Plugin bringt sie in DSH.
 
 Dieses Plugin bindet ihn in DSH ein und löst den schmerzhaftesten Punkt — **Sie sehen nicht, was der Agent tut, und können nicht eingreifen** — mit einem Beobachtungsfenster:
 
@@ -130,7 +130,7 @@ dshx list                                                # sollte anzeigen: [on]
 > **Hinweis zur Paketumbenennung**: Der Paketname dieses Plugins ist **`dsh-browser-cdp`** (früher `dsh-ego-browser`, Alias `@dsh-external/ego-browser`). Ab DSH Desktop 2.0.5 gibt es eine Konsistenzprüfung „Profile-Abhängigkeitsname == tatsächlicher Paketname"; referenziert das Profil noch den alten Namen, startet es in den Wiederherstellungsmodus. Nach dem Upgrade bitte **sowohl** den Abhängigkeitsschlüssel in der `package.json` des Profils **als auch** den Eintrag in `dsh.profile.bundles` auf `dsh-browser-cdp` ändern:
 
    ```diff
-   - "dsh-ego-browser": "github:Fisfzy/ego-browser",
+   - "dsh-ego-browser": "<alte github-Quelle>",
    + "dsh-browser-cdp": "github:drscrewdriver/dsh-browser-cdp",
    ```
 
@@ -150,15 +150,15 @@ Die Verbindungsliste im Einstellungspanel ist **geordnet** — **die Reihenfolge
 | Typ | Was er tut | Einschränkung |
 |---|---|---|
 | **CDP-Endpunkt** | Übergibt die Adresse eines Browsers mit bereits offenem Debug-Port an die eingebaute Runtime (Injektion von `EGO_LINUX_CDP_URL`), die sich **anhängt** | Mehrere Einträge möglich |
-| **Lokales ego-CLI** | Das lokale ego-CLI treibt **selbst** seinen lokalen ego-lite-Browser — **kein Endpunkt wird injiziert** | **Nur lokal, global höchstens einer** |
+| **Lokales ego-CLI** | Das lokale ego-CLI treibt **selbst** seinen lokalen ego-Browser — **kein Endpunkt wird injiziert** | **Nur lokal, global höchstens einer** |
 
-**Warum der zweite Typ existiert**: Das injizierte `EGO_LINUX_CDP_URL` ist ein privater Vertrag des **eingebauten Linux-Portierungsbuilds**; das native `ego-browser` der App `ego lite` unter macOS **liest es schlicht nicht**. Gäbe es nur den Typ „CDP-Endpunkt", könnten macOS-Nutzer ihren bereits angemeldeten ego-lite nicht nutzen — sie müssten sich auf einen entfernten Port verbinden oder vom Portierungsbuild einen Standard-Chromium starten lassen. Der Typ „lokales CLI" schließt genau diese Lücke.
+**Warum der zweite Typ existiert**: Das injizierte `EGO_LINUX_CDP_URL` ist ein privater Vertrag der **eingebauten Laufzeit (Linux-Linie)**; das native `ego-browser` der App `ego lite` unter macOS **liest es schlicht nicht**. Gäbe es nur den Typ „CDP-Endpunkt", könnten macOS-Nutzer ihren bereits angemeldeten ego nicht nutzen — sie müssten sich auf einen entfernten Port verbinden oder von der eingebauten Laufzeit einen Standard-Chromium starten lassen. Der Typ „lokales CLI" schließt genau diese Lücke.
 
 Auflösungsreihenfolge (wenn `cliPath` leer ist): expliziter Pfad → `ego-browser` im PATH → Helper im macOS-App-Bundle (`/Applications/ego lite.app/…/Helpers/ego-browser`) → eingebaute Plugin-Runtime.
 
 Zwei Standardwerte, die man kennen sollte:
 
-- **`--sdk-path` ist standardmäßig aus**: Standardmäßig wird das mit dem CLI mitgelieferte Harness verwendet (das offiziell gepaarte); erst bei Aktivierung wird das Harness-Paket dieses Plugins injiziert. Erkennt das CLI dieses Flag nicht, vermerkt das Plugin einen Hinweis und **wiederholt den Versuch automatisch einmal ohne es** — die ganze Kette wird dadurch nicht unbrauchbar.
+- **`--sdk-path` ist standardmäßig aus**: Standardmäßig wird das mit dem CLI mitgelieferte Harness verwendet; erst bei Aktivierung wird das Harness-Paket dieses Plugins injiziert. Erkennt das CLI dieses Flag nicht, vermerkt das Plugin einen Hinweis und **wiederholt den Versuch automatisch einmal ohne es** — die ganze Kette wird dadurch nicht unbrauchbar.
 - **Die Bereitschaftsprüfung läuft einmal durch einen echten heredoc** (derselbe Kanal wie bei der eigentlichen Arbeit), sie ist also **nicht gratis**: Die Prüfung kann einen Kaltstart des Backend-Browsers auslösen (beim eingebauten Portierungsbau gemessen ca. 1,3 s).
 
 Beziehungen zu anderen Schaltern:
@@ -167,7 +167,7 @@ Beziehungen zu anderen Schaltern:
 - `remoteEnabled` (Hauptschalter für Remote) **regelt nur entferntes CDP** und beeinflusst lokale CLI-Verbindungen nicht.
 - `allowLocalFallback` / `localHeadless` / `localUserDataDir` wirken nur auf den Fallback von CDP-Endpunkten und verwaltete Starts.
 
-`bcdp_doctor` meldet die Zählung der Typen in der aktuellen Sequenz, den tatsächlich aufgelösten CLI-Pfad samt Form sowie (falls das Upstream-Plugin `dsh-ego-browser` auf derselben Maschine installiert ist) einen Koexistenz-Hinweis.
+`bcdp_doctor` meldet die Zählung der Typen in der aktuellen Sequenz, den tatsächlich aufgelösten CLI-Pfad samt Form sowie (falls die alte `dsh-ego-browser` auf derselben Maschine installiert ist) einen Koexistenz-Hinweis.
 
 ## Werkzeugliste (38, Präfix `bcdp_`, vollständiger Index via `bcdp_help`)
 
@@ -256,7 +256,7 @@ pnpm run build   # drei tsdown-Bundles: lib/index.js + lib/client.js + bin/cdp-c
 
 ## Bekannte Einschränkungen (ehrlich benannt)
 
-- **Windows**: Auf Plugin-Ebene seit v0.4.0 angepasst; die zugrundeliegende ego-lite-Runtime bleibt eine Community-Portierung ohne offiziellen Windows-Support — die Stabilität komplexer mehrstufiger Abläufe kann hinter macOS zurückbleiben.
+- **Windows**: Auf Plugin-Ebene seit v0.4.0 angepasst; die eingebaute Laufzeit wird für Windows weiterhin primär von der Community getragen — die Stabilität komplexer mehrstufiger Abläufe kann hinter macOS zurückbleiben.
 - **FFmpeg-Plattformaufnahme**: Windows nutzt inzwischen `gfxcapture(HWND)`, was einen neueren Build mit diesem Filter erfordert; ein älteres FFmpeg im PATH wird übersprungen, mit Hinweis auf einen kompatiblen Download. Linux nutzt `x11grab`, macOS `avfoundation` als Anzeige-Ausschnitt; ScreenCaptureKit unter macOS und ein Portal-Helper für Wayland sind künftige Erweiterungen.
 - **Installationsumgebung**: Die DSH-Peer-Pakete dieses Repositorys sind nicht alle in der öffentlichen npm-Registry. Ein gewöhnliches `pnpm install` kann beim Auflösen der `@deepseek-ai/*`-Peers scheitern; eine DSH-Profil-Installation muss diese Peers liefern. CDP hängt nicht von FFmpeg ab und lädt bei der Plugin-Installation keine Binaries herunter.
 - **Snapshot-Qualität**: Unter Linux wird der semantische Baum über CDP `DOMSnapshot` rekonstruiert, nicht kernelnah wie unter macOS — komplexe iframe/canvas-Szenarien können degradieren.
@@ -266,14 +266,14 @@ pnpm run build   # drei tsdown-Bundles: lib/index.js + lib/client.js + bin/cdp-c
 
 ## Lizenz und Namensnennung
 
-Das Plugin selbst steht unter MIT. Die eingebaute Runtime bettet MIT-Code von ego-lite ein; die optional herunterladbaren FFmpeg-Builds ziehen GPL-3.0-or-later-Pflichten nach sich. Vor Nutzung oder Weiterverbreitung bitte die Lizenzen der Build-Quellen und die Informationen zum Quellcodezugriff lesen — siehe [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+Das Plugin selbst steht unter MIT. Die eingebaute Laufzeit bettet MIT-Code Dritter ein; die optional herunterladbaren FFmpeg-Builds ziehen GPL-3.0-or-later-Pflichten nach sich. Vor Nutzung oder Weiterverbreitung bitte die Lizenzen der Build-Quellen und die Informationen zum Quellcodezugriff lesen — siehe [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ## Supply-Chain- und Berechtigungshinweise
 
 Deterministische Fakten zur Verzeichnisaufnahme und Überprüfung:
 
 - **Laufzeitdateien**: `lib/` (Build-Artefakte, deterministisch aus dem TypeScript von `src/` per `npm run build` mit tsdown erzeugt), `bin/` (ausführbare Einstiegsskripte für Worker und ffmpeg-probe), `cordis.patch.yml` (Assemblierungsschicht), `dsh-plugin.json` (Manifest). `*.map` sind nur Debug-Sourcemaps, an der Laufzeit nicht beteiligt und ausdrücklich ausgeschlossen.
-- **Native/ausführbare Artefakte**: `runtime/` enthält die eingebaute ego-lite-Runtime (MIT; Herkunft und Datei-für-Datei-Liste in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)) — sie ist die Kernfunktion des Plugins (selbstversorgter, verwalteter Chrome/CDP-Host), ein absichtlich mitgeführtes ausführbares Artefakt, kein Build-Nebenprodukt. `runtime/PATCHES.md` dokumentiert alle lokalen Patches gegenüber dem Upstream.
+- **Native/ausführbare Artefakte**: `runtime/` enthält eine ego-kompatible eingebaute Laufzeit (MIT Dritter; Herkunft und Datei-für-Datei-Liste in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)) — sie ist die Kernfunktion des Plugins (selbstversorgter, verwalteter Chrome/CDP-Host), ein absichtlich mitgeführtes ausführbares Artefakt, kein Build-Nebenprodukt. `runtime/PATCHES.md` dokumentiert alle lokalen Patches gegenüber der eingebauten Laufzeit.
 - **Abhängigkeiten**: Die einzige Laufzeitabhängigkeit ist `@deepseek-ai/schemastery` (eine äquivalente Implementierung stellt der DSH-Host bereit); die Peer-Dependencies sind ausnahmslos `@deepseek-ai/dsh-*`-Hostdienste. Die externen Module des Client-Bundles werden über die Modultabelle des Hosts aufgelöst, keine npm-Laufzeitabhängigkeiten werden mitgeführt.
 - **Externe Dienste**: keine Telemetrie, keine externen API-Aufrufe. Das einzige Netzverhalten ist **optional**: Der FFmpeg-Installer lädt auf Anweisung des Nutzers einen Build von GitHub (oder einem konfigurierten Mirror); Quellenprüfung und Lizenzpflichten siehe [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 - **Fehlverhalten**: Ohne webServer am Host (TUI/headless) werden die Watch-Routen sicher übersprungen; schlägt der Worker-Start fehl, liefern die Watch-Routen ein JSON mit `ok:false`, statt zu hängen; die Browser-Prozesse enden mit dem Teardown des Hosts (`--stop` als fire-and-forget, ohne den Host-Exit zu blockieren).

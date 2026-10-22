@@ -8,7 +8,7 @@
   <img src="https://img.shields.io/badge/Node-%3E%3D22-brightgreen?logo=node.js&logoColor=white" alt="Node >= 22">
 </p>
 
-> **仓库**：`github.com/drscrewdriver/dsh-browser-cdp`（原名 `dsh-ego-browser`，源自上游 [Fisfzy/dsh-ego-browser](https://github.com/Fisfzy/dsh-ego-browser)）｜版本历史见 [CHANGELOG.md](CHANGELOG.md)
+> **仓库**：`github.com/drscrewdriver/dsh-browser-cdp`｜版本历史见 [CHANGELOG.md](CHANGELOG.md)
 
 ### 版本兼容矩阵
 
@@ -36,19 +36,19 @@
 
 **登录态导入（v0.8.5 新增）**：工具 `bcdp_login_import`，把你日常 Chrome/Edge/Brave 里的登录 cookie **按域名**复制进 agent 浏览器（真实二进制无头启动 + CDP 透传读取，兼容 Chrome 127+ 的 App-Bound Encryption，不做离线解密；源浏览器运行中可选择优雅关闭后导入，窗口下次启动自动恢复）。cookie 值不出现在任何日志与输出中；导入前自动备份源 cookie 库，异常清空自动还原。配合默认的磁盘持久化 Profile，导入的登录态跨重启永久保留。
 
-一款 **CDP 浏览器代理**：把 [CitroLabs/ego-lite](https://github.com/CitroLabs/ego-lite)（给 AI Agent 用的 Chromium）作为内置运行时接入 DeepSeek Harness，以 **34 个结构化 `bcdp_*` 工具**驱动浏览器，并配一套**实时观察前端口**——agent 后台操作网页时，你能像看直播一样看到它正在浏览的每个页面，还能直接操作它。
+一款 **CDP 浏览器代理**：内置 **ego 兼容运行时**（供 AI Agent 用的 Chromium，来源与许可逐文件见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)）接入 DeepSeek Harness，以 **34 个结构化 `bcdp_*` 工具**驱动浏览器，并配一套**实时观察前端口**——agent 后台操作网页时，你能像看直播一样看到它正在浏览的每个页面，还能直接操作它。
 
 **一点私藏的独特之处（self-observation）**：agent 用的就是这一个 Chromium——连它操作 **DSH 自身**（管理会话、任务看板、调设置）时，观察窗也实时显示、你能随时接手。不只是"看得见 agent 在网页上干活"，连 agent 操作 DSH 界面本身都是全程可见、可掌控的。
 
-**开箱即用**：插件包内置 ego 运行时（`runtime/`，MIT，见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)）——无需克隆官方仓库、无需手动构建，`--no-sandbox` wrapper 随包自带，root / Docker / 无显示器一键跑。
+**开箱即用**：插件包内置 ego 兼容运行时（`runtime/`，第三方 MIT，来源见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)）——无需额外浏览器、无需手动构建，`--no-sandbox` wrapper 随包自带，root / Docker / 无显示器一键跑。
 
 ---
 
 ## 我们的真正优势（不是口号，是能对照代码和竞品核实的能力）
 
-同样把 ego-lite 接进 DSH，市面上已有同类插件用它**只做了 3 个工具**——一个 `run` 脚本、一个 `help` 指南、一个 `status` 体检，浏览器仍是**后台黑盒**。本插件走的是另一条路：**把黑盒打开，并且一上来就把"看"和"控"的能力做到位**。
+同为把 ego 浏览器接进 DSH 的方案，市面上已有同类插件**只做了 3 个工具**——一个 `run` 脚本、一个 `help` 指南、一个 `status` 体检，浏览器仍是**后台黑盒**。本插件走的是另一条路：**把黑盒打开，并且一上来就把"看"和"控"的能力做到位**。
 
-| 能力 | 本插件（本仓库） | 同类插件（Da1dr1em/dsh-ego-browser） |
+| 能力 | 本插件（本仓库） | 同类插件 |
 |---|---|---|
 | 结构化工具数 | **34 个**，职责单一、可确定性调用 | **3 个**（`run`/`help`/`status`） |
 | 实时观察窗（CDP JPEG / FFmpeg H.264 双后端 + 标签条 + 历史抽屉） | ✅ 有 | ❌ 无 |
@@ -64,25 +64,25 @@
 - **控得住**：别家只读；我们监控窗**直接驱动**同一个 agent 浏览器，需要时你亲手接管（缩放/拖拽/点击），不必打断 agent 重来。
 - **指得准**：你在观察窗里**点选**页面元素，插件捕获其 `backendNodeId`/`tag`/`id` 与语义描述，以 `[CDP-PICKS]` 结构化块并入对话输入框草稿（同页多元素自动合并编号）——agent 拿到的是精确目标，不用猜"你说的按钮是哪个"。
 
-> 以上对比基于公开可见的可核实事实：本仓库代码（`bin/cdp-cast-worker.mjs` 实时推流 + CDP 输入回传、`lib/index.js` 34 个注册工具、`lib/cast-server.js` host 桥接、`lib/client.js` 的 `deliverPickToConversation` 点选引用）与同类插件的源码/README（其 `src/tools.ts` 仅注册 `ego_browser_run` / `ego_browser_help` / `ego_browser_status`）。此文档不含对任何他人的贬低——我们只陈述自己多实现并验证了哪些能力。
+> 以上对比基于公开可见的可核实事实：本仓库代码（`bin/cdp-cast-worker.mjs` 实时推流 + CDP 输入回传、`lib/index.js` 34 个注册工具、`lib/cast-server.js` host 桥接、`lib/client.js` 的 `deliverPickToConversation` 点选引用）与同类插件公开可见的源码/README。此文档不含对任何他人的贬低——我们只陈述自己多实现并验证了哪些能力。
 
-**相对 [ego-lite](https://github.com/CitroLabs/ego-lite) 本体，我们多做了这些（都可对照本仓库代码核实）：**
+**相对内置运行时本体（一个无头 CLI），我们多做了这些（都可对照本仓库代码核实）：**
 
 | 能力 | 说明（对应代码） |
 |---|---|
-| **观察窗前端口** | ego-lite 本体是无头 CLI（只有 heredoc 脚本 + 文本输出）；我们在其上加了 **SSE 实时推流 + 标签条 + 历史抽屉 + 监控窗鼠标直操 + 点选元素引用进输入框**（`bin/cdp-cast-worker.mjs`、`lib/cast-server.js`、`lib/client.js` 的 `createPickControl`/`deliverPickToConversation`），让"看"、"控"、"指"成为一等能力 |
-| **开箱即用 + 跨平台自足** | `resolveEgoEnv` 自动探测 Chrome/Edge/Brave，内置 `--no-sandbox` wrapper，root / Docker / 无显示器免配置（`lib/index.js`）；不必像官方那样先装一个 GUI 宿主 |
+| **观察窗前端口** | 内置运行时本体是无头 CLI（只有 heredoc 脚本 + 文本输出）；我们在其上加了 **SSE 实时推流 + 标签条 + 历史抽屉 + 监控窗鼠标直操 + 点选元素引用进输入框**（`bin/cdp-cast-worker.mjs`、`lib/cast-server.js`、`lib/client.js` 的 `createPickControl`/`deliverPickToConversation`），让"看"、"控"、"指"成为一等能力 |
+| **开箱即用 + 跨平台自足** | `resolveEgoEnv` 自动探测 Chrome/Edge/Brave，内置 `--no-sandbox` wrapper，root / Docker / 无显示器免配置（`lib/index.js`）；不必先装一个 GUI 宿主 |
 | **健壮性层** | 冷启动自动重试（只重试 CDP 瞬态，不吞真错）、worker 单实例守卫 + 崩溃自动重启、插件卸载 fire-and-forget 不阻塞宿主退出、前端帧缓存上限（`withWarmupRetry` / `makeEnsureWorker` / `frameCache`） |
 | **运维型工具** | `bcdp_doctor`（环境体检）、`bcdp_captcha`（人机验证探测）、`bcdp_auth_flush`（登录落盘）、`bcdp_login_import`（系统浏览器登录态导入）、`bcdp_http`（浏览器上下文请求）等，是原生 CLI helper 没有的一层 |
 | **self-observation** | agent 操作 DSH 自身界面时同样实时可见、可接手 |
 
-> 我们不声称媲美官方 macOS App 的内核级快照或原生多窗口体验；本仓库解决的是"把同一套浏览器能力带进 DSH + Linux/WSL + 看得见"这件事。
+> 我们不声称媲美原生 macOS App 的内核级快照或多窗口体验；本仓库解决的是"把同一套浏览器能力带进 DSH + Linux/WSL + 看得见"这件事。
 
 ---
 
 ## 它解决什么问题
 
-通用浏览器不是为 agent 设计的，而 Web 上大量交互（登录态、验证码、动态渲染、表单、需真人会话的站点）只有真浏览器能面对——这正是本插件继承自上游 ego 系的 **"让 agent 用你已登录的浏览器，而不打扰你"**（[官网](https://github.com/CitroLabs/ego-lite)）的由来。
+通用浏览器不是为 agent 设计的，而 Web 上大量交互（登录态、验证码、动态渲染、表单、需真人会话的站点）只有真浏览器能面对——这正是 ego 浏览器 **"让 agent 用你已登录的浏览器，而不打扰你"** 的设计初衷。
 
 本插件把它接进 DSH，并把最痛的一点——**你看不见 agent 在干什么、也插不上手**——用一套观察窗解决：
 
@@ -131,7 +131,7 @@ dshx list                                                # 应显示：[on] dsh-
 > **包名迁移说明**：本插件包名是 **`dsh-browser-cdp`**（曾用名 `dsh-ego-browser`、别名 `@dsh-external/ego-browser`）。DSH Desktop 2.0.5 起增加了「profile 依赖名 == 包实际 name」的一致性校验，若 profile 仍用旧名引用，启动会挂进恢复模式。升级后请把 profile 的 `package.json` 依赖键 **和** `dsh.profile.bundles` 条目**两处**都改为 `dsh-browser-cdp`：
 
    ```diff
-   - "dsh-ego-browser": "github:Fisfzy/ego-browser",
+   - "dsh-ego-browser": "<旧 github 来源>",
    + "dsh-browser-cdp": "github:drscrewdriver/dsh-browser-cdp",
    ```
 
@@ -153,20 +153,20 @@ dshx list                                                # 应显示：[on] dsh-
 | 类型 | 它做什么 | 约束 |
 |---|---|---|
 | **CDP 端点** | 把一个已开调试端口的浏览器地址交给内置运行时（注入 `EGO_LINUX_CDP_URL`），运行时**附着**上去 | 可多条 |
-| **本机 ego CLI** | 由本机 ego CLI **自己**驱动它本机的 ego-lite 浏览器——**不注入任何端点** | **仅限本机，全局至多一条** |
+| **本机 ego CLI** | 由本机 ego CLI **自己**驱动它本机的 ego 浏览器——**不注入任何端点** | **仅限本机，全局至多一条** |
 
-**为什么需要第二种**：注入用的 `EGO_LINUX_CDP_URL` 是**内置 Linux 移植版**的私有契约，macOS 上用 `ego lite` app 附带的那个原生 `ego-browser` **根本不读它**。所以在只有"CDP 端点"这一种类型时，macOS 用户无法用上自己那个已登录的 ego-lite——只能连远端端口，或让移植版另起一个 stock Chromium。本机 CLI 类型补的就是这条路。
+**为什么需要第二种**：注入用的 `EGO_LINUX_CDP_URL` 是**内置运行时（Linux 线）**的私有契约，macOS 上用 `ego lite` app 附带的那个原生 `ego-browser` **根本不读它**。所以在只有"CDP 端点"这一种类型时，macOS 用户无法用上自己那个已登录的 ego——只能连远端端口，或让内置运行时另起一个 stock Chromium。本机 CLI 类型补的就是这条路。
 
 解析顺序（`cliPath` 留空时）：显式路径 → PATH 上的 `ego-browser` → macOS app 包内 helper（`/Applications/ego lite.app/…/Helpers/ego-browser`）→ 插件内置运行时。
 
 两个默认值值得知道：
 
-- **`useSdkPath` 默认关闭**：关闭时用 CLI 自带的 harness（官方配对的那套）；打开后，**探测与每一次工具执行**都会注入 `--sdk-path <插件内置 harness>`。这一点很关键：只在探测时带、执行时不带，脚本首行就会崩 `ReferenceError: taskSpaces is not defined`（1.2.4 修复的 P0）。若 CLI 不认这个旗标，探测会记一条提示并**自动重试一次不带它**；此时只有 CLI 自带的 harness 确实暴露 `taskSpaces` / `browser` 门面才算就绪，否则显式判失败并给出缺失的门面名——不再假阳性。
+- **`useSdkPath` 默认关闭**：关闭时用 CLI 自带的 harness（配套的那套）；打开后，**探测与每一次工具执行**都会注入 `--sdk-path <插件内置 harness>`。这一点很关键：只在探测时带、执行时不带，脚本首行就会崩 `ReferenceError: taskSpaces is not defined`（1.2.4 修复的 P0）。若 CLI 不认这个旗标，探测会记一条提示并**自动重试一次不带它**；此时只有 CLI 自带的 harness 确实暴露 `taskSpaces` / `browser` 门面才算就绪，否则显式判失败并给出缺失的门面名——不再假阳性。
 - **就绪探测是 `nodejs` 通道上的 facade 探针**（与干活同一条通道）：只检查注入后的 `taskSpaces` / `browser` / `page` 全局，不启动也不等待浏览器，实测约 300 ms；`bcdp_status` 走同一判据。
 
 ### 双 API 面共存风险
 
-本插件通过注入 SDK 使用 `taskSpaces.*`（插件侧 API），而官方 `ego-browser skill` 脚本使用原生 `taskSpace()`（app 侧 API）。二者驱动的是**同一个** ego lite，task space 也是共享的：同时用插件工具和官方 skill 脚本操作同一空间，可能互相抢控制权。**建议二选一，以插件为准**；确需跑官方脚本时，先停用本插件的 ego-cli link。
+本插件通过注入 SDK 使用 `taskSpaces.*`（插件侧 API），而 `ego-browser skill` 脚本使用原生 `taskSpace()`（app 侧 API）。二者驱动的是**同一个** ego，task space 也是共享的：同时用插件工具和该 skill 脚本操作同一空间，可能互相抢控制权。**建议二选一，以插件为准**；确需跑该 skill 脚本时，先停用本插件的 ego-cli link。
 
 与其它开关的关系：
 
@@ -174,7 +174,7 @@ dshx list                                                # 应显示：[on] dsh-
 - `remoteEnabled`（远端总开关）**只管远端 CDP**，不影响本机 CLI 连接。
 - `allowLocalFallback` / `localHeadless` / `localUserDataDir` 只作用于 CDP 端点的回落与受管启动。
 
-`bcdp_doctor` 会报告当前序列类型计数、CLI 实际解析到的路径与形态，以及（若同机装了上游 `dsh-ego-browser`）一条共存提示。
+`bcdp_doctor` 会报告当前序列类型计数、CLI 实际解析到的路径与形态，以及（若同机装了旧版 `dsh-ego-browser`）一条共存提示。
 
 ## Lightpanda 后端（可选引擎，beta）
 
@@ -292,7 +292,7 @@ wait / space / escape 三族已按 `op` 合并，旧工具名**移除**（不保
 
 ### 跨调用稳定定位（D1）
 
-`bcdp_snapshot` 现在带稳定 locator：输出里每个可交互节点除了 `[ref=N]` 还附 `loc=css:…` / `loc=role:…` / `loc:href:…`。**跨调用请优先用 `loc=` 而非 `@N`**——`@N` 每次快照重新编号且其 ref 映射只活在取快照的那个子进程里，而 `loc=` 稳定、能跨子进程命中（`bcdp_click` / `bcdp_fill` 直接吃 `loc=...`）。这是插件层解法，未改上游 SDK 的 ref 编号生成。
+`bcdp_snapshot` 现在带稳定 locator：输出里每个可交互节点除了 `[ref=N]` 还附 `loc=css:…` / `loc=role:…` / `loc:href:…`。**跨调用请优先用 `loc=` 而非 `@N`**——`@N` 每次快照重新编号且其 ref 映射只活在取快照的那个子进程里，而 `loc=` 稳定、能跨子进程命中（`bcdp_click` / `bcdp_fill` 直接吃 `loc=...`）。这是插件层解法，未改内置运行时 SDK 的 ref 编号生成。
 
 ### navigate 卡死自愈（F）
 
@@ -371,7 +371,7 @@ pnpm run build   # tsdown 三 bundle：lib/index.js + lib/client.js + bin/cdp-ca
 
 ## 已知限制（诚实说明）
 
-- **Windows**：插件层已做 v0.4.0 适配；底层 ego-lite 宿主仍是非 Windows 官方支持的社区移植，复杂多步流程稳定性可能弱于 macOS。
+- **Windows**：插件层已做 v0.4.0 适配；内置运行时的宿主对 Windows 仍以社区适配为主，复杂多步流程稳定性可能弱于 macOS。
 - **FFmpeg 平台捕获**：Windows 已使用 `gfxcapture(HWND)`，需要包含该 filter 的新构建；PATH 中的旧 FFmpeg 会被跳过并提示下载兼容版本。Linux 使用 `x11grab`、macOS 使用 `avfoundation` display crop；macOS ScreenCaptureKit、Wayland Portal helper 属后续增强。
 - **安装环境**：本仓库的 DSH peer 包不全在公共 npm registry。普通 `pnpm install` 可能在解析 `@deepseek-ai/*` peer 时失败；DSH profile 安装应提供这些 peer。CDP 不依赖 FFmpeg，也不会在插件安装阶段下载二进制。
 - **快照质量**：Linux 用 CDP `DOMSnapshot` 重建语义树，非 macOS 内核级，复杂 iframe/画布场景可能降级。
@@ -381,14 +381,14 @@ pnpm run build   # tsdown 三 bundle：lib/index.js + lib/client.js + bin/cdp-ca
 
 ## 许可与署名
 
-插件本体 MIT。内置运行时嵌入 ego-lite 的 MIT 代码；可选下载的 FFmpeg 构建涉及 GPL-3.0-or-later 义务。使用或再分发前请阅读构建来源的许可证与源码获取信息，详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+插件本体 MIT。内置运行时嵌入第三方 MIT 代码；可选下载的 FFmpeg 构建涉及 GPL-3.0-or-later 义务。使用或再分发前请阅读构建来源的许可证与源码获取信息，来源与署名详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
 ## 供应链与权限说明
 
 为目录收录与审查提供的确定性事实：
 
 - **运行文件**：`lib/`（构建产物，由 `npm run build` 从 `src/` TypeScript 以 tsdown 确定性生成）、`bin/`（worker 与 ffmpeg-probe 的可执行入口脚本）、`cordis.patch.yml`（装配层）、`dsh-plugin.json`（manifest）。`*.map` 仅为调试用 sourcemap，不参与运行，已声明排除。
-- **原生/可执行工件**：`runtime/` 内置 ego-lite 运行时（MIT，来源与逐文件清单见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)）——它是本插件的核心功能（自带受管 Chrome/CDP 宿主），属有意携带的可执行工件，非构建副产物。`runtime/PATCHES.md` 记录对上游的全部本地补丁。
+- **原生/可执行工件**：`runtime/` 内置 ego 兼容运行时（第三方 MIT，来源与逐文件清单见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)）——它是本插件的核心功能（自带受管 Chrome/CDP 宿主），属有意携带的可执行工件，非构建副产物。`runtime/PATCHES.md` 记录对内置运行时的全部本地补丁。
 - **依赖**：运行时依赖仅 `@deepseek-ai/schemastery`（由 DSH 宿主提供对等实现）；peer 依赖全部为 `@deepseek-ai/dsh-*` 宿主服务。客户端 bundle 的外部模块由宿主模块表解析，不携带 npm 运行时依赖。
 - **外部服务**：无遥测、无外部 API 调用。唯一的网络行为是**可选的** FFmpeg 安装器按用户指令从 GitHub（或用户配置的镜像）下载构建件，来源校验与许可义务见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 - **失败边界**：宿主无 webServer（TUI/headless）时 watch 路由安全跳过；worker 启动失败时 watch 路由返回 `ok:false` 的 JSON 而非挂起；浏览器进程随宿主 teardown 一并终止（`--stop` fire-and-forget，不阻塞宿主退出）。

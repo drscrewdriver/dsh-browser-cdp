@@ -2,7 +2,7 @@
   "id": "dsh-ego-browser",
   "name": "ego-browser",
   "packageName": "dsh-ego-browser",
-  "description": "Agent 浏览器：结构化浏览器自动化工具(30+ ego_*) + 实时 watch 面板(SSE screencast/鼠标直控/下载捕获/登录引导)，内置 ego-lite Chrome CDP 宿主。",
+  "description": "Agent 浏览器：结构化浏览器自动化工具(30+ ego_*) + 实时 watch 面板(SSE screencast/鼠标直控/下载捕获/登录引导)，内置 ego 兼容 Chrome CDP 宿主。",
   "repositoryUrl": "https://github.com/Fisfzy/dsh-ego-browser",
   "defaultBranch": "master",
   "manifestPath": "package.json",

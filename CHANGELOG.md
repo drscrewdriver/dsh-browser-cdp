@@ -1,3 +1,5 @@
+1.6.1: host enumeration addendum for DSH 0.2.1-rc.3 (declaration-only bump; contract plane zero diff).
+
 ## 1.6.0 (2026-10-21)
 
 **默认行为变更：会话隔离成为默认。** 一个 `bcdp_*` 调用**省略 `space`** 时，不再落到跨会话共享的 `default`，而是落到**本会话自己的**任务空间 `dsh-agent-<会话id前8位>`；只有**显式**写 `space: 'default'`（或 `op=open name='default'`）才使用共享具名槽。

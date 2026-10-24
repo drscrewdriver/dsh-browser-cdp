@@ -254,6 +254,8 @@ export interface ResolvedConfig {
   toolEscape: boolean
   /** 评审级开关；开 + 配了 JEV/Laya Key 才会真的注入。 */
   toolJudge: boolean
+  /** 按会话隔离解锁触发：true = 每个会话各自推进批次深度；false = 进程级共享。 */
+  sessionScopedPulse: boolean
   chromeArgs: string
   // ── R1/R7: connection sequence + activation ─────────────────────────────
   /**

@@ -6,23 +6,24 @@
 // 前」收成一处策略，注册时机交给 index.ts 的控制器执行。
 //
 // 八批（见 ego-browser-cdp-issues.md §9.2）：
-//   core     常驻：探测/诊断/指南 + 最小可用闭环（打开空间/空间归属 → 导航 → 读页面）。
-//            永不封印，否则 lazy 模式下模型连「解锁」的入口都没有。
+//   core     常驻：只留 bcdp_status —— 它是 lazy 模式唯一的解锁入口（调用即置活动并
+//            推进批次）。永不封印、也不给开关：把它封了，模型在「工具不在列表」时
+//            就连自救入口都没有。诊断/指南/空间/导航/读页面已移入 act / observe 批。
 //   act      动手：click / fill / key / select / check / hover / scroll / drag / tab。
 //   observe  看结果：screenshot / page_info / read_element / js。
 //   wait     等待：wait / wait_for_selector / wait_for_url / wait_for_response / wait_page。
 //   power    重量级：raw CDP / http / upload / download / dialog。
 //   session  登录态：captcha / auth_flush / login_import。
-//   escape   逃生舱：script（verbatim:true 即原 cli 的裸 heredoc 行为）。**冷启动即可用**（见下）。
+//   escape   逃生舱：script（verbatim:true 即原 cli 的裸 heredoc 行为）。与其它非 core 批同样要活动闸（见下）。
 //   judge    评审链（bcdp_jev_*）：除解锁外还要求评审**已配置**。
 //
 // act / observe / wait 三批按顺序渐进放行（一次活动放一批），因为它们的使用
 // 时机高度重叠（点完要看、看完要点），拆成三个用户开关只会让人永远全开。
 //
-// escape 为什么给独立开关且不吃活动闸：
-//   它是唯一能在一次调用里干完任意多步任务的工具（page/browser/taskSpaces/
-//   fetch/cdp 全预置）。其余 30 多个工具都能用它等价做到，所以它必须始终可达
-//   ——否则模型遇到「结构化工具没覆盖」的情形时，手里没有任何逃生手段。
+// escape 仍独立成批，但「不吃活动闸」的豁免已移除：
+//   它单独占 ≈1,620 字符/轮（比收窄后的常驻面还大三倍），而 lazy 下模型只要先调
+//   一次 bcdp_status 就能拿到它——牺牲的不是逃生能力，只是「冷启动直接写脚本」这一步。
+//   保留独立开关（toolEscape）是为了让用户仍能显式把它要回来。
 //   cli 与 script 原是同一 heredoc 运行时的两种返回形态（script 多 duration/
 //   timedOut），1.5.0 已合并为单个 bcdp_script：verbatim:true 走裸 heredoc，
 //   默认走带 preamble 的形态。
@@ -41,13 +42,10 @@ export type ToolTier = 'core' | 'act' | 'observe' | 'wait' | 'power' | 'session'
 
 const CORE = [
   'bcdp_status',
-  'bcdp_doctor',
-  'bcdp_help',
-  'bcdp_space',
-  'bcdp_navigate',
-  'bcdp_snapshot',
 ] as const
 const ACT = [
+  'bcdp_space',
+  'bcdp_navigate',
   'bcdp_click',
   'bcdp_fill',
   'bcdp_key',
@@ -57,12 +55,15 @@ const ACT = [
   'bcdp_check',
   'bcdp_drag',
   'bcdp_tab',
+  'bcdp_help',
+  'bcdp_doctor',
 ] as const
 const OBSERVE = [
   'bcdp_screenshot',
   'bcdp_page_info',
   'bcdp_read_element',
   'bcdp_js',
+  'bcdp_snapshot',
 ] as const
 const WAIT = [
   'bcdp_wait',
@@ -198,14 +199,18 @@ export const tierOpen = (tier: ToolTier, p: TierPolicy): boolean => {
  * ③ 活动闸：`lazy` 下非 core 级要等活动，`always` 下不设时机闸；
  * ④ 批次闸：只在 act/observe/wait 三批上按 batchDepth 递增放行。
  *
- * `escape` 是唯一的例外：它不吃③。逃生舱必须在模型手里始终可达——否则遇到
- * 「结构化工具没覆盖」的情形时，模型既调不动它、也没法用别的工具绕过。
+ * depth=0 时连 act 也被封，所以唯一常驻的 `bcdp_status` 必须既置 active 又推进
+ * depth，否则 lazy 模式下没有任何解锁路径（决策与收益见
+ * `.agents/plans/bcdp-core-narrowing/`）。
+ *
+ * `escape` 的「不吃③」豁免已移除：现在它与其它非 core 批同样等活动。豁免时期的
+ * 理由是「结构化工具没覆盖时手里没逃生手段」，而现在该手段需要先调 `bcdp_status`
+ * 才能拿到——代价是 ≈1,620 字符/轮，换为常驻面收窄的主要一块。
  */
 export function tierAllowed(tier: ToolTier, p: TierPolicy): boolean {
   if (tier === 'core') return true
   if (!tierOpen(tier, p)) return false
   if (tier === 'judge' && !p.judgeConfigured) return false
-  if (tier === 'escape') return true
   if (p.injection === 'always') return true
   if (tier === 'act' || tier === 'observe' || tier === 'wait') {
     // 活动闸在前、批次闸在后：没有活动时三批全封印，深度缺省值不得绕过活动。

@@ -27,8 +27,9 @@ const P = (over: Partial<TierPolicy> = {}): TierPolicy => ({
 });
 
 const sorted0 = (names: readonly string[]) => [...names].sort();
-/** 非 core、非 escape 的批次（它们要等活动 / 批次深度）。 */
-const GATED = ["act", "observe", "wait", "power", "session", "judge"] as const;
+/** 需要活动闸（部分还需批次深度）的非 core 批次。 */
+// 1.7.0：`escape` 加入此列——它的「不吃活动闸」豁免已移除，现与其它非 core 批同闸。
+const GATED = ["act", "observe", "wait", "power", "session", "escape", "judge"] as const;
 
 describe("tier table coverage", () => {
   it("the table covers every registered bcdp_* tool, with no stale entries", async () => {
@@ -43,17 +44,19 @@ describe("tier table coverage", () => {
   it("tiers are disjoint and core is exactly the resident entry set", () => {
     const all = Object.values(TIER_MEMBERS).flat();
     expect(new Set(all).size).toBe(all.length);
-    expect(TIER_MEMBERS.core).toEqual([
-      "bcdp_status", "bcdp_doctor", "bcdp_help", "bcdp_space", "bcdp_navigate", "bcdp_snapshot",
-    ]);
+    // 1.7.0 收窄：常驻只剩解锁入口本身，其余全按活动/开关放行。
+    expect(TIER_MEMBERS.core).toEqual(["bcdp_status"]);
   });
 
   it("the eight batches carry the members the issues doc §9.2 assigns them", () => {
+    // 1.7.0：space / navigate / help / doctor 从 core 并入 act，snapshot 并入 observe。
     expect(TIER_MEMBERS.act).toEqual([
+      "bcdp_space", "bcdp_navigate",
       "bcdp_click", "bcdp_fill", "bcdp_key", "bcdp_hover", "bcdp_scroll", "bcdp_select", "bcdp_check", "bcdp_drag", "bcdp_tab",
+      "bcdp_help", "bcdp_doctor",
     ]);
     expect(TIER_MEMBERS.observe).toEqual([
-      "bcdp_screenshot", "bcdp_page_info", "bcdp_read_element", "bcdp_js",
+      "bcdp_screenshot", "bcdp_page_info", "bcdp_read_element", "bcdp_js", "bcdp_snapshot",
     ]);
     expect(TIER_MEMBERS.wait).toEqual([
       "bcdp_wait",
@@ -68,19 +71,21 @@ describe("tier table coverage", () => {
     expect(TIER_MEMBERS.escape).toEqual(["bcdp_script"]);
   });
 
-  it("every batch fits the ≤9 rule the doc set for a batch", () => {
+  it("every batch fits the ≤13 rule the doc set for a batch", () => {
     // 1.4.1：act 加入 bcdp_tab 后到 9（原 ≤8 的整批上限随之放宽到 9）。
-    // core 本就是 8（加入 bcdp_space 后），wait 也是 5，仍在上限内。
+    // 1.7.0：收窄把 core 的 5 个成员并进 act（到 13），上限随之放宽到 13。
+    // 放宽只针对 act：批次间的渐进放行仍然生效，变的只是一批的大小，不是批数。
     for (const [tier, names] of Object.entries(TIER_MEMBERS)) {
-      expect(names.length, `${tier} has ${names.length} tools`).toBeLessThanOrEqual(9);
+      expect(names.length, `${tier} has ${names.length} tools`).toBeLessThanOrEqual(13);
     }
   });
 
-  it("only core and the ready escape hatch are live in the shipped default", () => {
+  it("only the core entry is live in the shipped default", () => {
     const p = P();
     for (const [tier, names] of Object.entries(TIER_MEMBERS)) {
       const allowed = names.every((n) => toolAllowed(n, p));
-      expect(allowed).toBe(tier === "core" || tier === "escape");
+      // escape 不再特例：冷启动下它与其它批一样被封。
+      expect(allowed).toBe(tier === "core");
     }
   });
 });
@@ -110,9 +115,10 @@ describe("tierAllowed policy gates", () => {
     }
   });
 
-  it("escape is the ONE tier that ignores the activity gate (its switch still seals it)", () => {
-    // 冷启动可用：这是它存在的全部意义。
-    expect(tierAllowed("escape", P({ active: false, batchDepth: 0 }))).toBe(true);
+  it("escape now waits for activity like every other tier (its switch still seals it)", () => {
+    // 1.7.0：冷启动不再可用——先调 bcdp_status 才能拿到逃生舱（代价换来常驻面收窄）。
+    expect(tierAllowed("escape", P({ active: false, batchDepth: 0 }))).toBe(false);
+    expect(tierAllowed("escape", P({ active: true, batchDepth: 0 }))).toBe(true);
     // 但开关仍然是硬锁。
     expect(tierAllowed("escape", P({ active: true, toolEscape: false }))).toBe(false);
     // always 模式同样受开关约束。
@@ -148,7 +154,7 @@ describe("tierAllowed policy gates", () => {
   it("always mode ignores the activity flag but not the switches", () => {
     for (const tier of GATED) {
       expect(tierAllowed(tier, P({ injection: "always", active: false }))).toBe(true);
-      expect(tierAllowed(tier, P({ injection: "always", active: false, toolBrowse: false, toolExtended: false, toolJudge: false }))).toBe(false);
+      expect(tierAllowed(tier, P({ injection: "always", active: false, toolBrowse: false, toolExtended: false, toolEscape: false, toolJudge: false }))).toBe(false);
     }
   });
 
@@ -193,13 +199,13 @@ describe("tier injector controller", () => {
     };
   };
 
-  it("lazy mount registers core plus the escape hatch, and keeps the rest pending", () => {
+  it("lazy mount registers the core entry alone, and keeps the rest pending", () => {
     const h = harness(P({ active: false, batchDepth: 0 }));
     for (const n of [...TIER_MEMBERS.core, ...TIER_MEMBERS.act, ...TIER_MEMBERS.escape]) h.offer(n);
-    expect(h.injector.surface().live.slice().sort()).toEqual(
-      sorted0([...TIER_MEMBERS.core, ...TIER_MEMBERS.escape]),
-    );
+    expect(h.injector.surface().live.slice().sort()).toEqual(sorted0(TIER_MEMBERS.core));
     expect(h.injector.surface().sealed).toContain("bcdp_click");
+    // 逃生舱也不再常驻：它跟着活动闸走。
+    expect(h.injector.surface().sealed).toContain("bcdp_script");
   });
 
   it("activity widens the surface; re-sealing narrows it again (dispose, not refuse)", () => {
@@ -210,7 +216,7 @@ describe("tier injector controller", () => {
     expect(h.live).toContain("bcdp_click");
     h.setPolicy(P({ active: false, batchDepth: 0 }));
     h.injector.reapply();
-    expect(h.live.slice().sort()).toEqual(sorted0([...TIER_MEMBERS.core, ...TIER_MEMBERS.escape]));
+    expect(h.live.slice().sort()).toEqual(sorted0(TIER_MEMBERS.core));
     expect(h.disposals).toContain("bcdp_click");
   });
 
@@ -284,8 +290,9 @@ describe("progressive batches (act → observe → wait)", () => {
     // power/session ride the activity gate, not the depth gate.
     expect(toolAllowed("bcdp_download", shallow)).toBe(true);
     expect(toolAllowed("bcdp_login_import", shallow)).toBe(true);
-    // escape ignores both.
-    expect(toolAllowed("bcdp_script", P({ active: false, batchDepth: 0 }))).toBe(true);
+    // escape 同属活动闸批次：活动一到就放行，但不受深度限制。
+    expect(toolAllowed("bcdp_script", P({ active: false, batchDepth: 0 }))).toBe(false);
+    expect(toolAllowed("bcdp_script", shallow)).toBe(true);
   });
 
   it("always mode ignores batch depth (historical mount-all semantics)", () => {

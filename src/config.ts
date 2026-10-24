@@ -145,13 +145,14 @@ export const Config = z.object({
   // 浏览器。每个字段都带 `.default()`：volatile 字段的表单描述符直接把 schema
   // 默认值画出来，不写默认就会出现「面板显示 A、运行时用 B」。本插件其余
   // 字段靠 resolveConfig 兑底是因为它们有迁移史；这几个新字段没这份包被。
-  toolInjection: toolInjection.default('lazy').description('lazy = keep only the core tier resident and inject the rest after the first bcdp_* activity (the idle reaper seals them back); always = register every allowed tool at mount (the historical behaviour).').volatile(),
+  toolInjection: toolInjection.default('lazy').description('lazy = keep only bcdp_status resident (it is the unlock entry: the rest are injected after the first bcdp_* activity, and the idle reaper seals them back); always = register every allowed tool at mount (the historical behaviour).').volatile(),
   // 一级一个开关，ON = 开放注册，OFF = 封印（从模型工具列表移除）。core 级不给
   // 开关：封掉它 lazy 模式就没有解锁入口了。
-  toolBrowse: z.boolean().default(true).description('Basic browsing tiers — act + observe + wait (14 tools: click / fill / key / hover / scroll / select / check / drag / tab / screenshot / page_info / read_element / js / wait). Internally released in three waves. Off = sealed: removed from the model tool list.').volatile(),
+  toolBrowse: z.boolean().default(true).description('Basic browsing tiers — act + observe + wait (19 tools: space / navigate / click / fill / key / hover / scroll / select / check / drag / tab / help / doctor / screenshot / page_info / read_element / js / snapshot / wait). Internally released in three waves. Off = sealed: removed from the model tool list.').volatile(),
   toolExtended: z.boolean().default(true).description('Extended tiers — power + session (8 tools: raw CDP / http / upload / download / dialog / captcha / auth_flush / login_import). Off = sealed even after browser activity.').volatile(),
-  toolEscape: z.boolean().default(true).description('Escape-hatch tier (1 tool: script — run an arbitrary heredoc with page/browser/taskSpaces/fetch/cdp preloaded; verbatim:true reproduces the old bare-heredoc cli behaviour). Unlike every other non-core tier it is NOT held back until browser activity: the one tool that can do anything in a single call must always be reachable. Off = sealed.').volatile(),
+  toolEscape: z.boolean().default(true).description('Escape-hatch tier (1 tool: script — run an arbitrary heredoc with page/browser/taskSpaces/fetch/cdp preloaded; verbatim:true reproduces the old bare-heredoc cli behaviour). Sealed until browser activity like every other non-core tier: call bcdp_status first, then it appears. Off = sealed.').volatile(),
   toolJudge: z.boolean().default(true).description('Judgement tier (5 bcdp_jev_* tools). On still requires a JEV or Laya key: without one they can only answer "not configured", so they stay sealed anyway.').volatile(),
+  sessionScopedPulse: z.boolean().default(true).description('Per-session unlock: when on, calling bcdp_status in session A only unlocks tools for session A — other sessions stay at their own depth. When off, any session\'s unlock is process-wide (historical behaviour). Falls back to off when the host does not expose agent-scoped tool restriction.').volatile(),
   localHeadless: z.boolean().description('Run the locally launched browser headless.'),
   remoteEnabled: z.boolean().description('Master switch for REMOTE attach. Off = the configured target sequence is preserved but inert (nothing probes or connects remotely); flip back on any time. Does not affect cdpMode=local.').volatile(),
   // 探测冷启动闸门：`<cli> nodejs` heredoc 通道的初始化副作用就是把背后的
@@ -467,6 +468,7 @@ export function resolveConfig(config: RawConfig = {}): ResolvedConfig {
     toolExtended: tierOpenByDefault(config.toolExtended),
     toolEscape: tierOpenByDefault(config.toolEscape),
     toolJudge: tierOpenByDefault(config.toolJudge),
+    sessionScopedPulse: tierOpenByDefault(config.sessionScopedPulse),
     localHeadless: config.localHeadless === undefined ? false : Boolean(config.localHeadless),
     localUserDataDir: typeof config.localUserDataDir === 'string' ? config.localUserDataDir : '',
     lightpandaArgs: trimmed(config.lightpandaArgs),

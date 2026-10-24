@@ -126,13 +126,13 @@ export function getLastEgoActivity(): number {
 // just happened" — but must not have to thread a callback through the nine
 // `markEgoToolCall()` call sites in the tool bodies. One module-level fan-out
 // keeps the tools oblivious to tiers.
-const activityListeners = new Set<() => void>()
+const activityListeners = new Set<(sessionId?: string) => void>()
 
 /**
  * Subscribe to "one bcdp_* call just landed".
  * @returns the unsubscribe function.
  */
-export function onEgoActivity(cb: () => void): () => void {
+export function onEgoActivity(cb: (sessionId?: string) => void): () => void {
   activityListeners.add(cb)
   return () => {
     activityListeners.delete(cb)
@@ -145,7 +145,7 @@ export function markEgoToolCall(sessionId?: string): void {
   // Tier fan-out: never let a listener throw into the tool's own result path.
   for (const cb of [...activityListeners]) {
     try {
-      cb()
+      cb(sessionId)
     } catch {
       /* tier reapply is best-effort; the tool call stands */
     }

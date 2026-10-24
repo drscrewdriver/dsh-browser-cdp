@@ -1,5 +1,30 @@
 1.6.1: host enumeration addendum for DSH 0.2.1-rc.3 (declaration-only bump; contract plane zero diff).
 
+## 1.7.0 (2026-10-25)
+
+**两件事：吸收外部 fork 的三项修复，并把常驻注入面收窄到单一解锁入口。**
+
+### Breaking（常驻面收窄，代码计划见 `.agents/plans/bcdp-core-narrowing/`）
+- **`bcdp_status` 成为唯一常驻工具**。`core` 批从 6 个收窄到 1 个：`space` / `navigate` / `help` / `doctor` 移入 `act` 批（现 13 个），`snapshot` 移入 `observe` 批（现 5 个）。不碰浏览器的会话每轮常驻 schema 从 **4,978 → 401 字符**（≈1,430 → ≈115 token，**−91.9%**，均为挂载级实测）。
+- **`bcdp_script` 不再冷启动可用**。“escape 批不吃活动闸”的豁免已移除（`tierAllowed` 里的 `if (tier === 'escape') return true`），它现与其它非 core 批一样等首次浏览器活动。要拿到它：先调一次 `bcdp_status`。
+- **闲置回收后模型手里只剩 `bcdp_status`**（旧行为是 core 6 + escape）。继续操作需重新调一次 `status` 解锁。
+- 回退方式：设置页把 `toolInjection` 改为 `always`（volatile 热更，不需重启），即回到「挂载即全量」的历史行为。
+
+### 修复
+- **浏览器重启后的 CDP 陈旧 ws 自愈**：浏览器以同一端点重启会换新 browser id，缓存的 attach ws 失效，此后每个 `bcdp_*` 都报 `failed to connect to CDP endpoint` 直到重启 DSH。现在 `runWithStaleSpaceRetry` 在命中该签名时重探活动链路一次，确有新端点则重试（硬上限 1 次，`refreshAttach` 返回 false 不空转）。该签名不在 `COLD_START_SIGNS` 也不在 `TAB_STUCK_RE` 里，所以旧有三层自愈都救不了它。
+- **脚本只打纯文本不再误判失败**：`ego-browser` 退出码 0 即权威，`@@DSH_RESULT@@` 哨兵只用于丰富结果；工具侧新增 `toolPayload` 兜底（无 JSON 时回传截断 4000 字符的原文 + `note`），不会返回空结果。
+
+### 可发现性
+- 分级封印的自救指引上了两个承载面：常驻的 `bcdp_status` 描述写明「工具不在列表 = 被分级封印而非损坏，本调用会重新打开它」，`bcdp_help` 的 `topic=injection` 补英文 `SEALED TOOLS` 头部（该索引不常驻，零每轮成本）。
+- 工具描述互斥引导（只加指针、不加 HOW）：`bcdp_js` / `bcdp_cdp` / `bcdp_http` / `bcdp_script` / `bcdp_help` 五条各增 ≤80 字符交叉指路（全量面 +330 字符，常驻面仅 `help` 一条 +65）。
+- 四处同源文案同步（`config.ts` / `dsh-plugin.json` hints / `help.ts` / 自绘设置卡 `src/client/index.ts`），并清掉 `dsh-plugin.json` 与设置卡里残留的旧计数（常驻 7 / 逃生舱 2 / 16 个 / 共 38 个）。
+
+### 测试与度量
+- 新增 6 例：CDP 重探重试与不空转（2）、退出码语义（2，含非零退出仍失败直证）、常驻面预算 ≤600 字符门禁（1）、三档注入面单调性与分批度量打印（1）。
+- 分级测试按新契约重写（含用例名）：`tool-tiers` 26 例、`tier-mount` 12 例全绿；批次上限从 ≤9 放宽到 ≤13（act 吸收 core 成员后为 13）。
+- 全量 882 passed / 13 skipped；`npm run typecheck` 双配置无错。
+- 三档实测注入面：默认 1 个 / 401 → 首次活动 23 个 / 16,203 → 三波后 29 个 / 21,288 → 全量 34 个 / 24,631（八批求和逐字对齐）。
+
 ## 1.6.2 (2026-10-25)
 
 **修复：插件挂载不再拉起 ego 浏览器（`allowProbeColdStart` 探测冷启动闸门，默认关）。**

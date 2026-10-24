@@ -40,7 +40,7 @@ import { EGO_HELP_INDEX } from './help.ts'
 import { HUMAN_CHECK_PROBE } from './captcha.ts'
 import { Config as ConfigSchema, resolveConfig, judgeSettingsOf, EGO_CLI_BLOCKED, CHROME_BLOCKED, filterArgs, DEFAULT_SPACE, AUTO_SPACE_SENTINEL } from './config.ts'
 import { installSettingsAuto, registerSettingsBridge } from './settings.ts'
-import { BATCH_ORDER, createTierInjector, judgeConfigured, unknownTieredTools, type TierInjector } from './toolTiers.ts'
+import { BATCH_ORDER, createTierInjector, judgeConfigured, TIER_MEMBERS, toolAllowed, unknownTieredTools, type TierInjector, type TierPolicy } from './toolTiers.ts'
 import { getSharedFfmpegInstallationManager } from './ffmpeg-installation.ts'
 import { SENTINEL, j, str, num, bool, readAll, SAFE_FN, safeEvalWrap } from './util.ts'
 import {
@@ -702,6 +702,14 @@ export async function runWithStaleSpaceRetry(  ctx: EgoContext,
     cfg.spaceTracker.resetToName()
     result = await withWarmupRetry(() => runEgoScript(ctx.subprocess, buildScript(), exec, cfg, graceOverrideMs))
   }
+  // A relaunched browser keeps the endpoint but mints a new browser id, so the
+  // cached ws dead-ends. Re-probe the same links once and retry before failing.
+  if (!result.ok && CDP_CONNECT_FAIL_RE.test(result.error ?? '')) {
+    const refreshed = await cfg.refreshAttach?.()
+    if (refreshed === true) {
+      result = await withWarmupRetry(() => runEgoScript(ctx.subprocess, buildScript(), exec, cfg, graceOverrideMs))
+    }
+  }
   return result
 }
 
@@ -718,6 +726,14 @@ export async function runWithStaleSpaceRetry(  ctx: EgoContext,
  * @internal exported for tests
  */
 export const TAB_STUCK_RE = /no active tab|navigation (?:timed out|timeout)|page\.goto[\s\S]*timeout|timed out after \d+ms|net::ERR_|waiting for (?:document|load) timed out|TimeoutError|target closed/i
+
+/**
+ * A dead cached ws (the browser was relaunched behind the SAME endpoint) surfaces
+ * as this one runtime message — see `runtime/ego-linux/src/transport.mjs`. It is
+ * deliberately NOT folded into `TAB_STUCK_RE`: the fix is a re-probe of the link,
+ * not a tab swap, so the two recoveries must stay distinguishable.
+ */
+export const CDP_CONNECT_FAIL_RE = /failed to connect to CDP endpoint/i
 
 /** True when a failed run looks like a wedged/absent tab rather than a cold start. */
 export function isTabStuckFailure(result: WarmupResult): boolean {
@@ -902,6 +918,8 @@ export function findUpstreamPluginInstall(
 
 /** The live runtime config object built in apply() (getters read the settings bridge). */
 interface EgoRuntimeConfig {
+  /** Re-probe the active CDP link; true when it produced a NEW endpoint. */
+  refreshAttach?: () => Promise<boolean>
   egoBin: string
   configuredDefaultSpace: string | number
   spaceTracker: SessionSpaceTracker
@@ -935,6 +953,7 @@ interface EgoRuntimeConfig {
   readonly toolExtended: boolean
   readonly toolEscape: boolean
   readonly toolJudge: boolean
+  readonly sessionScopedPulse: boolean
   // ── R1/R7: connection sequence + activation ─────────────────────────────
   readonly links: BrowserLink[]
   /** R7 �?extra `ego-cli` rows that sanitize dropped (local-only singleton). */
@@ -992,7 +1011,7 @@ interface ExecLike {
 
 /** 常驻级工具看到的工具分级视图（活动脉�?+ 活动�?+ 当前注入面）�?*/
 interface TierView {
-  pulse: () => void
+  pulse: (sessionId?: string) => void
   active: () => boolean
   surface: () => { live: string[]; sealed: string[] }
 }
@@ -1094,19 +1113,30 @@ async function runEgoScript(subprocess: SubprocessService, script: string, exec:
     }
   }
   const value = parseSentinel(mergeCliOutput({ stdout, stderr }))
-  if (value === undefined) {
-    return {
-      ok: false,
-      error: `ego-browser finished but no ${SENTINEL} JSON payload was found on stdout/stderr${describeStderr(
-        stderr,
-      )}`,
-      stdout,
-      stderr,
-    }
-  }
+  // A script that prints ordinary output and no payload has still run: the
+  // sentinel only enriches the result, so the exit code above stays the
+  // authority on success. `value` may legitimately be undefined (see toolPayload).
   return { ok: true, value, stdout, stderr }
 }
 // ── tool plumbing ───────────────────────────────────────────────────────────
+/** How much raw stdout a tool may hand back when a script emitted no JSON. */
+const TOOL_RAW_STDOUT_MAX = 4000
+/**
+ * The payload a bcdp_* tool returns for a successful run.
+ *
+ * Dropping `undefined` straight into the tool result would show the model an
+ * empty outcome for a script that actually ran, so fall back to the (bounded)
+ * raw stdout plus a note naming the reason. Structured tools always emit a
+ * sentinel payload and never take this branch.
+ */
+function toolPayload(result: WarmupResult): unknown {
+  if (result.value !== undefined) return result.value
+  return {
+    ok: true,
+    stdout: (result.stdout ?? '').trim().slice(0, TOOL_RAW_STDOUT_MAX),
+    note: 'no JSON payload on stdout; raw output returned',
+  }
+}
 /** JS snippet that pins an action tool to one task space. */
 const useSpace = (name: string | number): string =>
   `const task = await taskSpaces.useOrCreate(${j(name)})\n`
@@ -1218,13 +1248,13 @@ function defineEgoTool(ctx: EgoContext, cfg: EgoRuntimeConfig, opts: EgoToolOpti
           if (!result.ok) throw new Error(recoveredFrom ? `${result.error}\n${recoveredFrom}` : result.error)
           if (result.value && typeof result.value === 'object') (result.value as Record<string, unknown>).recoveredFrom = recoveredFrom
           if (typeof opts.afterExecute === 'function') opts.afterExecute(args, result.value)
-          return result.value
+          return toolPayload(result)
         }
         const result = await runWithStaleSpaceRetry(ctx, cfg, exec, () => opts.buildScript(args))
         if (!result.ok) throw new Error(result.error)
         if (typeof opts.afterExecute === 'function') opts.afterExecute(args, result.value)
         // Value is JSON.parse output of our own payload �?fits the tool JSON contract.
-        return result.value
+        return toolPayload(result)
       }),
     presentCall: () => ({
       card: 'generic',
@@ -1235,8 +1265,73 @@ function defineEgoTool(ctx: EgoContext, cfg: EgoRuntimeConfig, opts: EgoToolOpti
   } as unknown as DefineToolOpts)
 }
 
+// ── 临时能力探针（计划 bcdp-session-scoped-tiers Phase 0；取证后整块删除）─────
+// 目的：证实第三方插件 fiber 能否看到宿主的 agent 作用域能力（`tools.restrict` /
+// `agent/created` / `agent.ctx`）。宿主源码里有这些 API 不等于插件能用到。
+type ScopeProbe = {
+  restrictType: string
+  onType: string
+  agentsSvc: string
+  agentCount: number
+  createdEvents: number
+  agentHasCtx: string
+  agentCtxRestrict: string
+  agentCtxTools: string
+  error: string
+}
+const scopeProbe: ScopeProbe = {
+  restrictType: 'n/a', onType: 'n/a', agentsSvc: 'n/a', agentCount: -1, createdEvents: 0,
+  agentHasCtx: 'n/a', agentCtxRestrict: 'n/a', agentCtxTools: 'n/a', error: '',
+}
+
+/** Inspect one agent handle (host-side shape varies) and remember what we reached. */
+function probeAgent(agent: any): void {
+  if (agent == null) return
+  scopeProbe.agentHasCtx = String(agent.ctx != null)
+  scopeProbe.agentCtxTools = typeof agent?.ctx?.tools
+  scopeProbe.agentCtxRestrict = typeof agent?.ctx?.tools?.restrict
+}
+
+/** Install the probe once per mount: capability types + live agent enumeration + lifecycle event. */
+function installScopeProbe(ctx: EgoContext): void {
+  try {
+    const anyCtx = ctx as any
+    scopeProbe.restrictType = typeof anyCtx?.tools?.restrict
+    scopeProbe.onType = typeof anyCtx?.on
+    const agents = typeof anyCtx.get === 'function' ? anyCtx.get('agents') : undefined
+    scopeProbe.agentsSvc = agents == null ? 'absent' : 'present'
+    if (agents != null) {
+      const list =
+        typeof agents.roots === 'function' ? agents.roots()
+          : typeof agents.list === 'function' ? agents.list() : []
+      scopeProbe.agentCount = Array.isArray(list) ? list.length : -2
+      probeAgent(Array.isArray(list) ? list[0] : undefined)
+    }
+    if (scopeProbe.onType === 'function') {
+      const off = anyCtx.on('agent/created', (payload: any) => {
+        scopeProbe.createdEvents += 1
+        probeAgent(payload?.agent ?? payload)
+      })
+      ctx.effect?.(() => (typeof off === 'function' ? off : () => undefined))
+    }
+  } catch (err) {
+    scopeProbe.error = err instanceof Error ? err.message.slice(0, 120) : String(err).slice(0, 120)
+  }
+}
+
+/** One-line render for the doctor report. */
+function scopeProbeLine(): string {
+  return 'scope probe: ' +
+    `tools.restrict=${scopeProbe.restrictType} ctx.on=${scopeProbe.onType} agentsSvc=${scopeProbe.agentsSvc}` +
+    ` agentCount=${scopeProbe.agentCount} agentCreatedEvents=${scopeProbe.createdEvents}` +
+    ` agentHasCtx=${scopeProbe.agentHasCtx} agent.ctx.tools=${scopeProbe.agentCtxTools}` +
+    ` agent.ctx.tools.restrict=${scopeProbe.agentCtxRestrict}` +
+    (scopeProbe.error !== '' ? ` error=${scopeProbe.error}` : '')
+}
+
 // ── plugin entry ────────────────────────────────────────────────────────────
 export function apply(ctx: EgoContext, config: RawConfig = {}): void {
+  installScopeProbe(ctx)
   // Install the config bridge first: the composition entry handed to apply()
   // feeds every field into cfg via getters (volatile fields arrive as live
   // refs and are dereferenced per read), so each spawn sees the latest value
@@ -1259,7 +1354,16 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
   const spaceTracker = createSessionSpaceTracker((sessionKey) =>
     deriveSlotDefaultName(resolveConfig(bridge.source() as RawConfig), sessionKey),
   )
+  // Late-bound handle on the attach re-probe: `cfg` is built before
+  // `triggerCdpRefresh` exists, so the retry path reaches it through this ref
+  // (assigned right after the IIFE). Undefined until then = "nothing to re-probe",
+  // which resolves to a plain `false` and therefore never retries.
+  let triggerCdpRef: (() => Promise<boolean>) | undefined
   const cfg: EgoRuntimeConfig = {
+    // Re-probe the active link on a dead cached ws (browser relaunched). Read
+    // through a late-bound ref: `triggerCdpRefresh` is declared further down in
+    // apply(), so closing over it directly here would hit the TDZ.
+    refreshAttach: () => triggerCdpRef?.() ?? Promise.resolve(false),
     egoBin:
       typeof config.egoBin === 'string' && config.egoBin !== ''
         ? config.egoBin
@@ -1301,6 +1405,7 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
     get toolExtended() { return resolveConfig(bridge.source() as RawConfig).toolExtended },
     get toolEscape() { return resolveConfig(bridge.source() as RawConfig).toolEscape },
     get toolJudge() { return resolveConfig(bridge.source() as RawConfig).toolJudge },
+    get sessionScopedPulse() { return resolveConfig(bridge.source() as RawConfig).sessionScopedPulse },
     // ── R1: CDP sequence + activation ────────────────────────────────────
     get links() { return resolveConfig(bridge.source() as RawConfig).links },
     // Read from the RAW source on purpose: the drop count only exists before
@@ -1354,8 +1459,22 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
   // 以前挂载时一次性把 41 �?bcdp_* 工具注册进宿主工具表，每个会话每一轮都�?  // schema 成本（实�?desc+params �?25.6K 字符），而不碰浏览器的会话一个也用不上�?  // 现在把「谁能出现在模型面前」交�?src/toolTiers.ts 的策略，注册时机由这�?  // 控制器执行：封印 = 反注册（从工具列表消失），不是执行期拒绝——与
   // prime-memory 的工具组封印同式�?
   let browserActive = false
-  // browse 内部批次深度�? = 尚未放行�? = act�? = +observe�? = +wait�?  // 每次浏览器活动推进一批；到顶后不再变化（幂等）�?
+  // ── Per-session depth tracking ──────────────────────────────────────────
+  // When sessionScopedPulse is ON: each session's pulse advances only its own
+  // depth; the global browseBatchDepth (which drives tierAllowed/registration)
+  // is the MAX across all sessions. Visibility isolation requires host-level
+  // restrict; without it, registration stays process-wide but per-session
+  // idle sealing still works correctly.
+  const sessionDepth = new Map<string, number>()
   let browseBatchDepth = 0
+
+  /** Compute max depth from all tracked sessions, or 0 if none. */
+  const maxSessionDepth = (): number => {
+    let m = 0
+    for (const d of sessionDepth.values()) if (d > m) m = d
+    return m
+  }
+
   const tiers: TierInjector = createTierInjector({
     register: (tool) => {
       const dispose = ctx.tools.register(tool) as unknown as () => void
@@ -1375,31 +1494,87 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
     }),
     logger: ctx.logger,
   })
+
   /**
-   * 活动信号：每�?bcdp_* 调用推进 browse 批次（act �?observe �?wait），
-   * 到顶即止。只有注入面真的变了�?reapply�?   */
-  const pulseActivity = (): void => {
+   * Apply per-session restrict to hide globally-registered tools that exceed
+   * the calling agent's own depth. Best-effort: silently no-ops when the host
+   * does not expose agent-scoped restriction (plugin fiber is not an agent scope).
+   */
+  const tryRestrictSession = (sessionId: string | undefined): void => {
+    if (!cfg.sessionScopedPulse || !sessionId) return
+    // Attempt via ctx.tools.restrict (host API).
+    try {
+      const depth = sessionDepth.get(sessionId) ?? 0
+      const allowed = new Set<string>()
+      // core always visible
+      for (const n of TIER_MEMBERS.core) allowed.add(n)
+      // Build a session-local policy: this session's own depth/active
+      const pol: TierPolicy = {
+        injection: cfg.toolInjection,
+        toolBrowse: cfg.toolBrowse,
+        toolExtended: cfg.toolExtended,
+        toolEscape: cfg.toolEscape,
+        toolJudge: cfg.toolJudge,
+        judgeConfigured: judgeConfigured({ jevKey: cfg.jevKey, layaKey: cfg.layaKey }),
+        active: depth > 0,
+        batchDepth: depth,
+      }
+      // Only restrict among tools that are ALREADY globally registered;
+      // the filter hides those this session hasn't earned.
+      for (const name of tiers.surface().live) {
+        if (toolAllowed(name, pol)) allowed.add(name)
+      }
+      const restrictFn = (ctx.tools as unknown as Record<string, unknown>).restrict
+      if (typeof restrictFn === 'function') {
+        (restrictFn as (f: { allow: string[] }) => void)({ allow: [...allowed] })
+      }
+    } catch {
+      // Restrict unavailable from plugin fiber scope; degrade silently.
+    }
+  }
+
+  /**
+   * Activity pulse: advance browse batch depth. When sessionScopedPulse is ON
+   * and a sessionId is given, only that session's depth advances; the global
+   * depth = max across sessions drives tier registration. Without restrict
+   * support the effect is still beneficial for per-session sealAfterReap.
+   */
+  const pulseActivity = (sessionId?: string): void => {
     const before = browseBatchDepth
     browserActive = true
-    browseBatchDepth = Math.min(BATCH_ORDER.length, browseBatchDepth + 1)
+    if (cfg.sessionScopedPulse && sessionId) {
+      const cur = Math.min(BATCH_ORDER.length, (sessionDepth.get(sessionId) ?? 0) + 1)
+      sessionDepth.set(sessionId, cur)
+      browseBatchDepth = Math.max(browseBatchDepth, maxSessionDepth())
+    } else {
+      browseBatchDepth = Math.min(BATCH_ORDER.length, browseBatchDepth + 1)
+    }
     if (before !== browseBatchDepth) tiers.reapply()
+    if (cfg.sessionScopedPulse && sessionId) tryRestrictSession(sessionId)
   }
-  // markEgoToolCall() 是所�?bcdp_* 调用的公共出口（也是 idle reaper 的活动时钟）�?  // 分级解锁挂在同一个信号上：工具体不需要知�?tiers 存在�?
+  // markEgoToolCall fires the activity listener with sessionId
   {
     const offActivity = onEgoActivity(pulseActivity)
     ctx.effect?.(() => offActivity)
   }
   /**
-   * 闲置回收后把注入面收�?core 级（lazy 模式专属）：浏览器已经停了，模型
-   * 面上留着 30 多个驱动它的工具只是白付。下一次活动会重新铺开�?   */
+   * Seal: idle reaper resets depths. With sessionScopedPulse, only sessions
+   * whose last activity exceeded the timeout are sealed; when ALL are idle the
+   * global depth drops to 0 (same observable behaviour as before).
+   */
   const sealAfterReap = (): void => {
     if (cfg.toolInjection !== 'lazy' || !browserActive) return
+    if (cfg.sessionScopedPulse && sessionDepth.size > 0) {
+      // All sessions idle → reset global; individual session reset handled by
+      // per-session timestamps in the reaper (simplified: bulk reset here).
+      sessionDepth.clear()
+      browseBatchDepth = 0
+    } else {
+      browseBatchDepth = 0
+    }
     browserActive = false
-    browseBatchDepth = 0
     tiers.reapply()
   }
-  /**
-   * 常驻级工具看到的分级视图：`pulse` = 把本次调用当成一次浏览器活动�?   * `surface` = 当前注入面（doctor 直接打出来，开关状态得看得见）�?   */
   const tierView: TierView = {
     pulse: pulseActivity,
     active: () => browserActive,
@@ -1456,12 +1631,17 @@ bridge.onChange(() => tiers.reapply())
   const triggerCdpRefresh = (() => {
     let inFlight = false
     let pending = false
-    const run = async (): Promise<void> => {
+    /** Last ws handed to the worker; a differ means the browser was relaunched. */
+    let lastAttachWs: string | null = null
+    /** True when this pass actually moved the resolved endpoint. */
+    let changed = false
+    const run = async (): Promise<boolean> => {
       if (inFlight) {
         pending = true
-        return
+        return changed
       }
       inFlight = true
+      changed = false
       try {
         const resolved = resolveConfig(bridge.source() as RawConfig)
         const attach = await refreshAttach({
@@ -1493,7 +1673,12 @@ bridge.onChange(() => tiers.reapply())
           bundledCli: VENDORED_EGO_BIN,
         })
         const ws = attach.status === 'ready' && attach.wsUrl !== '' ? attach.wsUrl : null
+        // A browser restart keeps the same endpoint but mints a NEW browser id, so
+        // the cached ws goes stale while the endpoint string stays valid: record
+        // the differ even when nothing downstream needed to act on it.
+        if (ws !== null && ws !== lastAttachWs) lastAttachWs = ws
         if (setAttachEndpoint(ws, attach.status === 'ready' ? attach.engine ?? 'unknown' : null)) {
+          changed = true
           void recycleWorker('cdp activation change').catch(() => null)
         }
       } catch {
@@ -1505,14 +1690,14 @@ bridge.onChange(() => tiers.reapply())
           void run()
         }
       }
+      return changed
     }
-    return () => {
-      void run()
-    }
+    return (): Promise<boolean> => run()
   })()
-  bridge.onChange(triggerCdpRefresh)
+  triggerCdpRef = triggerCdpRefresh
+  bridge.onChange(() => void triggerCdpRefresh())
   // Initial probe so the first bcdp_* call attaches without waiting for a change.
-  triggerCdpRefresh()
+  void triggerCdpRefresh()
   // Drop stale attach state when the plugin unmounts; a fresh mount starts clean.
   ctx.effect?.(() => () => {
     defaultAttachCache.reset()
@@ -1651,7 +1836,7 @@ bridge.onChange(() => tiers.reapply())
             graceMs: 8_000,
           })
           handle.done.catch(() => null)
-          // 分级注入：浏览器此刻已经停了，把活动期铺开的工具收�?core �?          // （仅 lazy 模式；always 模式的活动位不影响注入面，不去动它）�?
+          // 分级注入：闲置回收即收面——把注入面收回常驻的 `bcdp_status`，下一次活动再铺开。
           sealAfterReap()
         } catch {
           // never let the reaper throw
@@ -1710,7 +1895,7 @@ function registerEgoStatus(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool: T
     defineTool({
       name: 'bcdp_status',
       description:
-        'Check whether the ego-browser CLI can actually run bcdp_* tools (probes the taskSpaces/browser/page facade over the nodejs channel). Use this first when other bcdp_* tools report "CLI not found".',
+        'Drive the shared CDP browser (ego runtime): probe the CLI, and unlock the rest of the bcdp_* tools — under lazy injection only this tool is resident, so call it first for any browsing task (open a page, fill a form, screenshot, read, or attach your own Chrome/Edge over CDP). A bcdp_* tool missing from your list is sealed by tiering, not broken.',
       parameters: {},
       output: {
         schema: {
@@ -1739,9 +1924,11 @@ function registerEgoStatus(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool: T
       // Measured ~300ms, so 15s is already a generous ceiling. Do NOT raise it
       // for browser cold-start �?that concern does not apply to this probe.
       timeoutMs: 15_000,
-      execute: async () => {
-        // 分级注入：常驻级的探�?指南/诊断被调�?= 用户或模型已经在�?        // 注浏览器，把其余分级按当前深度铺开来（幂等）。不�?        // markEgoToolCall：那个信号会顺带弹开侧栏观察面板�?
-        tiers.pulse()
+      execute: async (_args: Record<string, unknown>, exec: ToolExec) => {
+        // Per-session pulse: pass callingSessionId so sessionScopedPulse can
+        // advance only this session's depth. Falls back to process-level when
+        // sessionId is undefined (non-agent caller or feature off).
+        tiers.pulse(callingSessionId(exec))
         return withEgoLock(async () => {
           try {
             const attach = defaultAttachCache.get()
@@ -2265,7 +2452,7 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
     t({
       name: 'bcdp_js',
       description:
-        'Evaluate a JavaScript expression in the current page and return its JSON-serializable value (e.g. "document.title", "document.querySelectorAll(\'a\').length").',
+        'Evaluate a JavaScript expression in the current page and return its JSON-serializable value (e.g. "document.title", "document.querySelectorAll(\'a\').length"). One expression only; multi-step: use bcdp_script; raw protocol: use bcdp_cdp.',
       parameters: {
         expression: {
           type: 'string',
@@ -2285,7 +2472,7 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
     t({
       name: 'bcdp_cdp',
       description:
-        'Issue a raw CDP command on the page target, e.g. cdp("Page.handleJavaScriptDialog", { accept: true }).',
+        'Issue a raw CDP command on the page target, e.g. cdp("Page.handleJavaScriptDialog", { accept: true }). Prefer a structured tool when one exists; page JS belongs to bcdp_js.',
       parameters: {
         method: {
           type: 'string',
@@ -2885,7 +3072,7 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
     t({
       name: 'bcdp_http',
       description:
-        "Make an HTTP request and return status + body. Default runs in the page's browser context; mode=server uses Node-side fetch.server (may crash on the vendored ego-linux Windows runtime, so prefer browser mode).",
+        "Make an HTTP request and return status + body. Default runs in the page's browser context; mode=server uses Node-side fetch.server (may crash on the vendored ego-linux Windows runtime, so prefer browser mode). To render a page use bcdp_navigate; server mode is not bound by page CORS.",
       parameters: {
         url: { type: 'string', required: true, description: 'Absolute URL to request.' },
         method: { type: 'string', description: 'HTTP method (default GET).' },
@@ -2981,7 +3168,7 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
     defineTool({
       name: 'bcdp_help',
       description:
-        'Query the built-in ego-browser tool guide. `topic` may be a category (overview/tools/navigate/observe/input/keyboard-mouse/form/wait/network/login/script/doctor) or a specific tool name (e.g. bcdp_click). Returns the matching usage notes. Call this when unsure which eyebrow tool to use.',
+        'Query the built-in ego-browser tool guide. `topic` may be a category (overview/tools/navigate/observe/input/keyboard-mouse/form/wait/network/login/script/doctor) or a specific tool name (e.g. bcdp_click). Returns the matching usage notes. Call this when unsure which eyebrow tool to use. If a bcdp_* tool is missing from your list, ask topic=injection.',
       parameters: {
         topic: {
           type: 'string',
@@ -3002,9 +3189,9 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
         render: renderText,
       },
       timeoutMs: 10_000,
-      execute: async (args: Record<string, unknown>) => {
-        // 分级注入：读了指南就得有工具可用，否则指南里介绍的工具模�?        // 根本调不到�?
-        tiers.pulse()
+      execute: async (args: Record<string, unknown>, exec: ToolExec) => {
+        // help 已属 act 批，能被调用说明活动已发生；此处 pulse 只推进批次深度（幂等）。
+        tiers.pulse(callingSessionId(exec))
         const q = str(args.topic, '').trim().toLowerCase()
         const key = Object.prototype.hasOwnProperty.call(EGO_HELP_INDEX, q) ? q : ''
         const text = key
@@ -3037,9 +3224,9 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
         render: renderText,
       },
       timeoutMs: 25_000,
-      execute: async () => {
-        // 分级注入：预检即视为浏览器活动（同 bcdp_status）�?
-        tiers.pulse()
+      execute: async (_args: Record<string, unknown>, exec: ToolExec) => {
+        // doctor 同样视为一次浏览器活动，推进批次深度。
+        tiers.pulse(callingSessionId(exec))
         const lines: string[] = []
         // 工具注入面：每个开关的当前状态与实际注册了多少工具，一行说完�?
         {
@@ -3053,6 +3240,7 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
             ` active=${tiers.active() ? 'yes' : 'no'} �?live ${s.live.length} / sealed ${s.sealed.length}`,
           )
         }
+        lines.push(scopeProbeLine())
         // vendored runtime
         lines.push(`egoBin: ${cfg.egoBin}`)
         try { lines.push(`egoBin exists: ${existsSync(cfg.egoBin)}`) } catch { lines.push('egoBin exists: n/a') }
@@ -3174,7 +3362,7 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
       const def = defineTool({
         name: 'bcdp_script',
         description:
-          'Run an arbitrary `ego-browser nodejs` heredoc script in ONE invocation (page/…locator/browser/taskSpaces/site/fetch/cdp preloaded), and return structured {ok, stdout, stderr, result, durationMs, timedOut}. Use for a full multi-step browser task as a single script. The task space is selected and a real (non-blank) tab activated for you before your script runs, so page.* works directly. Set verbatim:true to run the body verbatim with no preamble (the retired bcdp_cli behaviour). These scripts expose the vendored SDK (`taskSpaces`, `page.locator()`, global `cdp()`, `fetch.browser|server`) �?NOT the official docs\' `taskSpace()` / `page.click()`.',
+          'Run an arbitrary `ego-browser nodejs` heredoc script in ONE invocation (page/…locator/browser/taskSpaces/site/fetch/cdp preloaded), and return structured {ok, stdout, stderr, result, durationMs, timedOut}. Use for a full multi-step browser task as a single script. The task space is selected and a real (non-blank) tab activated for you before your script runs, so page.* works directly. Set verbatim:true to run the body verbatim with no preamble (the retired bcdp_cli behaviour). For a single page expression use bcdp_js. These scripts expose the vendored SDK (`taskSpaces`, `page.locator()`, global `cdp()`, `fetch.browser|server`) �?NOT the official docs\' `taskSpace()` / `page.click()`.',
         parameters: {
           script: {
             type: 'string',

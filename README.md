@@ -240,37 +240,39 @@ wait / space / escape 三族已按 `op` 合并，旧工具名**移除**（不保
 
 ## 工具注入分级（懒注册 / 分级 / 锁定）
 
-34 个工具全量注册时，**每个会话每一轮**都要为它们的 schema 付费（挂载级实测 `description` + `parameters` 序列化 = **22,224 字符** ≈ 6.4K token；1.3.2 的 38 工具基线用同一口径实测为 20,951，1.5.0 三族合并后仅高出 **＋6.1%**，远低于 ≤＋15% 门禁），而不碰浏览器的会话一个也用不上。插件因此把「谁能出现在模型面前」收成一处策略（`src/toolTiers.ts`），分**八批**注入。
+34 个工具全量注册时，**每个会话每一轮**都要为它们的 schema 付费（挂载级实测 `description` + `parameters` 序列化 = **24,631 字符** ≈ 7.1K token，1.7.0；1.5.0 曾测为 22,224，增量主要来自分级文档与工具描述互斥引导）。而不碰浏览器的会话一个也用不上。插件因此把「谁能出现在模型面前」收成一处策略（`src/toolTiers.ts`），分**八批**注入。
 
-> **8 批 ≠ 8 个开关**。批次是*注入时机*，开关是*用户面*（§9.3「开关与批次解耦」）。当前 4 个开关管 8 批：`toolBrowse` 管 act+observe+wait 三批并按波次放行，`toolExtended` 管 power+session，`toolEscape`、`toolJudge` 各管一批。所以「`toolBrowse` = 14 个」指的是**并集上限**，实际第一波只放 9 个。
+> **8 批 ≠ 8 个开关**。批次是*注入时机*，开关是*用户面*（§9.3「开关与批次解耦」）。当前 4 个开关管 8 批：`toolBrowse` 管 act+observe+wait 三批并按波次放行，`toolExtended` 管 power+session，`toolEscape`、`toolJudge` 各管一批。所以「`toolBrowse` = 19 个」指的是**并集上限**，实际第一波只放 13 个。
 
 | 批次 | 成员 | schema | 何时出现 |
 |---|---|---:|---|
-| **core** 常驻（6） | `bcdp_status` `bcdp_doctor` `bcdp_help` `bcdp_space` `bcdp_navigate` `bcdp_snapshot` | 3,589 | 永远在场，不可封印——否则 lazy 模式连解锁入口都没有 |
-| **act** 动手（9） | click / fill / key / hover / scroll / select / check / drag / tab | 5,243 | `lazy` 下首次活动放第一波 |
-| **observe** 观察（4） | screenshot / page_info / read_element / js | 2,037 | 第二次活动 |
-| **wait** 等待（1） | `bcdp_wait`（duration / selector / url / response / load / function / request / event） | 1,925 | 第三次活动 |
-| **power** 重量级（5） | raw CDP / http / upload / download / dialog | 3,283 | 首次活动（同 `toolExtended`） |
-| **session** 登录态（3） | captcha / auth_flush / login_import | 1,694 | 首次活动（同 `toolExtended`） |
-| **escape** 逃生舱（1） | `bcdp_script`（`verbatim:true` = 原 cli 的裸 heredoc） | 1,389 | **冷启动即在**，不吃活动闸（见下） |
-| **judge** 评审链（5） | `bcdp_jev_*` | 3,064 | 除解锁外，**还要求配了 JEV 或 Laya Key** |
-| **合计** | 34 | **22,224** | — |
+| **core** 常驻（1） | `bcdp_status` | 401 | 永远在场，不可封印——它是 lazy 唯一的解锁入口 |
+| **act** 动手（13） | space / navigate / click / fill / key / hover / scroll / select / check / drag / tab / help / doctor | 8,762 | `lazy` 下首次活动放第一波 |
+| **observe** 观察（5） | screenshot / page_info / read_element / js / snapshot | 3,109 | 第二次活动 |
+| **wait** 等待（1） | `bcdp_wait`（duration / selector / url / response / load / function / request / event） | 1,976 | 第三次活动 |
+| **power** 重量级（5） | raw CDP / http / upload / download / dialog | 3,692 | 首次活动（同 `toolExtended`） |
+| **session** 登录态（3） | captcha / auth_flush / login_import | 1,864 | 首次活动（同 `toolExtended`） |
+| **escape** 逃生舱（1） | `bcdp_script`（`verbatim:true` = 原 cli 的裸 heredoc） | 1,484 | 首次活动（1.7.0 起不再吃活动闸豁免，见下） |
+| **judge** 评审链（5） | `bcdp_jev_*` | 3,343 | 除解锁外，**还要求配了 JEV 或 Laya Key** |
+| **合计** | 34 | **24,631** | — |
+
+> 表内 schema 与合计均为 1.7.0 **挂载级实测**（`tests/tier-mount.test.ts` 的度量用例打印），八批求和 = 24,631 与全量档逐字对齐。
 
 设置项在插件设置页**最上方**的「工具封印」分块（全部 volatile，翻完当场生效，不重启插件）——一个开关管一组批次，形状照 dsh-prime-memory 的「工具封印」：
 
-- **`toolInjection`** `lazy`（**默认**：常驻 core + escape，其余首次 `bcdp_*` 调用后按开关注入）/ `always`（挂载即全量，历史行为）。
-- **`toolBrowse`**（act + observe + wait = 14）/ **`toolExtended`**（power + session = 8）/ **`toolEscape`**（script = 1）/ **`toolJudge`**（5）：开 = 开放注册，关 = 该批从模型工具列表移除。四组各自独立，封一组不波及别组；`core` 级不给开关（封了就没了活动入口）。
+- **`toolInjection`** `lazy`（**默认**：只常驻 `bcdp_status`——它是唯一的解锁入口，其余首次 `bcdp_*` 调用后按开关注入）/ `always`（挂载即全量，历史行为）。
+- **`toolBrowse`**（act + observe + wait = 19）/ **`toolExtended`**（power + session = 8）/ **`toolEscape`**（script = 1）/ **`toolJudge`**（5）：开 = 开放注册，关 = 该批从模型工具列表移除。四组各自独立，封一组不波及别组；`core` 级不给开关（封了就没了活动入口）。
 
-**escape 批为什么单独成组、且不等活动**：`bcdp_script` 是唯一能在一次调用里干完任意多步任务的入口（`page` / `browser` / `taskSpaces` / `fetch` / `cdp` 全预置），其余 33 个工具能做的事它都能做。所以它必须始终可达——否则模型遇到「结构化工具没覆盖」的情形时手里没有任何逃生手段。这也让它成为**按需只开逃生舱**的合法姿势：关掉 `toolExtended`、留着 `toolEscape`，只留 1 个工具。
+**1.7.0 起 `escape` 不再吃活动闸的例外**：`bcdp_script` 仍是唯一能在一次调用里干完任意多步任务的入口（`page` / `browser` / `taskSpaces` / `fetch` / `cdp` 全预置），但它不再常驻——先调一次常驻的 `bcdp_status` 即可拿到它。豁免的代价是它单独占 ≈1,700 字符/轮（比收窄后的整个常驻面还大四轮），而 lazy 会话里模型本来就要先调 `status`。如果你需要「冷启动直接写脚本」的旧行为，设 `toolInjection = always`（或留在 1.6.x）。
 
 行为要点：
 
-- **封印 = 反注册**（工具从模型的工具列表里消失），不是执行期拒绝。解锁信号挂在 `bcdp_*` 调用的公共出口上，工具体不知道分级存在；`bcdp_status` / `bcdp_help` / `bcdp_doctor` 自身也算活动信号（读了指南就得有工具可用）。
+- **封印 = 反注册**（工具从模型的工具列表里消失），不是执行期拒绝。解锁信号挂在 `bcdp_*` 调用的公共出口上，工具体不知道分级存在；`bcdp_status` / `bcdp_help` / `bcdp_doctor` 自身也算活动信号（读了指南就得有工具可用）——但后两者已属 act 批，冷启动下只能靠 `bcdp_status` 触发。
 - **闲置自动收回**：`lazy` + `idleTimeoutMin > 0` 时，空闲回收把后台浏览器停掉的同一刻收回扩展面；下次活动重新铺开。`always` 模式不受影响。
 - `legacyEgoToolNames` 的 `ego_*` 别名跟随其 `bcdp_*` 本体的级别。
-- 当前注入面写在 `bcdp_doctor` 报告首行（`tool injection: mode=lazy browse=open extended=open escape=open judge=open judgeKey=none active=no → live 7 / sealed 27`），不用猜。
-- 默认档下不碰浏览器的会话只有 **7** 个工具在场（core 6 + escape 1 = 4,978 字符 ≈ 1,430 token，−77.6%）；要回到历史行为把 `toolInjection` 改成 `always`（34 件全在场需再配一个评审 Key）。
-- **各档实测注入面**（挂载级口径，1.5.0；字符为实测，token 按同一比例折算）：默认 7 个 / 4,978 字符 ≈1,430 tok → 首次活动 24 个 / 15,198 ≈4,370 tok → 第 2 波（observe）28 个 / 17,235 ≈4,955 tok → 第 3 波（wait）29 个 / 19,160 ≈5,509 tok → 全量 34 个 / 22,224 ≈6,389 tok。
+- 当前注入面写在 `bcdp_doctor` 报告首行（例：`tool injection: mode=lazy browse=open extended=open escape=open judge=open judgeKey=none active=yes → live 28 / sealed 6`，即一次 `bcdp_status` + 一次 `doctor` 之后的面），不用猜。注意 `doctor` 本身已属 act 批，要先调 `bcdp_status` 才能拿到它；冷启动时模型面上只有 `bcdp_status`（live 1 / sealed 33）。
+- 默认档下不碰浏览器的会话只有 **1** 个工具在场（`bcdp_status` = 401 字符 ≈115 tok，较 1.5.0 的 4,978 字符 **−91.9%**）；它是解锁入口，调用即按批次铺开其余工具。要回到历史行为把 `toolInjection` 改成 `always`（34 件全在场需再配一个评审 Key）。
+- **各档实测注入面**（挂载级口径，1.7.0；序列化工具的 `name + description + parameters` 求和，token 按 3.48 字符/token 折算）：默认 **1 个 / 401 字符 ≈115 tok** → 首次活动（act 批 + power + session + escape）23 个 / 16,203 ≈4,660 tok → 第 2 波（+observe）与第 3 波（+wait）后 29 个 / 21,288 ≈6,120 tok → 全量（always + 评审 Key）34 个 / 24,631 ≈7,080 tok。这些数字由 `tests/tier-mount.test.ts` 的度量用例当场打印，不靠估算。
 - 五个字段都带 schema `.default()`：volatile 字段的表单描述符直接拿 schema 默认值，不写默认会出现「面板显示 A、运行时用 B」。
 
 > 取舍提醒：窄工具（一个动作一个工具）是模型写对参数、少重试的护栏。1.5.0 只合并了 **wait / space / escape** 三族同源冗余（41 → 34，省 1,869 字符 schema）：五个 wait 共用同一 preamble 与 timeout 语义、三个 space 本就是同一个 op 工具的碎片、cli/script 是同一 heredoc 运行时。代价是这三族的旧工具名不再存在（见上方迁移表）；交互原子（click/fill/key…）**不合并**，因为它们是模型写对参数的护栏。

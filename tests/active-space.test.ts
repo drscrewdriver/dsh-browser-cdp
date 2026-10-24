@@ -67,11 +67,15 @@ function fakeSubprocess(behavior: Array<{ exitCode: number | null; stdout?: stri
   };
 }
 
-const fakeCfg = (tracker: ReturnType<typeof createActiveSpaceTracker>) => ({
+const fakeCfg = (
+  tracker: ReturnType<typeof createActiveSpaceTracker>,
+  extra: Record<string, unknown> = {},
+) => ({
   // R7 — runEgoScript builds its argv from this prefix (shape-aware).
   egoBin: "x", egoArgvPrefix: ["node", "x"], graceMs: 5000, maxOutputBytes: 4096,
   configuredDefaultSpace: "dsh-agent", spaceTracker: tracker,
   get defaultSpace() { return tracker.current() },
+  ...extra,
 }) as never;
 
 const fakeCtx = (subprocess: unknown) => ({ subprocess }) as never;
@@ -112,6 +116,44 @@ describe("runWithStaleSpaceRetry", () => {
     const result = await runWithStaleSpaceRetry(fakeCtx(subprocess), fakeCfg(tracker), fakeExec, () => "script");
     expect(result.ok).toBe(false);
     expect(subprocess.calls).toBe(1);
+  });
+
+  // A relaunched browser keeps the endpoint but mints a NEW browser id, so the
+  // cached ws dead-ends. This signature is deliberately NOT one of the
+  // cold-start signs, so withWarmupRetry does not burn attempts on it — the
+  // re-probe below is the only thing that can recover it.
+  it("re-probes the link and retries once after a dead cached ws", async () => {
+    const tracker = createActiveSpaceTracker("dsh-agent");
+    const subprocess = fakeSubprocess([
+      { exitCode: 1, stderr: "Error: failed to connect to CDP endpoint: ws://127.0.0.1:9222/devtools/page/A" },
+      { exitCode: 0, stdout: "@@DSH_RESULT@@{\"ok\":true}" },
+    ]);
+    let probes = 0;
+    const result = await runWithStaleSpaceRetry(
+      fakeCtx(subprocess),
+      fakeCfg(tracker, { refreshAttach: async () => { probes++; return true; } }),
+      fakeExec,
+      () => "script",
+    );
+    expect(probes).toBe(1);
+    expect(result.ok).toBe(true);
+    expect(subprocess.calls).toBe(2);
+  });
+
+  it("does not retry a connect failure when the re-probe found no new endpoint", async () => {
+    const tracker = createActiveSpaceTracker("dsh-agent");
+    const subprocess = fakeSubprocess([
+      { exitCode: 1, stderr: "Error: failed to connect to CDP endpoint: ws://127.0.0.1:9222/devtools/page/A" },
+      { exitCode: 0, stdout: "@@DSH_RESULT@@{\"ok\":true}" },
+    ]);
+    const result = await runWithStaleSpaceRetry(
+      fakeCtx(subprocess),
+      fakeCfg(tracker, { refreshAttach: async () => false }),
+      fakeExec,
+      () => "script",
+    );
+    expect(result.ok).toBe(false);
+    expect(subprocess.calls).toBe(1); // no spinning: nothing moved, so nothing retried
   });
 });
 

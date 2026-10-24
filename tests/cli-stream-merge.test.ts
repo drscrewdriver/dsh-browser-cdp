@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { mergeCliOutput } from "../src/cdp/cli-link.ts";
-import { parseSentinel } from "../src/index.ts";
+import { createActiveSpaceTracker, parseSentinel, runWithStaleSpaceRetry } from "../src/index.ts";
 
 // R4 — the ego CLI on Windows writes the embedded runtime's output to stderr.
 // These tests pin the merge order (stdout first) and the "last sentinel wins"
@@ -120,5 +120,46 @@ describe("parseSentinel bare-JSON fallback (1.3.1)", () => {
 
   it("is a no-op for the structured tools (they always emit the sentinel)", () => {
     expect(parseSentinel('@@DSH_RESULT@@{"ok":true}')).toEqual({ ok: true });
+  });
+});
+
+// P2 (fork absorption) — the exit code is the authority on success. The fallback
+// above already rescues a script that prints JSON WITHOUT the sentinel; a script
+// that prints plain text only has no payload to rescue, yet it ran. Reaches the
+// real spawn path through the exported runWithStaleSpaceRetry, so no extra
+// internal surface is exposed for tests.
+describe("runEgoScript success semantics (exit code is authoritative)", () => {
+  const spawnOnce = (behavior: { exitCode: number | null; stdout?: string; stderr?: string }) => {
+    const mk = (text: string) => ({ readFrom: () => ({ text, nextOffset: text.length, lossy: false }) });
+    return {
+      spawn: () => ({
+        done: Promise.resolve({ exitCode: behavior.exitCode, signal: null }),
+        collected: { stdout: mk(behavior.stdout ?? ""), stderr: mk(behavior.stderr ?? "") },
+      }),
+    };
+  };
+
+  const runWith = (behavior: { exitCode: number | null; stdout?: string; stderr?: string }) => {
+    const tracker = createActiveSpaceTracker("dsh-agent");
+    const subprocess = spawnOnce(behavior);
+    const cfg = {
+      egoBin: "x", egoArgvPrefix: ["node", "x"], graceMs: 5000, maxOutputBytes: 4096,
+      configuredDefaultSpace: "dsh-agent", spaceTracker: tracker,
+      get defaultSpace() { return tracker.current() },
+    } as never;
+    return runWithStaleSpaceRetry({ subprocess } as never, cfg, {} as never, () => "script");
+  };
+
+  it("treats exit code 0 with plain-text stdout as a successful run", async () => {
+    const result = await runWith({ exitCode: 0, stdout: "done, no json here" });
+    expect(result.ok).toBe(true);
+    expect(result.value).toBeUndefined();
+    expect(result.stdout).toContain("done, no json here");
+  });
+
+  it("still reports failure when the process exits non-zero", async () => {
+    const result = await runWith({ exitCode: 3, stderr: "boom" });
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("exited with code 3");
   });
 });

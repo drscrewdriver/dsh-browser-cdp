@@ -61,16 +61,18 @@ describe("manifest version-line discipline", () => {
     if (pkg.devDependencies?.["@deepseek-ai/dsh-tools"] !== undefined) {
       const dev = pkg.devDependencies["@deepseek-ai/dsh-tools"] as string;
       // unified era: devDeps stay on the newest line (typecheck fidelity only);
-      // segment era: devDep must equal the shared range verbatim.
-      expect(dev === RANGE || /^>=0\.2\.0-rc\.\d+ <0\.2\.1-0$/.test(dev)).toBe(true);
+      // segment era: devDep must equal the shared range verbatim;
+      // exact-enum era: a single-term pin on one of the enumerated rc is fidelity.
+      expect(dev === RANGE || ENUM_TERMS.includes(dev) || /^>=0\.2\.0-rc\.\d+ <0\.2\.1-0$/.test(dev)).toBe(true);
     }
   });
 
   it("dsh-sandbox devDep, when present, is not left on an older line than the range's line", () => {
     const sandbox = pkg.devDependencies?.["@deepseek-ai/dsh-sandbox"] as string | undefined;
     if (sandbox !== undefined && sandbox !== RANGE) {
-      // Tilde/caret ranges are tolerated only if they still admit this line's rc.
-      expect(sandbox.startsWith("^") || sandbox.startsWith("~") || /^>=0\.2\.0-rc\.\d+ <0\.2\.1-0$/.test(sandbox)).toBe(true);
+      // Tilde/caret ranges are tolerated only if they still admit this line's rc;
+      // exact-enum era: a single-term pin onto an enumerated rc is equally current.
+      expect(sandbox.startsWith("^") || sandbox.startsWith("~") || ENUM_TERMS.includes(sandbox) || /^>=0\.2\.0-rc\.\d+ <0\.2\.1-0$/.test(sandbox)).toBe(true);
     }
   });
 

@@ -82,7 +82,7 @@
   },
   "devDependencies": {
     "@deepseek-ai/cosmokit": "^1.8.5",
-    "@deepseek-ai/dsh-tools": ">=0.2.0-rc.1 <0.2.1-0",
+    "@deepseek-ai/dsh-tools": "0.2.1-rc.3",
     "@types/node": "^22.20.1",
     "@types/react": "~18.3.31",
     "@types/ws": "^8.5.10",
@@ -91,7 +91,7 @@
     "typescript": "^5.9.0",
     "vitest": "^3.2.0",
     "ws": "^8.18.0",
-    "@deepseek-ai/dsh-sandbox": ">=0.2.0-rc.1 <0.2.1-0"
+    "@deepseek-ai/dsh-sandbox": "0.2.1-rc.3"
   },
   "engines": {
     "node": ">=22",

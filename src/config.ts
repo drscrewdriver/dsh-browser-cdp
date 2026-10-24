@@ -154,6 +154,11 @@ export const Config = z.object({
   toolJudge: z.boolean().default(true).description('Judgement tier (5 bcdp_jev_* tools). On still requires a JEV or Laya key: without one they can only answer "not configured", so they stay sealed anyway.').volatile(),
   localHeadless: z.boolean().description('Run the locally launched browser headless.'),
   remoteEnabled: z.boolean().description('Master switch for REMOTE attach. Off = the configured target sequence is preserved but inert (nothing probes or connects remotely); flip back on any time. Does not affect cdpMode=local.').volatile(),
+  // 探测冷启动闸门：`<cli> nodejs` heredoc 通道的初始化副作用就是把背后的
+  // 浏览器冷启动起来（vendored CLI 是 createEgoShim → ensureBrowser，原生 ego
+  // lite 亦同）。默认关：挂载/改设置触发的探测不再弹浏览器窗口，就绪改由
+  // 只读的 --status 判定，浏览器推迟到首个真实 bcdp_* 调用才起。
+  allowProbeColdStart: z.boolean().description('Allow the ego-cli readiness probe to cold-start the backing browser. Off (default): the probe never launches the browser — when --status cannot prove the browser is already up, the heredoc round-trip is skipped and the browser starts on the first real bcdp_* call instead (no browser window at plugin startup). On: the probe verifies the SDK harness up front, which may launch the browser.').volatile(),
   localUserDataDir: z.string().description('Profile dir for the locally launched browser. Empty = managed dir; never point at your daily Chrome profile.'),
   // ── Lightpanda backend: managed-serve knob (the row carries its own path) ──
   lightpandaArgs: z.string().description('Extra args appended to a managed `lightpanda serve` argv. --host/--port are managed and cannot be overridden.').volatile(),
@@ -466,6 +471,13 @@ export function resolveConfig(config: RawConfig = {}): ResolvedConfig {
     localUserDataDir: typeof config.localUserDataDir === 'string' ? config.localUserDataDir : '',
     lightpandaArgs: trimmed(config.lightpandaArgs),
     remoteEnabled: config.remoteEnabled === undefined ? true : Boolean(config.remoteEnabled),
+    // 安全闸门，默认禁用：只有显式 true（布尔或字符串形式）才打开。不用宽
+    // Boolean() 转换 —— 手改 YAML 写出的 'false' / 0 必须仍然是关，否则一个
+    // 疏忽就把「探测可拉起浏览器」打开了（tierOpenByDefault 的反向极性）。
+    // RawConfig 把该键收窄成 boolean，字符串形状只来自手改文件，走原始读取。
+    allowProbeColdStart:
+      (config as Record<string, unknown>).allowProbeColdStart === true ||
+      (config as Record<string, unknown>).allowProbeColdStart === 'true',
     // ── 阶段 10: JEV/Laya judge ───────────────────────────────────────────
     // `layaUrl` defaults to the sidecar's real port. JevLoop ships 7789 here,
     // which is a DIFFERENT tool's port — copying that default produces a

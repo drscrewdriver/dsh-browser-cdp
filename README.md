@@ -173,6 +173,7 @@ dshx list                                                # 应显示：[on] dsh-
 - `cdpMode`：`auto` 按激活项（两种类型都行）；`remote` **只接受 CDP 端点**，激活项是本机 CLI 时会显式报 `mode-kind-mismatch`；`local` 走受管本地启动器。
 - `remoteEnabled`（远端总开关）**只管远端 CDP**，不影响本机 CLI 连接。
 - `allowLocalFallback` / `localHeadless` / `localUserDataDir` 只作用于 CDP 端点的回落与受管启动。
+- `allowProbeColdStart`（**默认关**）：就绪探测**绝不拉起 ego 浏览器**——`--status` 证明浏览器已在跑才做 heredoc 验证，否则跳过，浏览器推迟到首个真实 `bcdp_*` 调用才启动（插件挂载/改设置不再弹浏览器窗口）。打开 = 挂载探测预先验证 SDK harness（可能当场弹出浏览器窗口）。
 
 `bcdp_doctor` 会报告当前序列类型计数、CLI 实际解析到的路径与形态，以及（若同机装了旧版 `dsh-ego-browser`）一条共存提示。
 

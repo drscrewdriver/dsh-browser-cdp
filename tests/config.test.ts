@@ -10,6 +10,8 @@ describe("dual capture config", () => {
       runtimeArgs: "", chromeArgs: "", isolateSpaces: false, idleTimeoutMin: 0, defaultSpace: ":auto",
       links: [], activeTargetId: "", cdpMode: "auto", cdpProbeTimeoutMs: 3000,
       cursorHud: true, cursorName: "DeepSeek", allowLocalFallback: false, localHeadless: false, localUserDataDir: "", lightpandaArgs: "", legacyEgoToolNames: false, remoteEnabled: true,
+      // 探测冷启动闸门默认关：挂载探测绝不拉起浏览器。
+      allowProbeColdStart: false,
       // 工具分级注入默认：lazy + 三级全开放（core 级不可封印）。
       toolInjection: "lazy", toolBrowse: true, toolExtended: true, toolEscape: true, toolJudge: true,
       // 阶段 10 judge defaults. layaUrl defaults to the REAL sidecar port:/n      // 7789 (JevLoop’s value) is a different tool and yields a confusing
@@ -32,6 +34,7 @@ describe("dual capture config", () => {
       runtimeArgs: "", chromeArgs: "", isolateSpaces: false, idleTimeoutMin: 0, defaultSpace: ":auto",
       links: [], activeTargetId: "", cdpMode: "auto", cdpProbeTimeoutMs: 3000,
       cursorHud: true, cursorName: "DeepSeek", allowLocalFallback: false, localHeadless: false, localUserDataDir: "", lightpandaArgs: "", legacyEgoToolNames: false, remoteEnabled: true,
+      allowProbeColdStart: false,
       // 工具分级注入默认：lazy + 三级全开放（core 级不可封印）。
       toolInjection: "lazy", toolBrowse: true, toolExtended: true, toolEscape: true, toolJudge: true,
       // 阶段 10 judge defaults. layaUrl defaults to the REAL sidecar port:/n      // 7789 (JevLoop’s value) is a different tool and yields a confusing
@@ -332,5 +335,17 @@ describe("阶段 10 · the progress-evaluation switch", () => {
   it("coerces a non-boolean rather than trusting truthiness", () => {
     expect(resolveConfig({ jevEvaluate: 0 } as never).jevEvaluate).toBe(false);
     expect(resolveConfig({ jevEvaluate: true } as never).jevEvaluate).toBe(true);
+  });
+});
+
+describe("探测冷启动闸门（allowProbeColdStart）", () => {
+  it("is OFF by default — a plugin mount must never pop a browser window", () => {
+    expect(resolveConfig({}).allowProbeColdStart).toBe(false);
+  });
+
+  it("is an explicit opt-in, coerced like allowLocalFallback", () => {
+    expect(resolveConfig({ allowProbeColdStart: true } as never).allowProbeColdStart).toBe(true);
+    expect(resolveConfig({ allowProbeColdStart: "false" } as never).allowProbeColdStart).toBe(false);
+    expect(resolveConfig({ allowProbeColdStart: 0 } as never).allowProbeColdStart).toBe(false);
   });
 });

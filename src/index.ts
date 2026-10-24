@@ -958,6 +958,8 @@ interface EgoRuntimeConfig {
   readonly localHeadless: boolean
   readonly remoteEnabled: boolean
   readonly localUserDataDir: string
+  /** 探测冷启动闸门（默认关）：关 = ego-cli 探测绝不拉起背后的浏览器。 */
+  readonly allowProbeColdStart: boolean
   /** Lightpanda backend �?extra `lightpanda serve` args for managed `lightpanda` rows. */
   readonly lightpandaArgs: string
   // ── 阶段 10: JEV/Laya judge (design-jev-pipeline.md) ────────────────────
@@ -1328,6 +1330,7 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
     get remoteEnabled() { return resolveConfig(bridge.source() as RawConfig).remoteEnabled },
     get localUserDataDir() { return resolveConfig(bridge.source() as RawConfig).localUserDataDir },
     get lightpandaArgs() { return resolveConfig(bridge.source() as RawConfig).lightpandaArgs },
+    get allowProbeColdStart() { return resolveConfig(bridge.source() as RawConfig).allowProbeColdStart },
     // ── 阶段 10: JEV/Laya judge ─────────────────────────────────────────
     // `judgeSettingsOf` is resolved once per read and deconstructed, so the
     // "which keys does the judge need" decision lives in ONE place (config.ts)
@@ -1478,6 +1481,9 @@ bridge.onChange(() => tiers.reapply())
           },
           remoteEnabled: resolved.remoteEnabled,
           useLauncher: true,
+          // 探测冷启动闸门（默认关）：关 = ego-cli 探测绝不把背后的浏览器拉起来，
+          // 挂载/改设置不再弹浏览器窗口；首个真实 bcdp_* 调用才冷启动。
+          cliProbeColdStart: resolved.allowProbeColdStart === true,
           // Lightpanda backend �?managed-serve extra args for `lightpanda` rows.
           lightpandaArgs: resolved.lightpandaArgs,
           // R7 �?the local ego CLI link probes through the host subprocess

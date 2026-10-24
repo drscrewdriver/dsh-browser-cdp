@@ -197,6 +197,16 @@ export interface CliProbeInput extends CliResolveInput {
   sdkPath?: string
   /** Overall timeout for the authoritative heredoc probe. */
   timeoutMs?: number
+  /**
+   * Cold-start gate (config `allowProbeColdStart`). The heredoc probe rides
+   * `<cli> nodejs`, whose runtime-init side effect is launching the backing
+   * browser (vendored CLI: createEgoShim → ensureBrowser; the native ego lite
+   * CLI likewise). When false, the heredoc runs ONLY if `--status` proved the
+   * browser already up — otherwise it is skipped and readiness rests on the
+   * read-only `--status` / shape round-trip alone, so a probe can never pop a
+   * browser window. Unset = allowed (historical behaviour, fixtures rely on it).
+   */
+  coldStart?: boolean
 }
 
 export interface CliProbeResult {
@@ -210,6 +220,8 @@ export interface CliProbeResult {
   running?: boolean
   /** Non-fatal note, e.g. the SDK flag was refused and dropped. */
   warning?: string
+  /** True when the heredoc round-trip was skipped by the cold-start gate. */
+  heredocSkipped?: boolean
   latencyMs: number
 }
 
@@ -304,6 +316,27 @@ export async function probeCliLink(input: CliProbeInput, io: CliLinkIo): Promise
   if (statusRun && statusRun.exitCode === 0 && !statusRun.timedOut) {
     const parsed = parseCliStatus(mergeCliOutput(statusRun))
     if (parsed.ok) running = parsed.running
+  }
+
+  // ── cold-start gate: the heredoc can pop a browser window ───────────────
+  // `<cli> nodejs` initializes the CLI's agent runtime BEFORE the script runs,
+  // and that init cold-starts the backing browser when it is down (vendored
+  // CLI: createEgoShim → ensureBrowser → launch; the native ego lite runtime
+  // behaves the same). With the gate off, run it only when `--status` proved
+  // the browser is already up — the skip is a SUCCESS (the CLI itself is
+  // fine), just without the SDK-harness facades check.
+  if (input.coldStart === false && running !== true) {
+    return {
+      ok: true,
+      code: '',
+      message: '',
+      cliPath,
+      origin: resolve.origin,
+      shape,
+      heredocSkipped: true,
+      ...(running === undefined ? {} : { running }),
+      latencyMs: Math.max(0, io.now() - started),
+    }
   }
 
   // ── authoritative heredoc probe, over the same channel work uses ─────────

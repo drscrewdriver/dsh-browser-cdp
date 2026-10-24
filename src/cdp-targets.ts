@@ -558,6 +558,14 @@ export interface RefreshInput {
   sdkPath?: string
   /** R7 — bundled port used as the last-resort CLI ('' disables the fallback). */
   bundledCli?: string
+  /**
+   * Config gate `allowProbeColdStart` (default false): when false the ego-cli
+   * probe must not cold-start the backing browser — the heredoc round-trip is
+   * skipped unless `--status` proved the browser already up. Undefined = the
+   * probe decides (and its own default allows the cold start, keeping the
+   * fixtures' historical behaviour).
+   */
+  cliProbeColdStart?: boolean
   /** Lightpanda backend — extra `lightpanda serve` args (config knob), filtered by the launcher. */
   lightpandaArgs?: string
 }
@@ -604,6 +612,7 @@ async function refreshCliAttach(
     useSdkPath: link.useSdkPath === true,
     sdkPath: input.sdkPath ?? '',
     timeoutMs: input.timeoutMs,
+    coldStart: input.cliProbeColdStart,
   }, io)
   if (!probe.ok) {
     return cache.patch({
@@ -625,7 +634,9 @@ async function refreshCliAttach(
     code: '',
     message: probe.warning ?? (coldStart
       ? 'local ego CLI reachable; the backing browser is not running yet and will start on the first call'
-      : 'local ego CLI ready'),
+      : probe.heredocSkipped === true
+        ? 'local ego CLI ready; heredoc probe skipped (allowProbeColdStart off) — the SDK harness check runs with the first call'
+        : 'local ego CLI ready'),
     cliPath: probe.cliPath,
     cliShape: probe.shape,
     // R1/R-1 — only record the SDK path when the probe actually used it. If the

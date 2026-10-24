@@ -266,6 +266,16 @@ export interface ResolvedConfig {
   activeTargetId: string
   cdpMode: CdpMode
   cdpProbeTimeoutMs: number
+  /**
+   * Whether the ego-cli readiness probe may cold-start the backing browser.
+   * Default FALSE: `<cli> nodejs` — the channel the heredoc probe rides —
+   * initializes the CLI's agent runtime, whose side effect is launching the
+   * backing browser (vendored: createEgoShim → ensureBrowser; native ego lite
+   * likewise). With the gate off, the probe skips the heredoc unless `--status`
+   * proved the browser already up, so a plugin mount can no longer pop a
+   * browser window; the browser then starts on the first real bcdp_* call.
+   */
+  allowProbeColdStart: boolean
   // ── R4: screenshot material toggles ─────────────────────────────────────
   cursorHud: boolean
   cursorName: string

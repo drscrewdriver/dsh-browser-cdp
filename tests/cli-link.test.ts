@@ -298,3 +298,57 @@ describe("R7 probeCliLink", () => {
     expect(out).toMatchObject({ ok: true, code: "" });
   });
 });
+
+// ── cold-start gate (config allowProbeColdStart) ─────────────────────────────
+// `<cli> nodejs` runtime-init cold-starts the backing browser when it is down
+// (vendored CLI: createEgoShim → ensureBrowser; native ego lite likewise), so
+// with the gate off the heredoc round-trip must be skipped unless `--status`
+// proved the browser already up. Readiness then rests on the read-only
+// `--status` / shape probe alone.
+
+describe("probeCliLink cold-start gate", () => {
+  const cli = "/usr/local/bin/ego-browser";
+
+  function gateIo(defaultRun: Scripted) {
+    return fakeIo({ files: [cli], env: { PATH: "/usr/local/bin" }, defaultRun });
+  }
+
+  it("skips the heredoc when the gate is off and --status says the browser is down", async () => {
+    const f = gateIo((req) => (req.argv.includes("--status") ? OK_STATUS(false) : READY));
+    const out = await probeCliLink({ cliPath: cli, bundled: "", coldStart: false }, f.io);
+    expect(out).toMatchObject({ ok: true, code: "", running: false, heredocSkipped: true });
+    // Exactly one spawn — the read-only --status round-trip. No heredoc, no
+    // browser window.
+    expect(f.calls).toHaveLength(1);
+    expect(f.calls[0]!.stdin).toBe("");
+  });
+
+  it("skips the heredoc when --status is unsupported (native ego lite CLI)", async () => {
+    const f = gateIo((req) =>
+      req.argv.includes("--status")
+        ? { exitCode: 2, stdout: "", stderr: "Unknown command: --status", latencyMs: 4 }
+        : READY,
+    );
+    const out = await probeCliLink({ cliPath: cli, bundled: "", coldStart: false }, f.io);
+    expect(out).toMatchObject({ ok: true, code: "", heredocSkipped: true });
+    expect(out.running).toBeUndefined();
+    expect(f.calls).toHaveLength(1);
+  });
+
+  it("still runs the heredoc when --status proves the browser is already up", async () => {
+    const f = gateIo((req) => (req.argv.includes("--status") ? OK_STATUS(true) : READY));
+    const out = await probeCliLink({ cliPath: cli, bundled: "", coldStart: false }, f.io);
+    expect(out).toMatchObject({ ok: true, running: true });
+    expect(out.heredocSkipped).toBeUndefined();
+    expect(f.calls).toHaveLength(2);
+    expect(f.calls[1]!.stdin).toContain(CLI_READY_SENTINEL);
+  });
+
+  it("runs the heredoc when the gate is unset (historical behaviour)", async () => {
+    const f = gateIo((req) => (req.argv.includes("--status") ? OK_STATUS(false) : READY));
+    const out = await probeCliLink({ cliPath: cli, bundled: "" }, f.io);
+    expect(out).toMatchObject({ ok: true, running: false });
+    expect(out.heredocSkipped).toBeUndefined();
+    expect(f.calls).toHaveLength(2);
+  });
+});

@@ -1,5 +1,19 @@
 1.6.1: host enumeration addendum for DSH 0.2.1-rc.3 (declaration-only bump; contract plane zero diff).
 
+## 1.6.2 (2026-10-25)
+
+**修复：插件挂载不再拉起 ego 浏览器（`allowProbeColdStart` 探测冷启动闸门，默认关）。**
+
+### 根因
+- 挂载时的初始 CDP 探测对激活的 `ego-cli` 链接跑一次权威 heredoc 探测（`<cli> nodejs` + 哨兵脚本）。该通道在脚本运行**之前**初始化 CLI 的 agent 运行时，副作用就是把背后的浏览器冷启动（vendored CLI：`createEgoShim → ensureBrowser → launch`；原生 ego lite 运行时同行为）。于是 DSH 宿主每次启动、每次设置变更（`bridge.onChange`）都会弹出一个 ego 浏览器窗口——与探测自身的"只读"语义（`cli-launch` 标记、`--status` 快路径、`bcdp_status` 的"不启动浏览器"承诺）直接矛盾。
+
+### 修复
+- 新增全局开关 `allowProbeColdStart`（Config schema `.volatile()`，自动进设置面板与自绘设置卡「基础」分组；**默认禁用**）。禁用时：`probeCliLink` 只跑只读的 `--status`/形状探测；仅当 `--status` 证明浏览器已在运行才执行 heredoc 验证，否则跳过（`heredocSkipped`），浏览器推迟到首个真实 `bcdp_*` 调用才冷启动。`sdkPath` 注入在跳过场景保持不变。
+- 求值极性只认显式 `true`（布尔或字符串）：手改 YAML 的 `'false'`/`0` 不会被宽 `Boolean()` 误开。
+- 自绘设置卡（`FAM_FIELD_GROUPS`）补渲染该字段。
+- 新增真机探针 `tests/cdp-probe/cli-coldstart.probe.test.ts`：对真实原生 CLI 断言"只跑一次 `--status`、`nodejs` 通道从未运行、`ego.exe` 进程数零增量"（默认自跳过）。
+- 单测 +11（闸门极性/跳过行为/向后兼容/透传），全量 876 绿。
+
 ## 1.6.0 (2026-10-21)
 
 **默认行为变更：会话隔离成为默认。** 一个 `bcdp_*` 调用**省略 `space`** 时，不再落到跨会话共享的 `default`，而是落到**本会话自己的**任务空间 `dsh-agent-<会话id前8位>`；只有**显式**写 `space: 'default'`（或 `op=open name='default'`）才使用共享具名槽。

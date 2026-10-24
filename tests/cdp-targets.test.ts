@@ -514,3 +514,60 @@ describe("lightpanda kind (managed serve singleton)", () => {
     if (!added.ok) expect(added.code).toBe("lightpanda-already-exists");
   });
 });
+
+// ── probe cold-start gate (config allowProbeColdStart) ──────────────────────
+// The heredoc probe rides `<cli> nodejs`, whose runtime-init side effect is
+// cold-starting the backing browser. With `cliProbeColdStart: false` the
+// plugin-mount probe must never pop that window.
+
+describe("refreshAttach — probe cold-start gate", () => {
+  it("skips the browser-launching heredoc when the gate is off and the browser is down", async () => {
+    const cache = createAttachCache();
+    const { io: ioImpl, calls } = cliIo({ status: JSON.stringify({ running: false }) });
+    const out = await refreshAttach({
+      targets: [cliLink()], activeTargetId: "cli", mode: "auto", cache,
+      cliIo: ioImpl as never, cliProbeColdStart: false, now: () => 0,
+    });
+    expect(out.status).toBe("ready");
+    expect(out.endpointSource).toBe("cli-launch");
+    expect(out.message).toContain("first call");
+    // Only the read-only --status round-trip ran; the heredoc never did.
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.stdin).toBe("");
+  });
+
+  it("keeps sdkPath injection on a gate-skipped probe (no warning is raised)", async () => {
+    const cache = createAttachCache();
+    const { io: ioImpl } = cliIo({ status: JSON.stringify({ running: false }) });
+    const out = await refreshAttach({
+      targets: [cliLink({ useSdkPath: true })], activeTargetId: "cli", mode: "auto", cache,
+      cliIo: ioImpl as never, sdkPath: "/plugin/harness.js", cliProbeColdStart: false, now: () => 0,
+    });
+    expect(out.status).toBe("ready");
+    expect(out.sdkPath).toBe("/plugin/harness.js");
+  });
+
+  it("names the gate in the message when --status cannot answer and the probe was skipped", async () => {
+    const cache = createAttachCache();
+    // status: "" → exit 0 with empty output → parse fails → running undefined → skip.
+    const { io: ioImpl } = cliIo({ status: "" });
+    const out = await refreshAttach({
+      targets: [cliLink()], activeTargetId: "cli", mode: "auto", cache,
+      cliIo: ioImpl as never, cliProbeColdStart: false, now: () => 0,
+    });
+    expect(out.status).toBe("ready");
+    expect(out.endpointSource).toBe("cli");
+    expect(out.message).toContain("allowProbeColdStart");
+  });
+
+  it("runs the heredoc when the gate is on and the browser is down (historical behaviour)", async () => {
+    const cache = createAttachCache();
+    const { io: ioImpl, calls } = cliIo({ status: JSON.stringify({ running: false }) });
+    const out = await refreshAttach({
+      targets: [cliLink()], activeTargetId: "cli", mode: "auto", cache,
+      cliIo: ioImpl as never, cliProbeColdStart: true, now: () => 0,
+    });
+    expect(out.status).toBe("ready");
+    expect(calls).toHaveLength(2);
+  });
+});

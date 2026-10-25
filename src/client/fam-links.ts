@@ -114,7 +114,12 @@ export function buildCliRow(input: { label?: string; cliPath?: string }): FamLin
 		id: newLinkId(),
 		label: trimmed(input.label) || cliPath || EGO_CLI_LABEL,
 		cliPath,
-		useSdkPath: false,
+		// ALWAYS ON (v1.7.1-rc.5): the native ego CLI has no `taskSpaces`
+		// facade, so a row without the bundled harness cannot run a single
+		// bcdp_* script. The panel toggle is gone — OFF had no valid outcome.
+		// The host heals any stored `false` on read and the probe auto-drops
+		// the `--sdk-path` injection for CLIs that reject the flag.
+		useSdkPath: true,
 		enabled: true,
 		note: '',
 		probeStatus: 'unknown',

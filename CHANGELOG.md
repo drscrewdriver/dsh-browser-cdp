@@ -1,3 +1,21 @@
+## 1.7.1-rc.5 (2026-10-26)
+
+**两件事：修掉「禁用 ego 后所有调用仍走 ego 方式、唯一激活的 CDP 端点无法操作」的通道路由 P0；并移除 useSdkPath 开关（OFF 只会必炸）。**
+
+### 修复（通道重确认）
+- **attach 缓存不再跨目标残留路由字段**。`refreshAttach` 旧实现把 `previous` 整体 spread 进新基底，ego-cli 只要激活探测成功过一次，`linkKind`/`cliPath`/`cliShape`/`endpointSource` 就永久粘在进程级缓存里——此后无论禁用 ego、切换激活、调序还是增删链接，`decideCdpAttach` 仍判 `kind:'cli'`（不注入 `EGO_LINUX_CDP_URL`）、`egoArgvPrefix` 仍 spawn 本机 `ego-browser.exe`，直到重载插件才解毒。现改为**每轮干净基底**（路由字段显式置 undefined 清除，patch 合并语义下缺键会让旧值存活）。
+- **links 事件后重新确认最优先通道**（新增 `resolveEffectiveLink`）：激活项可用则激活项赢；激活悬挂（指向禁用/已删行）时**序内首个 enabled 链接接管**（priority-fallback，日志 + doctor 的 `channel:` 行明示，绝不静默）；空激活保持显式未激活。开关切换、激活切换、调序、增删全部经 volatile 链路触发重确认。
+- **spawn 决策与缓存交叉验证**（新增 `effectiveChannel`/`attachMatchesLink`）：`decideCdpAttach`/`egoArgvPrefix`/`runEgoScript`/`bcdp_status`/idle reaper/teardown 一律从当前配置推导归属，缓存行必须描述同一链接（cdp 还要求 endpoint 一致）才算数；重探测在途窗口内陈旧缓存一律作废（等待 `endpoint-unresolved`），不会拿上一任的路由继续跑。
+- `remoteDisabled` 改为配置直读（缓存副本可能滞后一个刷新周期）；CDP 探测成功路径补记 `endpointSource: 'remote'`；`no-active` 文案区分「空激活」与「激活悬挂且无可接管者」。
+
+### Breaking（useSdkPath 开关移除）
+- **设置卡的「使用内置 harness」开关删除**。原生 ego CLI 没有 `taskSpaces` facade，不带插件 harness 的每个 `bcdp_*` 调用都死在第一行（`taskSpaces is not defined`）——OFF 是没有合法结局的状态。面板旧版还会给新建 CLI 行烤死 `useSdkPath: false`（本次用户实锤踩中：面板重加的行必然全炸）。
+- 宿主读取侧**强制 `useSdkPath: true`**：存量配置里已写入的 `false` 读取时自愈，无需手改 YAML；字段保留仅为旧配置可校验（schema 描述已标 deprecated）。probe 对不支持 `--sdk-path` 的 CLI 仍自动撤注入（R-1 守卫不变），故无条件 ON 安全。
+
+### 测试
+- 新增 14 例：`resolveEffectiveLink` 归属表（5）、缓存按链接交叉验证（1）、`refreshAttach` 切换/禁用/删除/全禁用重推导（4）、`decideCdpAttach` 作用域与 in-flight 陈旧缓存不泄漏（5，新文件 `tests/channel-reconfirm.test.ts`）；`buildCliRow` 默认值与 coerce 自愈锚点同步。
+- 全量 899 passed / 13 skipped；typecheck 双配置无错；装机产物与仓内 lib 哈希逐字节一致（desktop 实测，含用存量坏行原样复跑完整切换场景）。
+
 1.6.1: host enumeration addendum for DSH 0.2.1-rc.3 (declaration-only bump; contract plane zero diff).
 
 ## 1.7.0 (2026-10-25)

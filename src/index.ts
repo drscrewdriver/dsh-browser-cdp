@@ -47,9 +47,14 @@ import {
   EGO_LINUX_CDP_URL,
   decideAttach,
   defaultAttachCache,
+  emptyAttachState,
   refreshAttach,
+  resolveEffectiveLink,
+  attachMatchesLink,
   sanitizeLinks,
   type AttachDecision,
+  type AttachState,
+  type EffectiveLink,
   EGO_CLI_KIND,
   LP_KIND,
 } from './cdp-targets.ts'
@@ -526,23 +531,40 @@ export function resolveEgoEnv(cfg: Partial<ResolvedConfig>, { platform = process
 }
 
 /**
+ * The channel that owns routing right now: `resolveEffectiveLink` over the
+ * CURRENT config (activation first, sequence order as the visible fallback),
+ * plus the attach cache SCOPED to that link. After any links event
+ * (enable/activation toggle, reorder, add, remove) the async refresh may still
+ * be probing; a cache row describing the PREVIOUS owner must not leak its
+ * linkKind/cliPath/wsUrl into the new channel's spawn decisions.
+ */
+export function effectiveChannel(cfg: Partial<ResolvedConfig>): { effective: EffectiveLink | null; attach: AttachState } {
+  const effective = resolveEffectiveLink(cfg.links ?? [], cfg.activeTargetId ?? '')
+  const live = defaultAttachCache.get()
+  const attach = effective && attachMatchesLink(live, effective.link) ? live : emptyAttachState()
+  return { effective, attach }
+}
+
+/**
  * Read the attach decision for the CURRENTLY configured mode/activation.
- * Pure over (cfg, cache) �?the decision table itself lives in cdp-targets.ts.
+ * Pure over (cfg, cache) — the decision table itself lives in cdp-targets.ts.
  */
 export function decideCdpAttach(cfg: Partial<ResolvedConfig>): AttachDecision {
-  const attach = defaultAttachCache.get()
+  const { effective, attach } = effectiveChannel(cfg)
   return decideAttach({
     mode: cfg?.cdpMode ?? 'auto',
-    hasActive: attach.status !== 'no-active' && attach.targetId !== '',
+    hasActive: effective !== null,
     status: attach.status,
     wsUrl: attach.wsUrl,
     code: attach.code,
     message: attach.message,
     allowLocalFallback: Boolean(cfg?.allowLocalFallback),
-    remoteDisabled: attach.code === 'remote-disabled',
-    // R7 �?the decision table needs the activated kind: an `ego-cli` link
-    // bypasses the endpoint branches entirely.
-    ...(attach.linkKind ? { linkKind: attach.linkKind } : {}),
+    // Config is the source of truth for the remote switch — the cache copy can
+    // lag one refresh behind a toggle.
+    remoteDisabled: cfg?.remoteEnabled === false,
+    // The decision table needs the EFFECTIVE kind (activation or priority
+    // fallback), never a kind left over in the cache by a previous owner.
+    ...(effective ? { linkKind: effective.link.kind } : {}),
     // M0.9 launcher (stage 2b) is wired: an authorized fallback launches a
     // managed local browser inside refreshAttach (async path), so the sync
     // decision table just needs to know the capability exists.
@@ -664,7 +686,7 @@ async function openAgentWindow(ctx: EgoContext, cfg: EgoRuntimeConfig): Promise<
     // has open and can see. There is no headless instance to pop out, and the
     // native CLI does not implement `--open`. Succeed explicitly (with a log)
     // instead of spawning a command that would fail.
-    if (defaultAttachCache.get().linkKind === EGO_CLI_KIND) {
+    if (effectiveChannel(cfg).effective?.link.kind === EGO_CLI_KIND) {
       ctx.logger?.info?.('dsh-browser-cdp: ego-cli: browser already visible, skipping --open')
       return { ok: true }
     }
@@ -1043,7 +1065,7 @@ async function runEgoScript(subprocess: SubprocessService, script: string, exec:
     // R1 �?an `ego-cli` link that opted into `useSdkPath` must get the same
     // `--sdk-path` injection the probe used. Without it the native CLI has no
     // `taskSpaces`/`browser`/`page` facade and every script dies on line 1.
-    const attach = defaultAttachCache.get()
+    const { attach } = effectiveChannel(cfg)
     handle = subprocess.spawn({
       // Run through the node interpreter so the vendored CLI needs no +x bit.
       argv: buildEgoToolArgv(cfg.egoArgvPrefix, attach, cfg.runtimeArgs ?? ''),
@@ -1418,8 +1440,12 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
     // knows its path and spawn shape; everything else keeps the vendored
     // runtime behind the node interpreter.
     get egoArgvPrefix() {
-      const attach = defaultAttachCache.get()
-      if (attach.linkKind === EGO_CLI_KIND && attach.cliPath) {
+      // Follows the EFFECTIVE channel, cross-checked against the probed cache
+      // (same link id): the ego CLI path applies only while the cache actually
+      // describes the ego-cli link that owns routing, so a stale row left by a
+      // previous owner can never keep hijacking the spawn argv.
+      const { effective, attach } = effectiveChannel(this)
+      if (effective?.link.kind === EGO_CLI_KIND && attach.cliPath) {
         return spawnArgvFor((attach.cliShape === 'node' ? 'node' : 'direct') as SpawnShape, attach.cliPath, [])
       }
       return [process.execPath, this.egoBin]
@@ -1633,6 +1659,8 @@ bridge.onChange(() => tiers.reapply())
     let pending = false
     /** Last ws handed to the worker; a differ means the browser was relaunched. */
     let lastAttachWs: string | null = null
+    /** Last channel owner (id|reason); a differ is logged so takeovers are visible. */
+    let lastOwnerKey: string | null = null
     /** True when this pass actually moved the resolved endpoint. */
     let changed = false
     const run = async (): Promise<boolean> => {
@@ -1644,6 +1672,20 @@ bridge.onChange(() => tiers.reapply())
       changed = false
       try {
         const resolved = resolveConfig(bridge.source() as RawConfig)
+        // Re-confirm the top-priority channel FIRST: activation if usable,
+        // else the first enabled link in sequence order. Every links event
+        // (enable/activation toggle, reorder, add, remove) lands here through
+        // bridge.onChange, and the owner change is logged — never silent.
+        const owner = resolveEffectiveLink(resolved.links, resolved.activeTargetId)
+        const ownerKey = owner ? `${owner.link.id}|${owner.reason}` : 'none'
+        if (ownerKey !== lastOwnerKey) {
+          lastOwnerKey = ownerKey
+          ctx.logger?.info?.(
+            owner
+              ? `dsh-browser-cdp: channel owner: ${owner.link.label} [${owner.link.id}] (${owner.reason}${owner.demotedId ? `, over ${owner.demotedId}` : ''})`
+              : 'dsh-browser-cdp: channel owner: none (no enabled link owns routing)',
+          )
+        }
         const attach = await refreshAttach({
           targets: resolved.links,
           activeTargetId: resolved.activeTargetId,
@@ -1792,7 +1834,7 @@ bridge.onChange(() => tiers.reapply())
           // the user's own daily instance, not an agent-owned one. The command
           // is currently an unknown no-op on the native CLI, but "fixing" it
           // would kill the user's browser �?an explicit non-goal, not a TODO.
-          if (defaultAttachCache.get().linkKind === EGO_CLI_KIND) {
+          if (effectiveChannel(cfg).effective?.link.kind === EGO_CLI_KIND) {
             reapedFor = last
             ctx.logger?.info?.('dsh-browser-cdp: idle reaper skipped: ego-cli owns the user\'s browser (never --stop it)')
             return
@@ -1858,7 +1900,7 @@ bridge.onChange(() => tiers.reapply())
     try {
       // R4/F3 �?teardown must not stop an `ego-cli` link's browser either: it
       // is the user's own ego lite instance and outlives this plugin.
-      if (defaultAttachCache.get().linkKind === EGO_CLI_KIND) {
+      if (effectiveChannel(cfg).effective?.link.kind === EGO_CLI_KIND) {
         ctx.logger?.info?.('dsh-browser-cdp: teardown skipped --stop: ego-cli owns the user\'s browser')
         return
       }
@@ -1931,7 +1973,7 @@ function registerEgoStatus(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool: T
         tiers.pulse(callingSessionId(exec))
         return withEgoLock(async () => {
           try {
-            const attach = defaultAttachCache.get()
+            const { attach } = effectiveChannel(cfg)
             // R1 �?probe with the exact argv real tool runs use, so "available"
             // means "a bcdp_* call would work", not "some other command worked".
             const handle = ctx.subprocess.spawn({
@@ -3259,8 +3301,17 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
         const cliArgs = filterArgs(cfg.runtimeArgs ?? '', EGO_CLI_BLOCKED)
         const chrArgs = filterArgs(cfg.chromeArgs ?? '', CHROME_BLOCKED)
         lines.push(`runtimeArgs (effective): ${cliArgs.length ? cliArgs.join(' ') : '(none)'}`)
-        // T2.16/T2.18 �?attach provenance + the remote switch, in the doctor.
+        // T2.16/T2.18 — attach provenance + the remote switch, in the doctor.
         const attachNow = defaultAttachCache.get()
+        // Channel ownership: which link owns routing right now and WHY — an
+        // activated entry that is disabled/gone shows the priority fallback
+        // that took over instead of silently routing somewhere.
+        const channel = effectiveChannel(cfg)
+        lines.push(
+          `channel: ${channel.effective
+            ? `${channel.effective.link.label} [${channel.effective.link.id}] (${channel.effective.reason}${channel.effective.demotedId ? `, over ${channel.effective.demotedId}` : ''})`
+            : '(none — activate a link or enable one)'}`,
+        )
         lines.push(`remote CDP: ${cfg.remoteEnabled === false ? 'DISABLED by switch (sequence preserved)' : 'enabled'}`)
         lines.push(`attach: ${attachNow.status}${attachNow.endpointSource ? ` (source: ${attachNow.endpointSource})` : ''}${attachNow.endpoint ? ` @ ${attachNow.endpoint}` : ''}`)
         // ── Lightpanda backend: engine, degradation list, per-OS install hint ──
@@ -3519,7 +3570,7 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
    * must say so rather than failing later with a confusing worker error.
    */
   const effectsOf = (judge: ReturnType<typeof judgeRuntimeOf>, onFrame?: (frame: Frame) => void) => {
-    const attach = defaultAttachCache.get()
+    const { attach } = effectiveChannel(cfg)
     return makeJudgeEffects({
       subprocess: ctx.subprocess,
       workerPath: RENDER_WORKER_BIN,
@@ -3537,7 +3588,7 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
 
   /** The browser must be attached before any frame exists. Shared by 3 tools. */
   const attachGate = (): string => {
-    const attach = defaultAttachCache.get()
+    const { attach } = effectiveChannel(cfg)
     if (attach.wsUrl === '') {
       return (
         'no live browser: the activated link has no CDP endpoint yet. ' +
@@ -3567,7 +3618,7 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
         cfg.spaceTracker.setCurrentSession(callingSessionId(exec)); markEgoToolCall(callingSessionId(exec))
         const judge = judgeCfg()
         const runtime = judgeRuntimeOf()
-        const attach = defaultAttachCache.get()
+        const { attach } = effectiveChannel(cfg)
         const lines: string[] = [
           'judgement chain (priority order):',
           ...describeJudge(runtime),

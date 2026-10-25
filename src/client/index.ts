@@ -1285,11 +1285,11 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 										if (!isValidEndpoint(v)) { setErrText(wt('linksEndpointInvalid')); return }
 										writeLinks(updateRow(links, row.id, { endpoint: v }))
 									} }),
-								isCli ? h('label', { style: { display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: 'var(--dsw-alias-label-tertiary, rgba(127,127,127,.7))', flex: '0 0 auto' } },
-									h(FamSwitch, { checked: row.useSdkPath === true, writable: writable,
-										title: wt('linksCliSdk'),
-										onToggle: function (next: boolean) { writeLinks(updateRow(links, row.id, { useSdkPath: next })) } }),
-									wt('linksCliSdk')) : null,
+								// v1.7.1-rc.5: the 「使用内置 harness」 toggle is GONE — the
+								// native ego CLI has no taskSpaces facade, so OFF could only ever
+								// produce `taskSpaces is not defined` on every call. The host now
+								// always injects the harness (and the probe auto-drops the flag
+								// for CLIs that reject it), so there is nothing left to switch.
 								!isCli && !isLp ? h('button', { type: 'button', disabled: !writable || probingId === row.id, style: btnStyle,
 									onClick: function () { probeOne(row) } },
 									probingId === row.id ? wt('linksProbing') : wt('linksProbe')) : null,

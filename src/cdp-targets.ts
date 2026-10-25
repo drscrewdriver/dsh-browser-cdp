@@ -95,7 +95,14 @@ export function coerceLink(raw: unknown): BrowserLink | null {
       kind: EGO_CLI_KIND,
       label: label === '' ? EGO_CLI_LABEL : label,
       cliPath,
-      ...(rec.useSdkPath === undefined ? {} : { useSdkPath: Boolean(rec.useSdkPath) }),
+      // ALWAYS ON (v1.7.1-rc.5): the native ego CLI has no `taskSpaces`
+      // facade, so without the bundled harness every bcdp_* call dies on
+      // line 1 (`taskSpaces is not defined`) — an OFF state with no valid
+      // outcome. The field stays in the row shape for read-compat with old
+      // profiles, but a stored `false` is healed to `true` here; CLIs that
+      // reject `--sdk-path` are still auto-detected by the probe (R-1 guard
+      // drops the injection with a warning), so nothing needs opting out of.
+      useSdkPath: true,
     }
   }
   if (rec.kind === LP_KIND) {
@@ -199,6 +206,48 @@ export function activeLink(links: readonly BrowserLink[], activeTargetId: string
 
 /** @deprecated R7 alias of `activeLink`. */
 export const activeTarget = activeLink
+
+export interface EffectiveLink {
+  link: BrowserLink
+  /**
+   * Why this link owns routing. `priority-fallback` is surfaced by the owner
+   * log and the doctor so a takeover is visible, never silent.
+   */
+  reason: 'activated' | 'priority-fallback'
+  /** The activated entry the fallback stepped over (disabled or removed). */
+  demotedId?: string
+}
+
+/**
+ * The link that owns routing RIGHT NOW — re-derived on every links event
+ * (enable/activation toggle, reorder, add, remove).
+ *
+ * Activation wins while it is usable. The moment an event leaves
+ * `activeTargetId` pointing at a disabled or missing entry, the FIRST enabled
+ * link in sequence order takes over — the sequence order IS the priority
+ * order. An EMPTY activation stays "nothing activated" (explicit off) instead
+ * of silently adopting a link the user never activated.
+ */
+export function resolveEffectiveLink(links: readonly BrowserLink[], activeTargetId: string): EffectiveLink | null {
+  if (activeTargetId === '') return null
+  const activated = findLink(links, activeTargetId)
+  if (activated && activated.enabled) return { link: activated, reason: 'activated' }
+  const fallback = links.find((link) => link.enabled)
+  if (!fallback) return null
+  return { link: fallback, reason: 'priority-fallback', demotedId: activeTargetId }
+}
+
+/**
+ * True when an attach cache row describes THIS link (same id, and for a cdp
+ * link the same endpoint string). After a links event the async refresh may
+ * still be probing the new owner; a cache row describing the PREVIOUS owner
+ * must not leak its linkKind/cliPath/wsUrl into the new channel's decisions —
+ * that leak is how a deactivated ego-cli kept driving every bcdp_* call.
+ */
+export function attachMatchesLink(attach: AttachState, link: BrowserLink): boolean {
+  if (attach.targetId !== link.id) return false
+  return link.kind !== 'cdp' || attach.endpoint === link.endpoint
+}
 
 /** Why an upsert was refused. Refusals are structured, never silent. */
 export type UpsertRefusalCode = 'ego-cli-already-exists' | 'lightpanda-already-exists' | 'link-limit-reached' | 'unusable-row'
@@ -716,13 +765,23 @@ export async function refreshAttach(input: RefreshInput): Promise<AttachState> {
   const cache = input.cache ?? defaultAttachCache
   const now = input.now ?? (() => Date.now())
   const previous = cache.get()
+  // Clean base per pass: every routing field (linkKind / cliPath / cliShape /
+  // sdkPath / endpointSource / engine) is re-derived from the link that wins
+  // THIS pass. Spreading `previous` here is how a deactivated ego-cli poisoned
+  // every later attach — its kind fields stuck until the next remount.
+  // The resets are OWN KEYS set to undefined/'' on purpose: cache.patch()
+  // MERGES into the live state, so an absent key would let the previous
+  // owner's value survive the patch.
   const suggested: AttachState = {
-    ...previous,
+    ...emptyAttachState(),
     mode: input.mode,
     status: input.mode === 'local' ? 'local' : 'idle',
-    wsUrl: input.mode === 'local' ? '' : previous.wsUrl,
-    code: '',
-    message: '',
+    linkKind: undefined,
+    cliPath: undefined,
+    cliShape: undefined,
+    sdkPath: '',
+    endpointSource: undefined,
+    engine: undefined,
   }
   if (input.mode === 'local') {
     suggested.targetId = ''
@@ -770,7 +829,8 @@ export async function refreshAttach(input: RefreshInput): Promise<AttachState> {
     }
     return cache.patch(suggested)
   }
-  const target = activeLink(input.targets, input.activeTargetId)
+  const effective = resolveEffectiveLink(input.targets, input.activeTargetId)
+  const target = effective?.link ?? null
   if (!target) {
     // T2.18 vs R7 — with the remote switch off AND nothing activated, saying
     // "remote is disabled" is the more actionable of the two truths; the
@@ -784,7 +844,9 @@ export async function refreshAttach(input: RefreshInput): Promise<AttachState> {
       code: input.remoteEnabled === false ? 'remote-disabled' : 'no-active-target',
       message: input.remoteEnabled === false
         ? 'remote CDP is disabled by the remoteEnabled switch; the target sequence is preserved and can be re-enabled at any time'
-        : 'no activated target in the sequence',
+        : input.activeTargetId === ''
+          ? 'no activated target in the sequence'
+          : 'the activated entry is disabled or gone and no enabled link can take over; enable a link, activate one, or set cdpMode=local',
       resolvedAt: now(),
     })
   }
@@ -841,6 +903,7 @@ export async function refreshAttach(input: RefreshInput): Promise<AttachState> {
       status: 'ready',
       wsUrl: outcome.wsUrl,
       engine: outcome.engine,
+      endpointSource: 'remote',
       code: '',
       message: '',
       latencyMs: outcome.latencyMs,

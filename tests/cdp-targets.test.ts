@@ -15,6 +15,8 @@ import {
   decideAttach,
   refreshAttach,
   createAttachCache,
+  resolveEffectiveLink,
+  attachMatchesLink,
 } from "../src/cdp-targets.ts";
 import type { BrowserLink, CdpLink, EgoCliLink } from "../src/types.ts";
 
@@ -94,6 +96,16 @@ describe("sanitizeTargets", () => {
   it("returns an empty array for non-array input", () => {
     expect(sanitizeTargets(undefined)).toEqual([]);
     expect(sanitizeTargets("nope")).toEqual([]);
+  });
+
+  it("heals a stored useSdkPath:false ego-cli row to true (harness always on)", () => {
+    // v1.7.1-rc.5: the panel used to bake useSdkPath:false into new CLI rows,
+    // and the native CLI without the harness dies with `taskSpaces is not
+    // defined` on every call. The toggle is gone; reads heal any stored false.
+    const healed = sanitizeTargets([{ kind: "ego-cli", id: "cli", label: "", cliPath: "/ego/ego-browser", useSdkPath: false, enabled: true }]);
+    expect((healed[0] as EgoCliLink).useSdkPath).toBe(true); // stored false healed
+    const absent = sanitizeTargets([{ kind: "ego-cli", id: "cli", label: "", cliPath: "/ego/ego-browser", enabled: true }]);
+    expect((absent[0] as EgoCliLink).useSdkPath).toBe(true); // absent field healed too
   });
 });
 
@@ -569,5 +581,180 @@ describe("refreshAttach — probe cold-start gate", () => {
     });
     expect(out.status).toBe("ready");
     expect(calls).toHaveLength(2);
+  });
+});
+
+// ── channel re-confirmation on links events (fix: stale ego-cli routing) ────
+// Regression: refreshAttach used to spread `previous` into the new base, so
+// an ego-cli link that had EVER been probed ready left linkKind/cliPath/
+// cliShape/endpointSource stuck in the cache. Every later attach — after the
+// user disabled ego, switched activation, reordered, added or removed links —
+// still spawned the ego CLI and never injected the CDP endpoint.
+
+describe("resolveEffectiveLink", () => {
+  const links = [
+    cliLink(),
+    cdp("a", "http://a:1"),
+    cdp("b", "http://b:2"),
+  ];
+
+  it("the activated entry wins while it is enabled", () => {
+    const out = resolveEffectiveLink(links, "b");
+    expect(out?.link.id).toBe("b");
+    expect(out?.reason).toBe("activated");
+    expect(out?.demotedId).toBeUndefined();
+  });
+
+  it("a disabled activation falls back to the FIRST enabled link in order", () => {
+    const out = resolveEffectiveLink([cliLink({ enabled: false }), cdp("a", "http://a:1"), cdp("b", "http://b:2")], "cli");
+    expect(out?.link.id).toBe("a");
+    expect(out?.reason).toBe("priority-fallback");
+    expect(out?.demotedId).toBe("cli");
+  });
+
+  it("reorder decides the fallback (sequence order IS the priority order)", () => {
+    const reordered = [cdp("b", "http://b:2"), cdp("a", "http://a:1")];
+    const out = resolveEffectiveLink(reordered, "gone");
+    expect(out?.link.id).toBe("b");
+    expect(out?.reason).toBe("priority-fallback");
+  });
+
+  it("a deleted activation falls back; an empty activation does NOT adopt a link", () => {
+    expect(resolveEffectiveLink([cdp("a", "http://a:1")], "deleted-id")?.link.id).toBe("a");
+    expect(resolveEffectiveLink([cdp("a", "http://a:1")], "")).toBeNull();
+  });
+
+  it("no enabled link at all means no channel", () => {
+    expect(resolveEffectiveLink([cliLink({ enabled: false }), cdp("a", "http://a:1", false)], "cli")).toBeNull();
+  });
+});
+
+describe("attachMatchesLink", () => {
+  it("requires the same id, and for a cdp link the same endpoint", () => {
+    const link = cdp("a", "http://a:1");
+    expect(attachMatchesLink({ status: "ready", mode: "auto", targetId: "a", endpoint: "http://a:1", wsUrl: "ws://a:1/b", code: "", message: "", latencyMs: 0, resolvedAt: 0 }, link)).toBe(true);
+    expect(attachMatchesLink({ status: "ready", mode: "auto", targetId: "a", endpoint: "http://edited:9", wsUrl: "", code: "", message: "", latencyMs: 0, resolvedAt: 0 }, link)).toBe(false);
+    expect(attachMatchesLink({ status: "ready", mode: "auto", targetId: "other", endpoint: "http://a:1", wsUrl: "", code: "", message: "", latencyMs: 0, resolvedAt: 0 }, link)).toBe(false);
+    // Singleton kinds are keyed by id alone.
+    expect(attachMatchesLink({ status: "ready", mode: "auto", targetId: "cli", endpoint: "", wsUrl: "", code: "", message: "", latencyMs: 0, resolvedAt: 0 }, cliLink())).toBe(true);
+  });
+});
+
+describe("refreshAttach re-derives routing on links events", () => {
+  const fetchCdpOk = async () => ({
+    ok: true, status: 200,
+    json: async () => ({ webSocketDebuggerUrl: "ws://127.0.0.1:9222/devtools/browser/zzz", Browser: "Chrome/153.0.0.0" }),
+  });
+
+  /** How src/index.ts decides the next call: effective link feeds the kind. */
+  const runtimeDecision = (attach: ReturnType<ReturnType<typeof createAttachCache>["get"]>, links: import("../src/types.ts").BrowserLink[], activeTargetId: string) => {
+    const effective = resolveEffectiveLink(links, activeTargetId);
+    return decideAttach({
+      mode: "auto",
+      hasActive: effective !== null,
+      status: attach.status,
+      wsUrl: attach.wsUrl,
+      code: attach.code,
+      message: attach.message,
+      allowLocalFallback: false,
+      remoteDisabled: false,
+      ...(effective ? { linkKind: effective.link.kind } : {}),
+      localLauncherReady: true,
+    });
+  };
+
+  it("clears ego-cli routing after activation switches to a cdp endpoint (the P0)", async () => {
+    const cache = createAttachCache();
+    // Phase 1 — ego-cli activated and probed ready.
+    await refreshAttach({
+      targets: [cliLink()], activeTargetId: "cli", mode: "auto", cache,
+      cliIo: cliIo().io as never, now: () => 0,
+    });
+    expect(cache.get().linkKind).toBe(EGO_CLI_KIND);
+
+    // Phase 2 — disable ego, activate the cdp endpoint (the user's switches).
+    const links = [cliLink({ enabled: false }), cdp("a", "http://127.0.0.1:9222")];
+    const out = await refreshAttach({
+      targets: links, activeTargetId: "a", mode: "auto", cache,
+      fetchVersion: fetchCdpOk, now: () => 1,
+    });
+    expect(out.status).toBe("ready");
+    expect(out.wsUrl).toBe("ws://127.0.0.1:9222/devtools/browser/zzz");
+    // The routing fields are GONE, not inherited from the ego-cli pass.
+    expect(out.linkKind).toBeUndefined();
+    expect(out.cliPath).toBeUndefined();
+    expect(out.cliShape).toBeUndefined();
+    expect(out.sdkPath ?? "").toBe("");
+    expect(out.endpointSource).toBe("remote");
+    // And the next call attaches to the endpoint instead of the ego CLI.
+    const decision = runtimeDecision(cache.get(), links, "a");
+    expect(decision).toMatchObject({ kind: "inject", wsUrl: "ws://127.0.0.1:9222/devtools/browser/zzz" });
+  });
+
+  it("disabled ego-cli with a dangling activation probes the priority fallback instead", async () => {
+    const cache = createAttachCache();
+    await refreshAttach({
+      targets: [cliLink()], activeTargetId: "cli", mode: "auto", cache,
+      cliIo: cliIo().io as never, now: () => 0,
+    });
+    // User only flips ego's enabled switch — activation still points at it.
+    const links = [cliLink({ enabled: false }), cdp("a", "http://127.0.0.1:9222")];
+    const out = await refreshAttach({
+      targets: links, activeTargetId: "cli", mode: "auto", cache,
+      fetchVersion: fetchCdpOk, now: () => 1,
+    });
+    expect(out.status).toBe("ready");
+    expect(out.targetId).toBe("a");
+    expect(out.endpoint).toBe("http://127.0.0.1:9222");
+    const decision = runtimeDecision(cache.get(), links, "cli");
+    expect(decision).toMatchObject({ kind: "inject" });
+  });
+
+  it("deleting the activated link re-confirms the next link in order", async () => {
+    const cache = createAttachCache();
+    await refreshAttach({
+      targets: [cliLink()], activeTargetId: "cli", mode: "auto", cache,
+      cliIo: cliIo().io as never, now: () => 0,
+    });
+    const links = [cdp("a", "http://127.0.0.1:9222")]; // ego row deleted outright
+    const out = await refreshAttach({
+      targets: links, activeTargetId: "cli", mode: "auto", cache,
+      fetchVersion: fetchCdpOk, now: () => 1,
+    });
+    expect(out.status).toBe("ready");
+    expect(out.targetId).toBe("a");
+    const decision = runtimeDecision(cache.get(), links, "cli");
+    expect(decision).toMatchObject({ kind: "inject" });
+  });
+
+  it("everything disabled leaves a CLEAN no-active row (no stale kind fields)", async () => {
+    const cache = createAttachCache();
+    await refreshAttach({
+      targets: [cliLink()], activeTargetId: "cli", mode: "auto", cache,
+      cliIo: cliIo().io as never, now: () => 0,
+    });
+    const out = await refreshAttach({
+      targets: [cliLink({ enabled: false })], activeTargetId: "cli", mode: "auto", cache,
+      cliIo: cliIo().io as never, now: () => 1,
+    });
+    expect(out.status).toBe("no-active");
+    expect(out.linkKind).toBeUndefined();
+    expect(out.cliPath).toBeUndefined();
+    expect(out.message).toContain("disabled or gone");
+  });
+
+  it("a stale cache describing the previous owner never answers for the new one", () => {
+    // The in-flight window: settings changed, refresh not landed yet.
+    const stale: import("../src/cdp-targets.ts").AttachState = {
+      status: "ready", mode: "auto", targetId: "cli",
+      endpoint: "", wsUrl: "", linkKind: EGO_CLI_KIND,
+      cliPath: "/usr/local/bin/ego-browser", cliShape: "direct",
+      code: "", message: "local ego CLI ready", latencyMs: 1, resolvedAt: 1,
+    };
+    const links = [cliLink({ enabled: false }), cdp("a", "http://127.0.0.1:9222")];
+    const effective = resolveEffectiveLink(links, "a")!;
+    expect(effective.link.kind).toBe("cdp");
+    // The scoped-view rule: a cache row for another link is discarded.
+    expect(attachMatchesLink({ ...stale, endpoint: "" }, effective.link)).toBe(false);
   });
 });

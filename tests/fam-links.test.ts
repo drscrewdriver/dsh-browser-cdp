@@ -50,11 +50,11 @@ describe("fam-links: builders write full-field rows", () => {
     expect(buildCdpRow({ label: " 台机 ", endpoint: "http://a:1" }).label).toBe("台机");
   });
 
-  it("buildCliRow defaults useSdkPath=false and the label mirrors the host EGO_CLI_LABEL", () => {
+  it("buildCliRow bakes useSdkPath=true (harness always on) and the label mirrors the host EGO_CLI_LABEL", () => {
     const row = buildCliRow({});
     expect(row.kind).toBe("ego-cli");
     expect(row.cliPath).toBe("");
-    expect(row.useSdkPath).toBe(false);
+    expect(row.useSdkPath).toBe(true);
     expect(row.label).toBe("本机 ego CLI");
   });
 

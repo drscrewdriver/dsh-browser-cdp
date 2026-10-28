@@ -3,6 +3,7 @@ declare function require(id: string): any
 
 import { addRow, applyProbe, buildCdpRow, buildCliRow, buildLpRow, hasCliLink, hasLpLink, isFull, isValidEndpoint, MAX_LINKS, moveRow, removeRow, updateRow } from './fam-links'
 import { claimFamilyHostIfOrphaned } from './family-host'
+import { fromRatio, normalizeStored, toRatio, type RatioPos, type Viewport } from './fab-pos'
 import { commitField } from './fam-write'
 
 		// #region CDP browser bridge client: realtime watch-bubble
@@ -2244,18 +2245,30 @@ h('button', { type: 'button', disabled: !writable || isFull(links) || hasCliLink
 				const DRAG_PANEL_KEY = 'dsh.ego.watch.panelPos'
 				const FAB_W = 48, FAB_H = 48
 				const PANEL_W = 408, PANEL_GAP = 8
-				const loadPos = (key: any) => {
-					try { const s = JSON.parse(localStorage.getItem(key) || 'null'); if (s && Number.isFinite(s.x) && Number.isFinite(s.y)) return s } catch {}
-					return null
+				// Viewport-fraction persistence (issue #4): ratio is the stored truth, pos a
+				// pixel cache; conversion happens only at the read/write boundary, the
+				// existing pixel clamp still guards on-screen placement. Legacy {x,y}
+				// archives are normalized against the current viewport on load.
+				const vpFab = (): Viewport => ({ vw: window.innerWidth, vh: window.innerHeight, w: FAB_W, h: FAB_H })
+				const vpPanel = (): Viewport => ({ vw: window.innerWidth, vh: window.innerHeight, w: PANEL_W, h: 520 })
+				const loadRatio = (key: string, vp: Viewport): RatioPos | null => {
+					try { return normalizeStored(JSON.parse(localStorage.getItem(key) || 'null'), vp) } catch { return null }
 				}
-				let pos = loadPos(DRAG_KEY) || { x: window.innerWidth - 18 - FAB_W, y: window.innerHeight - 104 - FAB_H }
-				let panelPos = loadPos(DRAG_PANEL_KEY)
+				let ratio: RatioPos | null = loadRatio(DRAG_KEY, vpFab())
+				let pos = ratio ? fromRatio(ratio, vpFab()) : { x: window.innerWidth - 18 - FAB_W, y: window.innerHeight - 104 - FAB_H }
+				let panelRatio: RatioPos | null = loadRatio(DRAG_PANEL_KEY, vpPanel())
+				let panelPos = panelRatio ? fromRatio(panelRatio, vpPanel()) : null
 				const clampFab = () => {
 					const vw = window.innerWidth, vh = window.innerHeight
 					pos.x = Math.max(4, Math.min(vw - FAB_W - 4, pos.x))
 					pos.y = Math.max(4, Math.min(vh - FAB_H - 4, pos.y))
 				}
-				const placeFab = () => { clampFab(); fab.style.left = pos.x + 'px'; fab.style.top = pos.y + 'px' }
+				/** Paint current pixel state: clamp, mirror into ratio, write style.
+				 *  Used by drags (which set pos directly) — never re-derives from ratio. */
+				const paintFab = () => { clampFab(); ratio = toRatio(pos, vpFab()); fab.style.left = pos.x + 'px'; fab.style.top = pos.y + 'px' }
+				/** Full re-layout from the stored ratio (init + viewport resize): the ball
+				 *  keeps its corner at any window size, then clamps back on-screen. */
+				const placeFab = () => { if (ratio) pos = fromRatio(ratio, vpFab()); paintFab() }
 				const placePanel = () => { panel.style.left = panelPos.x + 'px'; panel.style.top = panelPos.y + 'px' }
 				/** Position the panel against the ball: just above it (below when near
 				 *  the top edge), clamped inside the viewport. */
@@ -2274,6 +2287,10 @@ h('button', { type: 'button', disabled: !writable || isFull(links) || hasCliLink
 				}
 				placeFab()
 				if (panelPos) placePanel()
+				// Re-anchor the ball on its stored fraction whenever the viewport
+				// changes (maximize / resolution / zoom); an open panel re-snaps to the
+				// moved ball, a closed one re-snaps when it next opens.
+				window.addEventListener('resize', () => { placeFab(); if (!panel.hidden) snapPanelToFab() })
 				let suppressFabClick = false
 				/**
 				 * Make `el` drag the FAB or the panel (`which` = 'fab' | 'panel').
@@ -2302,7 +2319,7 @@ h('button', { type: 'button', disabled: !writable || isFull(links) || hasCliLink
 						if (!dragged && Math.abs(dx) + Math.abs(dy) > 5) dragged = true
 						if (dragged) {
 							const s = state(); s.x = bx + dx; s.y = by + dy
-							which === 'fab' ? placeFab() : placePanel()
+							which === 'fab' ? paintFab() : placePanel()
 						}
 					}
 					const up = (e: any) => {
@@ -2312,7 +2329,11 @@ h('button', { type: 'button', disabled: !writable || isFull(links) || hasCliLink
 						try { el.releasePointerCapture(e.pointerId) } catch {}
 						if (dragged) {
 							if (which === 'fab') suppressFabClick = true
-							try { localStorage.setItem(which === 'fab' ? DRAG_KEY : DRAG_PANEL_KEY, JSON.stringify(state())) } catch {}
+							try {
+								const r = toRatio(state(), which === 'fab' ? vpFab() : vpPanel())
+								if (which === 'fab') ratio = r; else panelRatio = r
+								localStorage.setItem(which === 'fab' ? DRAG_KEY : DRAG_PANEL_KEY, JSON.stringify(r))
+							} catch {}
 						}
 					}
 					el.addEventListener('pointerdown', down)

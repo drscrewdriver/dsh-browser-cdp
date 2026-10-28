@@ -1,3 +1,12 @@
+## 1.7.4 (2026-10-28)
+
+**issue #4 根治：悬浮球/面板位置持久化改视口比例制（百分位）+ resize 实时重摆。**
+
+- 位置以 `{fx, fy}` 视口归一化比例（左上角，4 位小数）存储；重启/最大化/换分辨率-缩放后球按**存的角落跟随视口**，不再出现“贴边角跑到屏幕中间/对话区边缘”的漂移。
+- 补 `resize` 监听：视口变化即按比例重推导落位并夹回屏内；面板开着时同步重锚到球旁，关着则下次打开重锚（既有 `snapPanelToFab`）。
+- 旧像素存档零迁移：读入时形状判别、按当前视口自动换算（`normalizeStored/toRatio/fromRatio` 纯函数由 `tests/fab-pos.test.ts` 6 例钉桩；与 dsh-context-compression-improved monitor-fab 同构双侧同步）。
+- 门禁顺带修复：`publishConfig.tag` 从 `latest` 恢复为 `dsh-0.2.1` 形状（本仓纪律=发布显式 `--tag`，`latest` 值使 manifest 形状测试自 1.7.2 起常红）。
+
 ## 1.7.3 (2026-10-28)
 
 1.7.3: host enumeration addendum for DSH 0.2.1-rc.4 (declaration-only bump; contract plane zero diff). `engines.dsh`/`dsh-plugin.json`/README 同串补 `0.2.1-rc.4` 枚举行。

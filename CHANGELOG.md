@@ -1,3 +1,7 @@
+## 1.7.3 (2026-10-28)
+
+1.7.3: host enumeration addendum for DSH 0.2.1-rc.4 (declaration-only bump; contract plane zero diff). `engines.dsh`/`dsh-plugin.json`/README 同串补 `0.2.1-rc.4` 枚举行。
+
 ## 1.7.2 (2026-10-26)
 
 **两件事：修掉「禁用 ego 后所有调用仍走 ego 方式、唯一激活的 CDP 端点无法操作」的通道路由 P0；并移除 useSdkPath 开关（OFF 只会必炸）。**

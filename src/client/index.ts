@@ -832,11 +832,8 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 			var forms = typeof ctx.get === 'function' ? ctx.get('configForms') : undefined
 			var scope = forms && typeof forms.get === 'function' ? forms.get('dsh-browser-cdp') : undefined
 			if (!scope) scope = makeBridgeScope()
-			// 探针：宿主执行过本工厂 == 有人声明了 `dsh-family.tab`（插件侧唯一合法的
-			// 「容器在不在」判据：槽门面不暴露 spec 查询，entriesOfSlot 也不区分空与未声明）。
-			var familyTabHeld = false
+			// 贡献卡注册（apply 顶层）：scope 已有 configForms/桥 两轨兜底，恒非空。
 			ctx.slots.inject('dsh-family.tab', function () {
-				familyTabHeld = true
 				return ctx.slots.register({
 					name: 'dsh-family.tab',
 					id: 'dsh-browser-cdp',
@@ -850,9 +847,16 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 			// declare-or-withdraw：声明失败就放弃，绝不裸注册不带 children 的残废节。
 			var claim = claimFamilyHostIfOrphaned(
 				ctx.slots,
-				function () { return familyTabHeld },
+				function () {
+					try {
+						return ctx.slots.entries('settings.section')
+							.some(function (e: any) { return String((e && e.options && e.options.id) || '') === 'dsh-family' })
+					} catch { return false }
+				},
 				function () { return '起子插件设置' },
 				'[dsh-browser-cdp]',
+				// 接管态内联直挂本卡：own 卡组件 + 现取 scope（configForms/桥 两轨兜底，非空白）。
+				{ id: 'dsh-browser-cdp', component: FamilySettingsCard, inject: function () { return { scope: scope } } },
 			)
 			if (typeof ctx.effect === 'function') ctx.effect(function () { return claim }, 'dsh-browser-cdp: family host backstop')
 		}

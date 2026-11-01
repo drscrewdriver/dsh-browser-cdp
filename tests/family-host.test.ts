@@ -5,6 +5,8 @@
  * 逐次投影（行为与修复前一致，不抛错）。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createElement } from "react";
+import { readFileSync } from "node:fs";
 import {
   claimFamilyHostIfOrphaned,
   eqRows,
@@ -178,5 +180,40 @@ describe("eqRows", () => {
   });
   it("false on order permutation", () => {
     expect(eqRows([row("a", 1, "A"), row("b", 2, "B")], [row("b", 2, "B"), row("a", 1, "A")])).toBe(false);
+  });
+});
+
+// 2026-11-02 own-tab 批量修复：browser-cdp 携带自己一份 family-host 模块拷贝，
+// 必须本仓独立证成接管态 own 卡内联直挂（自宣子槽不触发自身 inject）。
+describe("family-host own-tab inline (orphan takeover mounts own card)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function OwnCard() {
+    return createElement("span", null, "OWN-CARD");
+  }
+
+  it("claim with ownTab exposes renderOwn/ownId returning the own component", () => {
+    const state = makeSlots([]);
+    claimFamilyHostIfOrphaned(state.slots, () => false, () => "family", "[test]", {
+      id: "dsh-browser-cdp",
+      component: OwnCard,
+      inject: () => ({ scope: {} }),
+    });
+    vi.advanceTimersByTime(FAMILY_CLAIM_DELAY_MS + 10);
+    const face = (state.options["inject"] as () => Record<string, unknown>)();
+    expect(face["ownId"]).toBe("dsh-browser-cdp");
+    expect(typeof face["renderOwn"]).toBe("function");
+    expect((face["renderOwn"] as () => { type: unknown })().type).toBe(OwnCard);
+  });
+
+  it("FamilyHostSection source inlines own row and dedups the ledger own id", () => {
+    const host = readFileSync(new URL("../src/client/family-host.ts", import.meta.url), "utf8");
+    expect(host).toMatch(/props\.renderOwn && row\.id === ownId/);
+    expect(host).toMatch(/tabs\.filter\(tab => tab\.id !== ownId\)/);
   });
 });

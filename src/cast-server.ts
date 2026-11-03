@@ -190,6 +190,36 @@ export function markEgoToolCall(sessionId?: string): void {
   }
 }
 
+/**
+ * Push one CLI-captured frame into the live watch-panel stream. In the degraded
+ * ego-cli mode there is no screencast worker to emit `spaces`/`frame` events, so
+ * the poller is their only source: we broadcast a synthetic single-space `spaces`
+ * event (tab bar + active page) followed by a `frame` event (the PNG) to every
+ * connected client. The client's existing SSE handlers render both, so the panel
+ * updates the instant a frame lands — no client polling, no chicken/egg.
+ */
+export function broadcastCliFrame(frame: { png: Buffer; url: string; title: string; seq: number; updatedAt: number }): void {
+  if (sseClients.size === 0) return
+  const synthetic = [{
+    targetId: CLI_FRAME_TARGET_ID,
+    url: frame.url,
+    title: frame.title,
+    active: true,
+    lastActive: frame.updatedAt,
+  }]
+  const spacesFrame = `event: spaces\ndata: ${JSON.stringify(synthetic)}\n\n`
+  const framePayload = { targetId: CLI_FRAME_TARGET_ID, data: frame.png.toString('base64'), fmt: 'png', ts: frame.updatedAt }
+  const frameEvent = `event: frame\ndata: ${JSON.stringify(framePayload)}\n\n`
+  for (const res of sseClients) {
+    try {
+      res.write(spacesFrame)
+      res.write(frameEvent)
+    } catch {
+      sseClients.delete(res)
+    }
+  }
+}
+
 function castStatePath(): string {
   // Mirror the ego-lite runtime state dir across platforms so we find the
   // worker's state file wherever it ran: Windows uses

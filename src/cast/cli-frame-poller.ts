@@ -50,6 +50,14 @@ export interface CliFramePollerOptions {
   capture: () => Promise<string>
   /** True while a bcdp_* tool call owns the plugin lock — skip this tick. */
   isBusy?: () => boolean
+  /**
+   * Called after each successful capture with the new frame. The host uses this
+   * to push the frame through the watch panel's live SSE stream (a `spaces` +
+   * `frame` event), so the panel updates the instant a frame lands instead of
+   * waiting on a client poll — the degraded mode has no screencast worker to
+   * emit those events, so the poller is their only source.
+   */
+  onFrame?: (frame: CliFrame) => void
   /** Injectable clock for tests; defaults to Date.now. */
   now?: () => number
 }
@@ -145,7 +153,12 @@ export class CliFramePoller {
       const stdout = await this.opts.capture()
       const frame = parseFrameSentinel(stdout, ++this.seq, (this.opts.now ?? Date.now)())
       // A failed capture keeps the previous frame on purpose (silent degrade).
-      if (frame !== null) this.latest = frame
+      if (frame !== null) {
+        this.latest = frame
+        if (this.opts.onFrame) {
+          try { this.opts.onFrame(frame) } catch { /* a push failure must not break the poll */ }
+        }
+      }
     } catch {
       /* never throw out of a timer tick */
     } finally {

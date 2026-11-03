@@ -34,7 +34,7 @@ import { existsSync, readdirSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { importLoginCookies } from './login-import.ts'
-import { initCastServer, markEgoToolCall, getLastEgoActivity, onEgoActivity, setAttachEndpoint, recycleWorker, getCliPollStatus, getAttachEndpoint } from './cast-server.ts'
+import { initCastServer, markEgoToolCall, getLastEgoActivity, onEgoActivity, setAttachEndpoint, recycleWorker, getCliPollStatus, getAttachEndpoint, broadcastCliFrame } from './cast-server.ts'
 import { CliFramePoller, buildFrameScript } from './cast/cli-frame-poller.ts'
 import { registerEgoBrowserGateway } from './gateway.ts'
 import { EGO_HELP_INDEX } from './help.ts'
@@ -174,6 +174,13 @@ export function createActiveSpaceTracker(defaultSpace: string | number = DEFAULT
 export interface SessionSpaceTracker extends ActiveSpaceTracker {
   setCurrentSession(id: string | undefined): void
   currentSession(): string | undefined
+  /**
+   * The active space of the most-recently-touched REAL (non-global) session,
+   * or null when no session-scoped call has run yet. The ego-cli frame poller
+   * observes this instead of `current()` (which is `default` for the global
+   * slot), so it never registers or screenshots the shared default space.
+   */
+  lastActiveSpace(): string | number | null
 }
 
 export const GLOBAL_SESSION_KEY = '__global__'
@@ -240,6 +247,13 @@ export function createSessionSpaceTracker(
   const slots = new Map<string, Slot>()
   let sessionKey: string = GLOBAL_SESSION_KEY
   let session: string | undefined
+  // The most-recently-touched REAL (non-global) session key. The ego-cli frame
+  // poller runs outside any tool execution, so it cannot read the per-call
+  // session slot — without this it fell back to the `__global__` slot and
+  // registered/screenshotted the shared `default` space instead of the agent's
+  // own `dsh-agent-<sid8>` space. This tracks where the agent actually works.
+  let lastRealKey: string | null = null
+  const noteReal = (): void => { if (sessionKey !== GLOBAL_SESSION_KEY) lastRealKey = sessionKey }
   const slotOf = (key: string): Slot => {
     let s = slots.get(key)
     if (!s) {
@@ -260,10 +274,13 @@ export function createSessionSpaceTracker(
     setCurrentSession: (id) => {
       session = id
       sessionKey = id ?? GLOBAL_SESSION_KEY
+      noteReal()
     },
     currentSession: () => session,
     current: () => slotOf(sessionKey).activeSpace,
+    lastActiveSpace: () => (lastRealKey === null ? null : slotOf(lastRealKey).activeSpace),
     opened: (args, result) => {
+      noteReal()
       withSlot((s, def) => {
         s.activeName = result?.name ?? str(args?.name, def as string) ?? null
         s.activeSpace = result?.id ?? s.activeName ?? def
@@ -271,6 +288,7 @@ export function createSessionSpaceTracker(
     },
     selected: (space) => {
       if (space !== undefined && space !== '') {
+        noteReal()
         withSlot((s) => {
           s.activeSpace = space
           s.activeName = typeof space === 'string' ? space : null
@@ -1185,8 +1203,13 @@ const CLI_FRAME_MAX_BYTES = 12 * 1024 * 1024
 async function spawnCliFrameCapture(
   subprocess: SubprocessService,
   cfg: EgoRuntimeConfig,
-  space: string | number,
+  space: string | number | null,
 ): Promise<string> {
+  // No session-scoped browser activity yet → do NOT spawn and do NOT bind a
+  // space (that is what previously registered/screenshotted the shared
+  // `default`). The poller keeps the previous frame (none) and the panel shows
+  // its placeholder until the agent actually opens a page in its own space.
+  if (space === null || space === undefined || space === '') return ''
   const { attach } = effectiveChannel(cfg)
   const script = buildFrameScript(j(space))
   try {
@@ -1729,8 +1752,9 @@ bridge.onChange(() => tiers.reapply())
   // no CDP ws resolved, the CLI is ready, and the operator kept the fallback on.
   const cliPoller = new CliFramePoller({
     intervalMs: 5000,
-    capture: () => spawnCliFrameCapture(ctx.subprocess, cfg, cfg.activeSpace ?? cfg.defaultSpace),
+    capture: () => spawnCliFrameCapture(ctx.subprocess, cfg, cfg.spaceTracker.lastActiveSpace()),
     isBusy: egoLockBusy,
+    onFrame: (frame) => broadcastCliFrame(frame),
   })
   ctx.effect?.(() => () => cliPoller.stop())
 

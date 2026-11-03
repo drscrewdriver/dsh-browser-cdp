@@ -125,6 +125,25 @@ describe("CliFramePoller", () => {
     poller.stop()
   })
 
+  it("invokes onFrame on each successful capture and never on a failed one", async () => {
+    const pushed: Array<{ url: string; seq: number }> = []
+    let calls = 0
+    const poller = new CliFramePoller({
+      intervalMs: 5000,
+      onFrame: (f) => pushed.push({ url: f.url, seq: f.seq }),
+      capture: async () => {
+        calls += 1
+        return calls === 1 ? frameLine("https://p1/") : "Error: no active tab"
+      },
+    })
+    poller.start()
+    await vi.advanceTimersByTimeAsync(0) // success → push
+    await vi.advanceTimersByTimeAsync(5000) // failure → no push
+    expect(pushed).toHaveLength(1)
+    expect(pushed[0].url).toBe("https://p1/")
+    poller.stop()
+  })
+
   it("is idempotent on start and does not overlap slow captures", async () => {
     let calls = 0
     let release: () => void = () => {}

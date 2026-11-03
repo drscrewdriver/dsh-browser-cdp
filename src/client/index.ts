@@ -2093,13 +2093,11 @@ h('button', { type: 'button', disabled: !writable || isFull(links) || hasCliLink
 				// The response carries NO thumbnail bytes (worker /api/spaces is
 				// pure metadata now); thumbnails come from the SSE frame cache.
 				let lastSawActive = false
-				// ego-cli degraded frame source: when /spaces reports cliFrameMode (no
-				// CDP screencast worker, a local ego-cli link active), the host returns
-				// ONE synthetic space and we poll it on a timer. Seeding frameCache with
-				// the cli-frame route URL lets the existing cached-branch render an <img>
-				// whose src changes each poll, so no separate render path is needed.
-				let cliFrameTimer: any = null
-				const stopCliFramePoll = () => { if (cliFrameTimer) { window.clearInterval(cliFrameTimer); cliFrameTimer = null } }
+				// ego-cli degraded frame source: when /spaces reports cliFrameMode (no CDP
+				// screencast worker, a local ego-cli link active), the host returns ONE
+				// synthetic space; we seed frameCache with the cli-frame route URL for an
+				// instant first image. Ongoing frames arrive through the host's live SSE
+				// `spaces`/`frame` push (the poller broadcasts them), so no client poll loop.
 				const refresh = () => {
 					void (async () => {
 						try {
@@ -2109,15 +2107,13 @@ h('button', { type: 'button', disabled: !writable || isFull(links) || hasCliLink
 							if (!data || data.ok !== true) { renderEmpty(); return }
 							applyCaptureStatus(data.capture)
 							if (data.cliFrameMode === true && Array.isArray(data.spaces)) {
+								// Seed an instant image from the route; ongoing updates arrive
+								// via the host's SSE `frame`/`spaces` push (no client poll needed).
 								const cli = data.spaces.find((s: any) => s && s.targetId === CLI_FRAME_TARGET_ID)
 								if (cli) frameCache.set(CLI_FRAME_TARGET_ID, `${CLI_FRAME_ROUTE}?t=${cli.lastActive || Date.now()}`)
 								renderSpaces(data.spaces)
-								const interval = Number.isFinite(data.cliFrameIntervalMs) && data.cliFrameIntervalMs >= 1000 ? data.cliFrameIntervalMs : 5000
-								if (!cliFrameTimer) cliFrameTimer = window.setInterval(refresh, interval)
 								return
 							}
-							// A screencast worker took over: stop the fallback poll.
-							stopCliFramePoll()
 							renderSpaces(data.spaces)
 						} catch {
 							renderEmpty()
@@ -2483,7 +2479,6 @@ clearTimeout((panel as any)._dshHideT)
 					document.removeEventListener('visibilitychange', onVisibility)
 					if (watchRenewTimer) window.clearInterval(watchRenewTimer)
 					if (watchStopTimer) window.clearTimeout(watchStopTimer)
-					stopCliFramePoll()
 					stopWatch(true); stopVideo()
 					keyboardProxy.dispose()
 					try { pickCtl.disable() } catch {}
@@ -3166,7 +3161,6 @@ clearTimeout((panel as any)._dshHideT)
 			this.watchTargetId = null
 			this.watchRenewTimer = null
 			this.watchStopTimer = null
-			this._cliFrameTimer = null
 			this.watchRequest = null
 			this.backend = 'cdp'
 			this.streamGeneration = 0
@@ -3332,7 +3326,6 @@ clearTimeout((panel as any)._dshHideT)
 			document.removeEventListener('visibilitychange', this.onDocumentVisibility)
 			if (this.watchRenewTimer) window.clearInterval(this.watchRenewTimer)
 			if (this.watchStopTimer) window.clearTimeout(this.watchStopTimer)
-			if (this._cliFrameTimer) { window.clearInterval(this._cliFrameTimer); this._cliFrameTimer = null }
 			this._stopWatch(true)
 			this._destroyVideo()
 			this.closeStream()
@@ -3455,11 +3448,8 @@ clearTimeout((panel as any)._dshHideT)
 						var cli = data.spaces.find(function (s: any) { return s && s.targetId === CLI_FRAME_TARGET_ID })
 						if (cli) self.frameCache.set(CLI_FRAME_TARGET_ID, CLI_FRAME_ROUTE + '?t=' + (cli.lastActive || Date.now()))
 						self._processSpaces(data.spaces)
-						var interval = Number.isFinite(data.cliFrameIntervalMs) && data.cliFrameIntervalMs >= 1000 ? data.cliFrameIntervalMs : 5000
-						if (!self._cliFrameTimer) self._cliFrameTimer = window.setInterval(function () { self.refresh() }, interval)
 						return
 					}
-					if (self._cliFrameTimer) { window.clearInterval(self._cliFrameTimer); self._cliFrameTimer = null }
 					self._processSpaces(data.spaces)
 				} catch (e) {
 					self._renderEmpty()

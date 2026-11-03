@@ -332,6 +332,26 @@ describe("createSessionSpaceTracker", () => {
     t.setCurrentSession("alpha");
     expect(t.current()).toBe(3); // alpha keeps the stale numeric id untouched
   });
+
+  it("lastActiveSpace returns the most recent REAL session space, never the global default", () => {
+    const t = mk();
+    // No session activity yet → null (the poller must NOT bind/screenshot `default`).
+    expect(t.lastActiveSpace()).toBeNull();
+    // A global (no-session) call must not count as real activity.
+    t.selected("x");
+    expect(t.lastActiveSpace()).toBeNull();
+    // A real session opens a space → that becomes the observable space.
+    t.setCurrentSession("alpha");
+    t.opened({ name: "vid" }, { ok: true, id: 7, name: "vid" });
+    expect(t.lastActiveSpace()).toBe(7);
+    // Switching to another session updates the pointer to that session's space.
+    t.setCurrentSession("beta");
+    t.selected("notes");
+    expect(t.lastActiveSpace()).toBe("notes");
+    // Returning to a global call does not clobber the last real space.
+    t.setCurrentSession(undefined);
+    expect(t.lastActiveSpace()).toBe("notes");
+  });
 });
 
 // ── G: heredoc attach-session escape hint (task_3) ─────────────────────────

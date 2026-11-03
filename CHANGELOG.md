@@ -1,3 +1,11 @@
+## 1.7.8 (2026-11-04)
+
+**修 1.7.7 实测两 bug：降级帧源错用 `default` 空间 + 观察窗无画面反馈。**
+
+- **空间选错（session 隔离未生效）**：poller 跑在任何工具执行之外，旧版读 `cfg.activeSpace ?? cfg.defaultSpace` 会落到 `__global__` 槽→字面 `default` 空间，于是它 `useOrCreate('default')` 注册了一个多余的 default 空间，且截的是那个空 default（agent 的百度实际开在 `dsh-agent-<sid8>`）→ 观察窗永远空白。改为追踪**最近一次真实（非 global）会话空间**（`spaceTracker.lastActiveSpace()`，setCurrentSession/opened/selected 三处记录）；无真实活动时 poller 直接跳过（不 spawn、不注册 default）。
+- **无画面反馈（SSE 断链）**：降级模式无 screencast worker，而 worker 为 null 时 `/api/bcdp/stream` 是静默流，既无 `spaces` 也无 `frame` 事件；客户端旧版只在 `refresh()` 已看到 cliFrameMode 后才起轮询定时器（鸡生蛋）。改为 **poller 每采到一帧就经既有 SSE 通道广播** `spaces`（合成单空间）+ `frame`（PNG）两个事件（`broadcastCliFrame`，复用 markEgoToolCall 同一 `sseClients`），客户端现有 `spaces`/`frame` handler 直接渲染；删掉两路径的客户端轮询定时器，仅保留 mount 时一次 URL 种子作即时首帧。
+- 测试：新增 poller `onFrame` 成功推/失败不推 1 例、`lastActiveSpace` 隔离语义 1 例；`cast-server-cli-frame.test.ts` 补 hermeticity（`EGO_LINUX_STATE_DIR` 指向空临时目录，避免真实活 worker 污染 ensureWorker）。全量 926 passed / 13 skipped，typecheck 双配置无错。
+
 ## 1.7.7 (2026-11-04)
 
 **ego-cli 观察窗降级帧源：无 CDP screencast 时每 5s 走一次 CLI 截图填充画面区。**

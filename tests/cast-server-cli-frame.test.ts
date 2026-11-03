@@ -1,6 +1,16 @@
 import { describe, it, expect } from "vitest";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { initCastServer, EGO_SPACES_ROUTE, EGO_CLI_FRAME_ROUTE, CLI_FRAME_TARGET_ID } from "../src/cast-server.ts";
 import type { CliFramePoller } from "../src/cast/cli-frame-poller.ts"
+
+// Hermeticity: ensureWorker() reads a real worker-state file (castStatePath) and
+// may find a LIVE cast worker from an actual DSH session, which would make it
+// return a real port instead of null and bypass the cli-frame synthesis branch.
+// Point the state dir at a path that can never hold our state file, so
+// knownWorkerState() finds nothing and ensureWorker falls to the (throwing)
+// subprocess mock → null.
+process.env.EGO_LINUX_STATE_DIR = join(tmpdir(), `bcdp-cli-frame-test-${Date.now()}-${Math.random().toString(36).slice(2)}`)
 
 // Integration evidence for the ego-cli degraded frame source: drives the real
 // initCastServer with a fake webServer (captures the trust-fence-guarded

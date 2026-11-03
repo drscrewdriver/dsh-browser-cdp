@@ -306,6 +306,11 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 		const WATCH_STOP_ROUTE = '/api/bcdp/watch/stop'
 		const WATCH_STATUS_ROUTE = '/api/bcdp/watch/status'
 		const VIDEO_ROUTE = '/api/bcdp/video'
+		// ego-cli degraded frame source (no CDP screencast): one viewport PNG served at
+		// this route, refreshed by re-fetching /spaces on a timer. Synthetic target id
+		// of the single fallback space.
+		const CLI_FRAME_ROUTE = '/api/bcdp/cli-frame'
+		const CLI_FRAME_TARGET_ID = '__cli_frame__'
 
 		function postJson(path: any, body: any) {
 			return fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body || {}) }).then(function (res) { return res.json().catch(function () { return {} }) })
@@ -924,6 +929,7 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 				{ k: 'githubMirror', kind: 'str', en: ['GitHub download mirror', 'HTTPS base replacing https://github.com for managed downloads'], zh: ['GitHub 下载镜像', '托管下载时替换 https://github.com 的 HTTPS 前缀'] },
 				{ k: 'runtimeArgs', kind: 'str', en: ['Extra runtime args', 'Appended to the vendored runtime argv; next bcdp_* call'], zh: ['运行时附加参数', '追加到托管运行时 argv；下次 bcdp_* 调用生效'] },
 				{ k: 'chromeArgs', kind: 'str', en: ['Extra Chrome args', 'Appended to the Chrome launch argv; next cold start'], zh: ['Chrome 附加启动参数', '追加到 Chrome 启动 argv；下次冷启动生效'] },
+				{ k: 'cliFramePollEnabled', kind: 'bool', en: ['ego-cli fallback frames (5s)', 'With no CDP screencast (local ego-cli link active), capture one screenshot every 5s through the CLI so the watch panel still fills. Off = panel shows a placeholder and no screenshot subprocess is spawned'], zh: ['ego-cli 降级帧（5s 一刷）', '无 CDP screencast（本机 ego-cli 激活）时，每 5s 走一次 CLI 截图填充观察窗画面区。关 = 面板显示占位提示、不拉截图子进程'] },
 			] },
 			{ gk: 'gJudge', en: 'Judgement (JEV / Laya)', zh: '评审（JEV / Laya）', fields: [
 				{ k: 'judgePrefer', kind: 'str', en: ['Judge hop order', 'Comma separated; defaults to "laya,rule"'], zh: ['评审跳序', '逗号分隔；默认 "laya,rule"'] },
@@ -2087,6 +2093,13 @@ h('button', { type: 'button', disabled: !writable || isFull(links) || hasCliLink
 				// The response carries NO thumbnail bytes (worker /api/spaces is
 				// pure metadata now); thumbnails come from the SSE frame cache.
 				let lastSawActive = false
+				// ego-cli degraded frame source: when /spaces reports cliFrameMode (no
+				// CDP screencast worker, a local ego-cli link active), the host returns
+				// ONE synthetic space and we poll it on a timer. Seeding frameCache with
+				// the cli-frame route URL lets the existing cached-branch render an <img>
+				// whose src changes each poll, so no separate render path is needed.
+				let cliFrameTimer: any = null
+				const stopCliFramePoll = () => { if (cliFrameTimer) { window.clearInterval(cliFrameTimer); cliFrameTimer = null } }
 				const refresh = () => {
 					void (async () => {
 						try {
@@ -2095,6 +2108,16 @@ h('button', { type: 'button', disabled: !writable || isFull(links) || hasCliLink
 							const data = await res.json()
 							if (!data || data.ok !== true) { renderEmpty(); return }
 							applyCaptureStatus(data.capture)
+							if (data.cliFrameMode === true && Array.isArray(data.spaces)) {
+								const cli = data.spaces.find((s: any) => s && s.targetId === CLI_FRAME_TARGET_ID)
+								if (cli) frameCache.set(CLI_FRAME_TARGET_ID, `${CLI_FRAME_ROUTE}?t=${cli.lastActive || Date.now()}`)
+								renderSpaces(data.spaces)
+								const interval = Number.isFinite(data.cliFrameIntervalMs) && data.cliFrameIntervalMs >= 1000 ? data.cliFrameIntervalMs : 5000
+								if (!cliFrameTimer) cliFrameTimer = window.setInterval(refresh, interval)
+								return
+							}
+							// A screencast worker took over: stop the fallback poll.
+							stopCliFramePoll()
 							renderSpaces(data.spaces)
 						} catch {
 							renderEmpty()
@@ -2460,6 +2483,7 @@ clearTimeout((panel as any)._dshHideT)
 					document.removeEventListener('visibilitychange', onVisibility)
 					if (watchRenewTimer) window.clearInterval(watchRenewTimer)
 					if (watchStopTimer) window.clearTimeout(watchStopTimer)
+					stopCliFramePoll()
 					stopWatch(true); stopVideo()
 					keyboardProxy.dispose()
 					try { pickCtl.disable() } catch {}
@@ -3142,6 +3166,7 @@ clearTimeout((panel as any)._dshHideT)
 			this.watchTargetId = null
 			this.watchRenewTimer = null
 			this.watchStopTimer = null
+			this._cliFrameTimer = null
 			this.watchRequest = null
 			this.backend = 'cdp'
 			this.streamGeneration = 0
@@ -3307,6 +3332,7 @@ clearTimeout((panel as any)._dshHideT)
 			document.removeEventListener('visibilitychange', this.onDocumentVisibility)
 			if (this.watchRenewTimer) window.clearInterval(this.watchRenewTimer)
 			if (this.watchStopTimer) window.clearTimeout(this.watchStopTimer)
+			if (this._cliFrameTimer) { window.clearInterval(this._cliFrameTimer); this._cliFrameTimer = null }
 			this._stopWatch(true)
 			this._destroyVideo()
 			this.closeStream()
@@ -3422,6 +3448,18 @@ clearTimeout((panel as any)._dshHideT)
 					var data = await res.json()
 					if (!data || data.ok !== true) { self._renderEmpty(); return }
 					self._applyCaptureStatus(data.capture)
+					// ego-cli degraded frame source: poll the single synthetic space and
+					// seed frameCache with the cli-frame route URL (same trick as the FAB
+					// controller) so the existing cached-branch renders a refreshing <img>.
+					if (data.cliFrameMode === true && Array.isArray(data.spaces)) {
+						var cli = data.spaces.find(function (s: any) { return s && s.targetId === CLI_FRAME_TARGET_ID })
+						if (cli) self.frameCache.set(CLI_FRAME_TARGET_ID, CLI_FRAME_ROUTE + '?t=' + (cli.lastActive || Date.now()))
+						self._processSpaces(data.spaces)
+						var interval = Number.isFinite(data.cliFrameIntervalMs) && data.cliFrameIntervalMs >= 1000 ? data.cliFrameIntervalMs : 5000
+						if (!self._cliFrameTimer) self._cliFrameTimer = window.setInterval(function () { self.refresh() }, interval)
+						return
+					}
+					if (self._cliFrameTimer) { window.clearInterval(self._cliFrameTimer); self._cliFrameTimer = null }
 					self._processSpaces(data.spaces)
 				} catch (e) {
 					self._renderEmpty()

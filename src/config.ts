@@ -160,6 +160,10 @@ export const Config = z.object({
   // lite 亦同）。默认关：挂载/改设置触发的探测不再弹浏览器窗口，就绪改由
   // 只读的 --status 判定，浏览器推迟到首个真实 bcdp_* 调用才起。
   allowProbeColdStart: z.boolean().description('Allow the ego-cli readiness probe to cold-start the backing browser. Off (default): the probe never launches the browser — when --status cannot prove the browser is already up, the heredoc round-trip is skipped and the browser starts on the first real bcdp_* call instead (no browser window at plugin startup). On: the probe verifies the SDK harness up front, which may launch the browser.').volatile(),
+  // ego-cli 观察窗降级帧源：无 CDP screencast 时，每 5s 走一次 CLI 截图轮询
+  // 供观察窗填充画面区。默认开（本地开销低）；关 = 即使激活行是 ego-cli 也不
+  // 轮询，观察窗显示占位提示。热生效，无需重载插件。
+  cliFramePollEnabled: z.boolean().default(true).description('Degraded watch-panel frame source for the local ego-cli link: with no CDP screencast available, capture one viewport screenshot every 5s through the CLI channel and serve it to the panel. On (default): the poller runs while an ego-cli link owns routing. Off: the panel keeps its placeholder and no screenshot subprocess is spawned. Hot-applies without reloading the plugin.').volatile(),
   localUserDataDir: z.string().description('Profile dir for the locally launched browser. Empty = managed dir; never point at your daily Chrome profile.'),
   // ── Lightpanda backend: managed-serve knob (the row carries its own path) ──
   lightpandaArgs: z.string().description('Extra args appended to a managed `lightpanda serve` argv. --host/--port are managed and cannot be overridden.').volatile(),
@@ -480,6 +484,11 @@ export function resolveConfig(config: RawConfig = {}): ResolvedConfig {
     allowProbeColdStart:
       (config as Record<string, unknown>).allowProbeColdStart === true ||
       (config as Record<string, unknown>).allowProbeColdStart === 'true',
+    // 默认开的 opt-out 闸：只有显式 false / 'false' 才关。缺省 / 其它形状都算开
+    // （对齐 remoteEnabled 的默认-on 极性，而非 allowProbeColdStart 的默认-off）。
+    cliFramePollEnabled:
+      (config as Record<string, unknown>).cliFramePollEnabled !== false &&
+      (config as Record<string, unknown>).cliFramePollEnabled !== 'false',
     // ── 阶段 10: JEV/Laya judge ───────────────────────────────────────────
     // `layaUrl` defaults to the sidecar's real port. JevLoop ships 7789 here,
     // which is a DIFFERENT tool's port — copying that default produces a

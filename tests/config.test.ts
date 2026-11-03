@@ -12,6 +12,7 @@ describe("dual capture config", () => {
       cursorHud: true, cursorName: "DeepSeek", allowLocalFallback: false, localHeadless: false, localUserDataDir: "", lightpandaArgs: "", legacyEgoToolNames: false, remoteEnabled: true,
       // 探测冷启动闸门默认关：挂载探测绝不拉起浏览器。
       allowProbeColdStart: false,
+      cliFramePollEnabled: true,
       // 工具分级注入默认：lazy + 三级全开放（core 级不可封印）。
       toolInjection: "lazy", toolBrowse: true, toolExtended: true, toolEscape: true, toolJudge: true, sessionScopedPulse: true,
       // 阶段 10 judge defaults. layaUrl defaults to the REAL sidecar port:/n      // 7789 (JevLoop’s value) is a different tool and yields a confusing
@@ -35,6 +36,7 @@ describe("dual capture config", () => {
       links: [], activeTargetId: "", cdpMode: "auto", cdpProbeTimeoutMs: 3000,
       cursorHud: true, cursorName: "DeepSeek", allowLocalFallback: false, localHeadless: false, localUserDataDir: "", lightpandaArgs: "", legacyEgoToolNames: false, remoteEnabled: true,
       allowProbeColdStart: false,
+      cliFramePollEnabled: true,
       // 工具分级注入默认：lazy + 三级全开放（core 级不可封印）。
       toolInjection: "lazy", toolBrowse: true, toolExtended: true, toolEscape: true, toolJudge: true, sessionScopedPulse: true,
       // 阶段 10 judge defaults. layaUrl defaults to the REAL sidecar port:/n      // 7789 (JevLoop’s value) is a different tool and yields a confusing

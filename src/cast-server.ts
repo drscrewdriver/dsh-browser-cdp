@@ -20,6 +20,7 @@ import type { FfmpegInstallationManager, FfmpegStatus } from './ffmpeg-installat
 import type { LoginImportOptions, LoginImportReport } from './login-import.ts'
 import { EGO_LINUX_CDP_URL } from './cdp-targets.ts'
 import { BCDP_CDP_ENGINE } from './cdp/capabilities.ts'
+import type { CliFramePoller } from './cast/cli-frame-poller.ts'
 
 const WORKER_BIN = fileURLToPath(new URL('../bin/cdp-cast-worker.mjs', import.meta.url))
 
@@ -36,6 +37,22 @@ let attachWsUrl: string | null = null
 let attachEngine: 'chrome' | 'lightpanda' | 'unknown' | null = null
 /** Logger captured in initCastServer so module-level helpers can report. */
 let castLogger: { info?: (message: string) => void; warn?: (message: string) => void } | undefined
+/**
+ * The active ego-cli frame poller, published by initCastServer so the tool-side
+ * doctor can report the current frame source without threading the instance
+ * through every registration. Null when no cast server is wired (headless host).
+ */
+let activeCliPoller: CliFramePoller | null = null
+/** Frame-source status for bcdp_doctor: running + the newest frame's age. */
+export function getCliPollStatus(): { running: boolean; lastFrameAgeMs: number | null; frameSeq: number } {
+  if (!activeCliPoller || !activeCliPoller.isRunning()) return { running: false, lastFrameAgeMs: null, frameSeq: 0 }
+  const f = activeCliPoller.getFrame()
+  return {
+    running: true,
+    lastFrameAgeMs: f ? Math.max(0, Date.now() - f.updatedAt) : null,
+    frameSeq: f ? f.seq : 0,
+  }
+}
 
 /**
  * Publish the currently resolved endpoint for the worker. Called by the host
@@ -103,6 +120,11 @@ export const EGO_WATCH_STOP_ROUTE = '/api/bcdp/watch/stop'
 export const EGO_WATCH_STATUS_ROUTE = '/api/bcdp/watch/status'
 export const EGO_VIDEO_ROUTE = '/api/bcdp/video'
 export const EGO_VIDEO_STATUS_ROUTE = '/api/bcdp/video/status'
+// ego-cli degraded frame source: serves the newest CLI-captured viewport PNG to
+// the watch panel when no CDP screencast is available.
+export const EGO_CLI_FRAME_ROUTE = '/api/bcdp/cli-frame'
+/** Synthetic target id the panel shows for the single CLI fallback frame. */
+export const CLI_FRAME_TARGET_ID = '__cli_frame__'
 
 // ── tool-call signal (auto-open sidebar Tab) ─────────────────────────────
 // Module-level counter bumped by markEgoToolCall() from the tool execute
@@ -605,9 +627,11 @@ export function initCastServer(
   ffmpegManager: FfmpegInstallationManager | null,
   openAgentWindow: () => Promise<{ ok: boolean; error?: string }> = async () => ({ ok: false, error: 'raise not supported by this host build' }),
   loginImport: (opts: LoginImportOptions) => Promise<LoginImportReport> = async () => ({ ok: false, error: 'login import not supported by this host build' }),
+  cliPoller: CliFramePoller | null = null,
 ): void {
   const ensureWorker = makeEnsureWorker(ctx, cfg, ffmpegManager)
   const pushConfig = makePushConfig(ensureWorker, ffmpegManager)
+  activeCliPoller = cliPoller
   // The web shell exposes `webServer` — the only HTTP host surface the plugin
   // uses. It is NOT a required inject (TUI / headless hosts have none), so we
   // resolve it opportunistically via ctx.get('webServer'); if absent here there
@@ -674,6 +698,25 @@ export function initCastServer(
       const res = resRaw as ServerResponse
       const port = await ensureWorker()
       if (port === null) {
+        // Degraded ego-cli path: no screencast worker, but the CLI frame poller
+        // may be serving one synthetic space so the panel fills with the 5s
+        // fallback frame instead of the "no live browser" empty state.
+        const cliFrame = cliPoller && cliPoller.isRunning() ? cliPoller.getFrame() : null
+        if (cliFrame) {
+          return sendJson(res, 200, {
+            ok: true,
+            toolCallCount,
+            cliFrameMode: true,
+            cliFrameIntervalMs: 5000,
+            spaces: [{
+              targetId: CLI_FRAME_TARGET_ID,
+              url: cliFrame.url,
+              title: cliFrame.title,
+              active: true,
+              lastActive: cliFrame.updatedAt,
+            }],
+          })
+        }
         return sendJson(res, 200, { ok: false, spaces: [], toolCallCount, reason: 'no live agent browser' })
       }
       const data = await proxyFrom(port, '/api/spaces')
@@ -698,6 +741,31 @@ export function initCastServer(
         return
       }
       proxyWorkerStream(port, res, '/api/stream')
+    },
+  })
+
+  // GET /api/bcdp/cli-frame — the ego-cli degraded frame source. Serves the
+  // newest CLI-captured viewport PNG (image/png) so the watch panel's <img> can
+  // load it directly; 204 when the poller has no frame yet (cold start, switch
+  // off, or a space with no active page). Local read-only, no SSE image mirror.
+  const disposeCliFrame = server.register({
+    kind: 'exact',
+    path: EGO_CLI_FRAME_ROUTE,
+    handler: async (_req: unknown, resRaw: unknown) => {
+      const res = resRaw as ServerResponse
+      const frame = cliPoller && cliPoller.isRunning() ? cliPoller.getFrame() : null
+      if (!frame) {
+        res.statusCode = 204
+        res.end()
+        return
+      }
+      res.writeHead(200, {
+        'content-type': 'image/png',
+        'content-length': frame.png.length,
+        'cache-control': 'no-store',
+        'x-cli-frame-seq': String(frame.seq),
+      })
+      res.end(frame.png)
     },
   })
 
@@ -919,6 +987,7 @@ export function initCastServer(
   ctx.effect?.(() => () => {
     try { disposeSpaces() } catch { /* ignore */ }
     try { disposeStream() } catch { /* ignore */ }
+    try { disposeCliFrame() } catch { /* ignore */ }
     try { disposeInput() } catch { /* ignore */ }
     try { disposeClose() } catch { /* ignore */ }
     try { disposeMarks() } catch { /* ignore */ }

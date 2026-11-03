@@ -34,7 +34,8 @@ import { existsSync, readdirSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { importLoginCookies } from './login-import.ts'
-import { initCastServer, markEgoToolCall, getLastEgoActivity, onEgoActivity, setAttachEndpoint, recycleWorker } from './cast-server.ts'
+import { initCastServer, markEgoToolCall, getLastEgoActivity, onEgoActivity, setAttachEndpoint, recycleWorker, getCliPollStatus, getAttachEndpoint } from './cast-server.ts'
+import { CliFramePoller, buildFrameScript } from './cast/cli-frame-poller.ts'
 import { registerEgoBrowserGateway } from './gateway.ts'
 import { EGO_HELP_INDEX } from './help.ts'
 import { HUMAN_CHECK_PROBE } from './captcha.ts'
@@ -299,11 +300,37 @@ export function createSessionSpaceTracker(
  * harness sessions sharing the same browser remain unsupported (host-level).
  */
 let egoLockChain: Promise<unknown> = Promise.resolve()
+/**
+ * How many bcdp_* executions are currently inside the lock body (0 = idle).
+ * The CLI frame poller reads this via `egoLockBusy()` to skip a tick while a
+ * real tool call owns the browser — a passive observer must never contend with
+ * an action. Incremented the moment the queued `fn` starts, decremented when its
+ * result settles, so a chained-but-not-yet-run call does not falsely read busy.
+ */
+let egoLockDepth = 0
+export function egoLockBusy(): boolean {
+  return egoLockDepth > 0
+}
 function withEgoLock<T>(fn: () => Promise<T> | T): Promise<T> {
-  const run = egoLockChain.then(
-    () => fn(),
-    () => fn(),
-  ) as Promise<T>
+  const runBody = (): Promise<T> | T => {
+    egoLockDepth += 1
+    let r: Promise<T> | T
+    try {
+      r = fn()
+    } catch (err) {
+      egoLockDepth -= 1
+      throw err
+    }
+    if (r && typeof (r as Promise<T>).then === 'function') {
+      return (r as Promise<T>).then(
+        (v) => { egoLockDepth -= 1; return v },
+        (e) => { egoLockDepth -= 1; throw e },
+      )
+    }
+    egoLockDepth -= 1
+    return r as T
+  }
+  const run = egoLockChain.then(runBody, runBody) as Promise<T>
   egoLockChain = run.then(
     () => undefined,
     () => undefined,
@@ -1001,6 +1028,8 @@ interface EgoRuntimeConfig {
   readonly localUserDataDir: string
   /** 探测冷启动闸门（默认关）：关 = ego-cli 探测绝不拉起背后的浏览器。 */
   readonly allowProbeColdStart: boolean
+  /** ego-cli 观察窗降级帧源开关（默认开）：关 = 不轮询截图，观察窗显示占位。 */
+  readonly cliFramePollEnabled: boolean
   /** Lightpanda backend �?extra `lightpanda serve` args for managed `lightpanda` rows. */
   readonly lightpandaArgs: string
   // ── 阶段 10: JEV/Laya judge (design-jev-pipeline.md) ────────────────────
@@ -1139,6 +1168,45 @@ async function runEgoScript(subprocess: SubprocessService, script: string, exec:
   // sentinel only enriches the result, so the exit code above stays the
   // authority on success. `value` may legitimately be undefined (see toolPayload).
   return { ok: true, value, stdout, stderr }
+}
+
+/**
+ * ego-cli degraded frame source: run the poller heredoc through the SAME CLI
+ * channel real tools use and resolve the merged stdout (which carries the
+ * `@@BCDP_FRAME@@` payload). Kept separate from `runEgoScript` because that one
+ * parses `@@DSH_RESULT@@` and needs an exec/abort context a passive poller has
+ * none of. A failed or non-zero run resolves '' — the poller treats '' as "no
+ * new frame" and keeps the previous one, so a transient cold start never blanks
+ * the panel.
+ */
+// A viewport PNG at up to 1920w base64-encodes to ~1.4 MB per megabyte of raw;
+// allow generous headroom so the reader never truncates the frame payload.
+const CLI_FRAME_MAX_BYTES = 12 * 1024 * 1024
+async function spawnCliFrameCapture(
+  subprocess: SubprocessService,
+  cfg: EgoRuntimeConfig,
+  space: string | number,
+): Promise<string> {
+  const { attach } = effectiveChannel(cfg)
+  const script = buildFrameScript(j(space))
+  try {
+    const handle = subprocess.spawn({
+      argv: buildEgoToolArgv(cfg.egoArgvPrefix, attach, cfg.runtimeArgs ?? ''),
+      cwd: process.cwd(),
+      env: resolveEgoEnv(cfg),
+      stdio: {
+        stdin: { data: script },
+        stdout: { maxBytes: CLI_FRAME_MAX_BYTES, spill: { maxBytes: CLI_FRAME_MAX_BYTES } },
+        stderr: { maxBytes: CLI_FRAME_MAX_BYTES, spill: { maxBytes: CLI_FRAME_MAX_BYTES } },
+      },
+      graceMs: cfg.graceMs,
+    })
+    const outcome = await handle.done
+    if (outcome.exitCode !== 0) return ''
+    return mergeCliOutput({ stdout: readAll(handle.collected.stdout), stderr: readAll(handle.collected.stderr) })
+  } catch {
+    return ''
+  }
 }
 // ── tool plumbing ───────────────────────────────────────────────────────────
 /** How much raw stdout a tool may hand back when a script emitted no JSON. */
@@ -1462,6 +1530,7 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
     get localUserDataDir() { return resolveConfig(bridge.source() as RawConfig).localUserDataDir },
     get lightpandaArgs() { return resolveConfig(bridge.source() as RawConfig).lightpandaArgs },
     get allowProbeColdStart() { return resolveConfig(bridge.source() as RawConfig).allowProbeColdStart },
+    get cliFramePollEnabled() { return resolveConfig(bridge.source() as RawConfig).cliFramePollEnabled },
     // ── 阶段 10: JEV/Laya judge ─────────────────────────────────────────
     // `judgeSettingsOf` is resolved once per read and deconstructed, so the
     // "which keys does the judge need" decision lives in ONE place (config.ts)
@@ -1654,6 +1723,17 @@ bridge.onChange(() => tiers.reapply())
   // panel re-attaches to the same browser the tools now drive. No resolved
   // endpoint (local mode / nothing activated / unreachable) means "no remote
   // attach": the worker behaves exactly as before R1.
+  // ego-cli degraded watch-panel frame poller: lives in the host half (owns
+  // subprocess + attach state) and is started/stopped by the same refresh pass
+  // that publishes the endpoint. Started ONLY when an ego-cli link owns routing,
+  // no CDP ws resolved, the CLI is ready, and the operator kept the fallback on.
+  const cliPoller = new CliFramePoller({
+    intervalMs: 5000,
+    capture: () => spawnCliFrameCapture(ctx.subprocess, cfg, cfg.activeSpace ?? cfg.defaultSpace),
+    isBusy: egoLockBusy,
+  })
+  ctx.effect?.(() => () => cliPoller.stop())
+
   const triggerCdpRefresh = (() => {
     let inFlight = false
     let pending = false
@@ -1723,6 +1803,17 @@ bridge.onChange(() => tiers.reapply())
           changed = true
           void recycleWorker('cdp activation change').catch(() => null)
         }
+        // Drive the degraded frame poller off the SAME state the worker uses: it
+        // runs only for a ready ego-cli link with no CDP screencast and the
+        // operator's fallback switch on. Any other configuration stops it so it
+        // never contends with a live screencast worker.
+        const cliFrameActive =
+          ws === null &&
+          attach.linkKind === EGO_CLI_KIND &&
+          attach.status === 'ready' &&
+          resolved.cliFramePollEnabled === true
+        if (cliFrameActive) cliPoller.start()
+        else cliPoller.stop()
       } catch {
         /* best-effort: a failed probe must never break the settings apply */
       } finally {
@@ -1767,6 +1858,7 @@ bridge.onChange(() => tiers.reapply())
         ffmpegManager,
         () => openAgentWindow(ctx, cfg),
         (opts) => importLoginCookies(opts, { subprocess: ctx.subprocess }),
+        cliPoller,
       )
     } catch (err) {
       ctx.logger?.warn?.(
@@ -3314,6 +3406,17 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
         )
         lines.push(`remote CDP: ${cfg.remoteEnabled === false ? 'DISABLED by switch (sequence preserved)' : 'enabled'}`)
         lines.push(`attach: ${attachNow.status}${attachNow.endpointSource ? ` (source: ${attachNow.endpointSource})` : ''}${attachNow.endpoint ? ` @ ${attachNow.endpoint}` : ''}`)
+        // Frame source for the watch panel: screencast worker when a CDP ws is
+        // resolved, the ego-cli 5s poller in the degraded case, or none.
+        const cliPoll = getCliPollStatus()
+        const frameSource = getAttachEndpoint()
+          ? 'screencast (CDP)'
+          : cliPoll.running
+            ? `cli-poll (5s interval, seq ${cliPoll.frameSeq}${cliPoll.lastFrameAgeMs !== null ? `, last frame ${cliPoll.lastFrameAgeMs}ms ago` : ', no frame yet'})`
+            : cfg.cliFramePollEnabled === false
+              ? 'none (cliFramePollEnabled off)'
+              : 'none'
+        lines.push(`frame source: ${frameSource}`)
         // ── Lightpanda backend: engine, degradation list, per-OS install hint ──
         if (attachNow.engine !== undefined) {
           lines.push(`engine: ${attachNow.engine}`)

@@ -278,6 +278,12 @@ export interface ResolvedConfig {
    * browser window; the browser then starts on the first real bcdp_* call.
    */
   allowProbeColdStart: boolean
+  /**
+   * ego-cli degraded watch-panel frame source: when no CDP screencast is
+   * available and an ego-cli link owns routing, capture one viewport per 5s
+   * through the CLI channel and serve it to the panel. Default true.
+   */
+  cliFramePollEnabled: boolean
   // ── R4: screenshot material toggles ─────────────────────────────────────
   cursorHud: boolean
   cursorName: string

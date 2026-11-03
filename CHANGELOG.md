@@ -1,3 +1,13 @@
+## 1.7.7 (2026-11-04)
+
+**ego-cli 观察窗降级帧源：无 CDP screencast 时每 5s 走一次 CLI 截图填充画面区。**
+
+- 激活 link 为本机 `ego-cli` 时没有可注入的 CDP ws，screencast worker 附着不上、观察窗此前是黑盒空态。新增 `CliFramePoller`（`src/cast/cli-frame-poller.ts`）复用真实工具同一条 `ego-browser nodejs` 通道，每 5s 跑一段被动截图 heredoc（`taskSpaces.useOrCreate` + `page.screenshot` 读回 base64，**不 switchTab**，纯观察不改活动标签），只缓存最新一帧 PNG。
+- 新路由 `GET /api/bcdp/cli-frame` 返回最新帧（`image/png` / 无帧 204，走既有 trust-fence）；`/api/bcdp/spaces` 在无 worker 但 poller 有帧时合成单条 `__cli_frame__` 空间并置 `cliFrameMode`，前端（悬浮窗 + 侧栏两路径）向 `frameCache` 种一个带 `?t=` 的 URL 复用既有 cached 分支渲染，按 interval 轮询刷新——非 SSE 推流、本地无带宽压力。
+- 自限三处：`egoLockBusy()`（新增锁深度计数）在工具调用占用时跳帧、link 切回 CDP endpoint 时 poller 自动 stop、面板隐藏/idle 随既有 worker lease 停。
+- 新增 volatile 开关 `cliFramePollEnabled`（默认开，热生效）：关 = 不拉截图子进程、面板回占位。`bcdp_doctor` 增 `frame source:` 行（screencast / cli-poll / none）。
+- 测试：新增 `tests/cli-frame-poller.test.ts` 11 例 + `tests/cast-server-cli-frame.test.ts` 集成 6 例（路由 200/204/204未运行/401 + spaces 合成/回落）；全量 924 passed / 13 skipped，typecheck 双配置无错。
+
 ## 1.7.4 (2026-10-28)
 
 **issue #4 根治：悬浮球/面板位置持久化改视口比例制（百分位）+ resize 实时重摆。**

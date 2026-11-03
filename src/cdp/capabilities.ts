@@ -15,7 +15,7 @@
  * ever downgrades.
  */
 
-export type EngineId = 'chrome' | 'lightpanda' | 'unknown'
+export type EngineId = 'chrome' | 'lightpanda' | 'tabbit' | 'unknown'
 
 /**
  * Recognize the engine from `/json/version`'s `Browser` field
@@ -69,7 +69,9 @@ const FULL: BackendCapabilities = {
 /**
  * The capability projection per engine. `chrome` / `unknown` → full
  * capabilities (bit-for-bit today's behavior); `lightpanda` → the analysis
- * (docs/plans/2026-10-04-lightpanda-backend-analysis.md §7) projection.
+ * (docs/plans/2026-10-04-lightpanda-backend-analysis.md §7) projection;
+ * `tabbit` → CLI-protocol limitations (no download events, no overlay pick,
+ * no raw CDP screencast through the plugin's usual path).
  */
 export function capabilitiesFor(engine: EngineId): BackendCapabilities {
   if (engine === 'lightpanda') {
@@ -82,6 +84,25 @@ export function capabilitiesFor(engine: EngineId): BackendCapabilities {
       loadEvent: false, // lifecycleEvent(load) replaces loadEventFired
       downloadEvents: false, // no downloadWillBegin / downloadProgress
       browserClose: false,
+    }
+  }
+  if (engine === 'tabbit') {
+    // Tabbit browser IS Chromium (CDP fully present), but the tabbit-cli
+    // connection model restricts what the plugin can reach:
+    //   - Browser.* and Target.* domains rejected (no tab enumeration)
+    //   - Playwright download events unavailable (connection-mode limit)
+    //   - Overlay/bindingCalled work only via newCDPSession (page-scoped)
+    //   - Screencast available (Page domain allowed) but needs 2nd CDP session
+    // The plugin gate uses these flags to skip tools that would hang/fail.
+    return {
+      engine: 'tabbit',
+      screencast: true,       // Page.startScreencast allowed via newCDPSession
+      overlay: false,         // Overlay domain works but plugin pick path needs Browser.*
+      bindingCalled: false,   // Runtime.addBinding not reliably reachable
+      imageFormat: 'jpeg',    // Tabbit is Chromium, jpeg native
+      loadEvent: true,        // Playwright handles load waiting
+      downloadEvents: false,  // SKILL.md: "download events unavailable"
+      browserClose: false,    // Browser.* rejected
     }
   }
   return { ...FULL, engine }
@@ -106,5 +127,8 @@ export const BCDP_CDP_ENGINE = 'BCDP_CDP_ENGINE'
  * conservatively break a Chrome endpoint.
  */
 export function capabilitiesFromEnvValue(value: string | undefined): BackendCapabilities {
-  return capabilitiesFor(value !== undefined && value.trim() === 'lightpanda' ? 'lightpanda' : 'unknown')
+  const v = (value ?? '').trim()
+  if (v === 'lightpanda') return capabilitiesFor('lightpanda')
+  if (v === 'tabbit') return capabilitiesFor('tabbit')
+  return capabilitiesFor('unknown')
 }

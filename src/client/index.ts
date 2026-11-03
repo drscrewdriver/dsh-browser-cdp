@@ -1,7 +1,7 @@
 /** Injected by the DSH ModuleLoader factory wrapper (tsdown banner). */
 declare function require(id: string): any
 
-import { addRow, applyProbe, buildCdpRow, buildCliRow, buildLpRow, hasCliLink, hasLpLink, isFull, isValidEndpoint, MAX_LINKS, moveRow, removeRow, updateRow } from './fam-links'
+import { addRow, applyProbe, buildCdpRow, buildCliRow, buildLpRow, buildTabbitRow, hasCliLink, hasLpLink, hasTabbitLink, isFull, isValidEndpoint, MAX_LINKS, moveRow, removeRow, updateRow } from './fam-links'
 import { claimFamilyHostIfOrphaned } from './family-host'
 import { fromRatio, normalizeStored, toRatio, type RatioPos, type Viewport } from './fab-pos'
 import { commitField } from './fam-write'
@@ -168,6 +168,9 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 			linksAddCli: 'Add local ego CLI',
 			linksAddLp: 'Add Lightpanda (managed)',
 			linksAddLpExists: 'The Lightpanda link already exists — local-only, one per machine',
+			linksAddTabbit: 'Add Tabbit CLI',
+			linksAddTabbitExists: 'The Tabbit link already exists — local-only, one per machine',
+			linksTabbitPathHint: 'Empty = auto-detect (%LOCALAPPDATA%\\Tabbit\\LocalAgent\\bin)',
 			linksLpPathHint: 'Empty = auto (PATH → ~/.local/bin; Windows runs it inside WSL2)',
 			linksLpHeadlessHint: 'Headless quick-trial engine — no manual fallback (login/captcha). Early in the order = quick trials use it; after the headed kinds (CDP / local Chrome / ego CLI) = backstop first.',
 			linksLpRemoteWarn: 'Activating a Lightpanda link under cdpMode=remote fails with mode-kind-mismatch',
@@ -262,6 +265,9 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 			linksAddCli: '添加本机 ego CLI',
 			linksAddLp: '添加 Lightpanda（受管）',
 			linksAddLpExists: 'Lightpanda 连接已存在——仅限本机，一台机器只允许一条',
+			linksAddTabbit: '添加 Tabbit CLI',
+			linksAddTabbitExists: 'Tabbit 连接已存在——仅限本机，一台机器只允许一条',
+			linksTabbitPathHint: '留空 = 自动检测 (%LOCALAPPDATA%\\Tabbit\\LocalAgent\\bin)',
 			linksLpPathHint: '留空 = 自动检测（PATH → ~/.local/bin；Windows 经 WSL2）',
 			linksLpHeadlessHint: '无头快速试验引擎：无法人工兜底（登录/验证码）。排前面 = 快速场景优先用它；排在有头类型（CDP/本机 Chrome/ego CLI）后 = 兜底优先。',
 			linksLpRemoteWarn: 'cdpMode=remote 时激活 Lightpanda 行会报 mode-kind-mismatch',
@@ -1167,6 +1173,8 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 			var addCliPath = addCliPathState[0], setAddCliPath = addCliPathState[1]
 			var addLpPathState = React.useState('')
 			var addLpPath = addLpPathState[0], setAddLpPath = addLpPathState[1]
+			var addTabbitPathState = React.useState('')
+			var addTabbitPath = addTabbitPathState[0], setAddTabbitPath = addTabbitPathState[1]
 
 			var btnStyle = { font: 'inherit', fontSize: '12px', cursor: writable ? 'pointer' : 'not-allowed', border: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.35))', background: 'none', color: 'var(--dsw-alias-label-primary, inherit)', borderRadius: '8px', padding: '2px 8px', flex: '0 0 auto' }
 			var badgeStyle = { fontSize: '10px', fontWeight: 600, letterSpacing: '.04em', flex: '0 0 auto', color: 'var(--dsw-alias-label-tertiary, rgba(127,127,127,.7))', border: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.25))', borderRadius: '6px', padding: '0 5px', lineHeight: '16px' }
@@ -1208,6 +1216,15 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 					void commitField(scope, 'activeTargetId', res.links[res.links.length - 1].id)
 				}
 				setAddLpPath(''); setErrText('')
+			}
+			function addTabbit() {
+				var res = addRow(links, buildTabbitRow({ label: '', cliPath: addTabbitPath }))
+				if (res.code) { setErrText(res.code === 'link-limit-reached' ? limitText() : wt('linksAddTabbitExists')); return }
+				writeLinks(res.links)
+				if (activeId === '') {
+					void commitField(scope, 'activeTargetId', res.links[res.links.length - 1].id)
+				}
+				setAddTabbitPath(''); setErrText('')
 			}
 			function removeOne(row: any) {
 				var res = removeRow(links, row.id)
@@ -1260,6 +1277,7 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 					: links.map(function (row: any, idx: any) {
 						var isCli = row.kind === 'ego-cli'
 						var isLp = row.kind === 'lightpanda'
+						var isTabbit = row.kind === 'tabbit-cli'
 						var isActive = row.id !== undefined && row.id === activeId
 						var probeBadge: any = null
 						if (row.probeStatus === 'ok' || row.probeStatus === 'error') {
@@ -1273,7 +1291,7 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 								h(FamSwitch, { checked: row.enabled === true, writable: writable,
 									title: wt('linksEnabled'),
 									onToggle: function (next: boolean) { writeLinks(updateRow(links, row.id, { enabled: next })) } }),
-								h('span', { style: badgeStyle }, isCli ? 'CLI' : isLp ? 'LP·无头' : 'CDP'),
+								h('span', { style: badgeStyle }, isCli ? 'CLI' : isLp ? 'LP·无头' : isTabbit ? 'TABBIT' : 'CDP'),
 								h(FamRowInput, { v: row.label || '', writable: writable, placeholder: wt('linksLabel'),
 									onCommit: function (v: any) { writeLinks(updateRow(links, row.id, { label: v })) } }),
 								probeBadge,
@@ -1288,10 +1306,10 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 										} },
 										wt('linksActivate'))),
 							h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
-								h(FamRowInput, { v: (isCli ? row.cliPath : isLp ? row.servePath : row.endpoint) || '', writable: writable,
-									placeholder: isCli ? wt('linksCliPathHint') : isLp ? wt('linksLpPathHint') : wt('linksEndpointHint'),
+								h(FamRowInput, { v: (isCli || isTabbit ? row.cliPath : isLp ? row.servePath : row.endpoint) || '', writable: writable,
+									placeholder: isCli ? wt('linksCliPathHint') : isTabbit ? wt('linksTabbitPathHint') : isLp ? wt('linksLpPathHint') : wt('linksEndpointHint'),
 									onCommit: function (v: any) {
-										if (isCli) { writeLinks(updateRow(links, row.id, { cliPath: v })); return }
+										if (isCli || isTabbit) { writeLinks(updateRow(links, row.id, { cliPath: v })); return }
 										if (isLp) { writeLinks(updateRow(links, row.id, { servePath: v })); return }
 										if (!isValidEndpoint(v)) { setErrText(wt('linksEndpointInvalid')); return }
 										writeLinks(updateRow(links, row.id, { endpoint: v }))
@@ -1301,7 +1319,7 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 								// produce `taskSpaces is not defined` on every call. The host now
 								// always injects the harness (and the probe auto-drops the flag
 								// for CLIs that reject it), so there is nothing left to switch.
-								!isCli && !isLp ? h('button', { type: 'button', disabled: !writable || probingId === row.id, style: btnStyle,
+								!isCli && !isLp && !isTabbit ? h('button', { type: 'button', disabled: !writable || probingId === row.id, style: btnStyle,
 									onClick: function () { probeOne(row) } },
 									probingId === row.id ? wt('linksProbing') : wt('linksProbe')) : null,
 								h('button', { type: 'button', disabled: !writable || idx === 0, title: wt('linksMoveUp'), style: btnStyle,
@@ -1310,8 +1328,8 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 									onClick: function () { writeLinks(moveRow(links, row.id, 1)) } }, '↓'),
 								h('button', { type: 'button', disabled: !writable, title: wt('linksRemove'), style: btnStyle,
 									onClick: function () { removeOne(row) } }, '✕'),
-								(isCli || isLp) && cdpMode === 'remote'
-									? h('span', { style: { fontSize: '11px', color: '#ff9f0a', flex: '1 1 100%' } }, wt(isCli ? 'linksCliRemoteWarn' : 'linksLpRemoteWarn'))
+								(isCli || isLp || isTabbit) && cdpMode === 'remote'
+									? h('span', { style: { fontSize: '11px', color: '#ff9f0a', flex: '1 1 100%' } }, wt(isCli || isTabbit ? 'linksCliRemoteWarn' : 'linksLpRemoteWarn'))
 									: null,
 								isLp ? h('span', { style: { fontSize: '11px', color: 'var(--dsw-alias-label-tertiary, rgba(127,127,127,.7))', flex: '1 1 100%' } }, wt('linksLpHeadlessHint'))
 									: null))
@@ -1346,6 +1364,15 @@ h('button', { type: 'button', disabled: !writable || isFull(links) || hasCliLink
 							h('button', { type: 'button', disabled: !writable || isFull(links) || hasLpLink(links),
 								title: hasLpLink(links) ? wt('linksAddLpExists') : (isFull(links) ? limitText() : undefined),
 								style: btnStyle, onClick: addLp }, wt('linksAddLp'))),
+					h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' } },
+						h('input', { type: 'text', value: addTabbitPath, disabled: !writable || isFull(links) || hasTabbitLink(links),
+							placeholder: wt('linksTabbitPathHint'),
+							style: Object.assign({ flex: '1 1 160px', minWidth: 0 }, inputStyle),
+							onChange: function (e: any) { setAddTabbitPath(e.target.value) },
+							onKeyDown: function (e: any) { if (e.key === 'Enter') { addTabbit() } } }),
+						h('button', { type: 'button', disabled: !writable || isFull(links) || hasTabbitLink(links),
+							title: hasTabbitLink(links) ? wt('linksAddTabbitExists') : (isFull(links) ? limitText() : undefined),
+							style: btnStyle, onClick: addTabbit }, wt('linksAddTabbit'))),
 					errText ? h('div', { style: { fontSize: '11px', color: '#ff453a' } }, errText) : null))
 		}
 

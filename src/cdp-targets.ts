@@ -52,6 +52,15 @@ export const EGO_CLI_KIND = 'ego-cli'
 export const EGO_CLI_LABEL = '本机 ego CLI'
 
 /**
+ * Tabbit CLI backend (P0-3/P0-4, cdp-tabbit-bridge).
+ * Same singleton + never-stop rules as ego-cli: Tabbit owns its browser lifecycle.
+ */
+export const TABBIT_CLI_KIND = 'tabbit-cli'
+
+/** Default panel label for a tabbit-cli link. */
+export const TABBIT_CLI_LABEL = 'Tabbit 浏览器'
+
+/**
  * Lightpanda backend — the managed-serve link kind (headless quick-trial
  * engine; headed kinds are the manual-fallback backstop). Local-only
  * singleton, same rules as `ego-cli`.
@@ -114,6 +123,15 @@ export function coerceLink(raw: unknown): BrowserLink | null {
       servePath,
     }
   }
+  if (rec.kind === TABBIT_CLI_KIND) {
+    const cliPath = typeof rec.cliPath === 'string' ? rec.cliPath.trim() : ''
+    return {
+      ...base,
+      kind: TABBIT_CLI_KIND,
+      label: label === '' ? TABBIT_CLI_LABEL : label,
+      cliPath,
+    }
+  }
 
   const endpoint = normalizeEndpoint(rec.endpoint)
   if (!endpoint.ok) return null
@@ -134,6 +152,8 @@ export interface SanitizeLinksResult {
   droppedEgoCli: number
   /** Lightpanda backend — extra `lightpanda` rows dropped to honour the local-only singleton. */
   droppedLightpanda: number
+  /** Tabbit bridge — extra `tabbit-cli` rows dropped to honour the local-only singleton. */
+  droppedTabbitCli: number
   /** Entries dropped because they carried no usable identity at all. */
   droppedInvalid: number
 }
@@ -147,14 +167,16 @@ export interface SanitizeLinksResult {
  * rest and counting them for the doctor).
  */
 export function sanitizeLinks(raw: unknown, max: number = MAX_TARGETS): SanitizeLinksResult {
-  if (!Array.isArray(raw)) return { links: [], droppedEgoCli: 0, droppedLightpanda: 0, droppedInvalid: 0 }
+  if (!Array.isArray(raw)) return { links: [], droppedEgoCli: 0, droppedLightpanda: 0, droppedTabbitCli: 0, droppedInvalid: 0 }
   const out: BrowserLink[] = []
   const seen = new Set<string>()
   let droppedEgoCli = 0
   let droppedLightpanda = 0
+  let droppedTabbitCli = 0
   let droppedInvalid = 0
   let sawEgoCli = false
   let sawLightpanda = false
+  let sawTabbitCli = false
   for (const entry of raw) {
     const link = coerceLink(entry)
     if (!link) { droppedInvalid += 1; continue }
@@ -169,12 +191,17 @@ export function sanitizeLinks(raw: unknown, max: number = MAX_TARGETS): Sanitize
       if (sawLightpanda) { droppedLightpanda += 1; continue }
       sawLightpanda = true
     }
+    if (link.kind === TABBIT_CLI_KIND) {
+      // Local-only singleton: one machine, one Tabbit browser.
+      if (sawTabbitCli) { droppedTabbitCli += 1; continue }
+      sawTabbitCli = true
+    }
     if (seen.has(link.id)) link.id = newTargetId()
     seen.add(link.id)
     out.push(link)
     if (out.length >= max) break
   }
-  return { links: out, droppedEgoCli, droppedLightpanda, droppedInvalid }
+  return { links: out, droppedEgoCli, droppedLightpanda, droppedTabbitCli, droppedInvalid }
 }
 
 /**
@@ -188,6 +215,11 @@ export function sanitizeTargets(raw: unknown, max: number = MAX_TARGETS): Browse
 
 export function findLink(links: readonly BrowserLink[], id: string): BrowserLink | null {
   if (id === '') return null
+  // Defensive: an absent/empty link list means "nothing resolves", never a
+  // crash. `resolveEffectiveLink` now runs on every tool call and on the frame
+  // poller, so a partial config (or a test mock without `links`) must degrade to
+  // null instead of throwing inside `.find`.
+  if (!Array.isArray(links) || links.length === 0) return null
   return links.find((link) => link.id === id) ?? null
 }
 
@@ -230,6 +262,10 @@ export interface EffectiveLink {
  */
 export function resolveEffectiveLink(links: readonly BrowserLink[], activeTargetId: string): EffectiveLink | null {
   if (activeTargetId === '') return null
+  // Same defensive rule as findLink: no link list means no routing decision to
+  // make. This runs on every tool call and on the frame poller now, so a partial
+  // config must not throw out of the tool path.
+  if (!Array.isArray(links) || links.length === 0) return null
   const activated = findLink(links, activeTargetId)
   if (activated && activated.enabled) return { link: activated, reason: 'activated' }
   const fallback = links.find((link) => link.enabled)
@@ -879,6 +915,12 @@ export async function refreshAttach(input: RefreshInput): Promise<AttachState> {
   // row already declares.
   if (target.kind === LP_KIND) {
     return refreshLightpandaAttach(input, cache, suggested, target, now)
+  }
+  // Tabbit-cli uses its own CLI protocol, not a raw CDP endpoint; same as ego-cli,
+  // we never probe an endpoint for it.
+  if (target.kind === TABBIT_CLI_KIND) {
+    cache.patch({ ...suggested, targetId: target.id, status: 'ready', code: '', message: 'tabbit-cli ready' })
+    return cache.get()
   }
 
   const sameTarget = previous.targetId === target.id && previous.endpoint === target.endpoint

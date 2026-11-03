@@ -33,6 +33,9 @@ export const EGO_CLI_LABEL = '本机 ego CLI'
 /** Lightpanda managed-serve singleton default label — mirrors host `LP_LABEL`. */
 export const LP_LABEL = 'Lightpanda（受管）'
 
+/** Tabbit CLI singleton default label — mirrors host `TABBIT_CLI_LABEL`. */
+export const TABBIT_CLI_LABEL = 'Tabbit 浏览器'
+
 /**
  * Loose view of one stored row. Every field is optional because the settings
  * union's keys are runtime-optional and rows may predate a field; rows we
@@ -57,7 +60,7 @@ export interface FamLinkRow {
 }
 
 /** Structured rejection codes — mirror the host `upsertLink` vocabulary. */
-export type FamAddErrorCode = 'ego-cli-already-exists' | 'lightpanda-already-exists' | 'link-limit-reached' | 'unusable-row'
+export type FamAddErrorCode = 'ego-cli-already-exists' | 'lightpanda-already-exists' | 'tabbit-cli-already-exists' | 'link-limit-reached' | 'unusable-row'
 
 /** Flat add result: `code` present = rejected (mirror of upsertLink's `{ok,code}`). */
 export interface FamAddResult {
@@ -158,6 +161,29 @@ export function hasLpLink(links: FamLinkRow[]): boolean {
 	return links.some(function (row) { return row.kind === 'lightpanda' })
 }
 
+/** Second tabbit-cli anywhere in the array would be silently dropped on read. */
+export function hasTabbitLink(links: FamLinkRow[]): boolean {
+	return links.some(function (row) { return row.kind === 'tabbit-cli' })
+}
+
+/** Full-field tabbit-cli row (`cliPath` '' = host auto-resolve chain). */
+export function buildTabbitRow(input: { label?: string; cliPath?: string }): FamLinkRow {
+	const cliPath = trimmed(input.cliPath)
+	return {
+		kind: 'tabbit-cli',
+		id: newLinkId(),
+		label: trimmed(input.label) || cliPath || TABBIT_CLI_LABEL,
+		cliPath,
+		enabled: true,
+		note: '',
+		probeStatus: 'unknown',
+		probeLatencyMs: 0,
+		probeError: '',
+		probeCode: '',
+		probeAt: 0,
+	}
+}
+
 export function isFull(links: FamLinkRow[]): boolean {
 	return links.length >= MAX_LINKS
 }
@@ -170,6 +196,7 @@ export function isFull(links: FamLinkRow[]): boolean {
 export function addRow(links: FamLinkRow[], row: FamLinkRow): FamAddResult {
 	if (row.kind === 'ego-cli' && hasCliLink(links)) return { links, code: 'ego-cli-already-exists' }
 	if (row.kind === 'lightpanda' && hasLpLink(links)) return { links, code: 'lightpanda-already-exists' }
+	if (row.kind === 'tabbit-cli' && hasTabbitLink(links)) return { links, code: 'tabbit-cli-already-exists' }
 	if (links.length >= MAX_LINKS) return { links, code: 'link-limit-reached' }
 	if (row.kind === 'cdp' && !isValidEndpoint(row.endpoint)) return { links, code: 'unusable-row' }
 	return { links: links.concat([row]) }

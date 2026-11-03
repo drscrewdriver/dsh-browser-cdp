@@ -33,8 +33,8 @@ const WORKER_BIN = fileURLToPath(new URL('../bin/cdp-cast-worker.mjs', import.me
 // and no resolved endpoint simply means "no remote attach" (the worker then
 // behaves exactly as it did before R1).
 let attachWsUrl: string | null = null
-/** Lightpanda backend — engine of the attached endpoint, published next to it. */
-let attachEngine: 'chrome' | 'lightpanda' | 'unknown' | null = null
+/** Engine of the attached endpoint, published next to it. */
+let attachEngine: 'chrome' | 'lightpanda' | 'tabbit' | 'unknown' | null = null
 /** Logger captured in initCastServer so module-level helpers can report. */
 let castLogger: { info?: (message: string) => void; warn?: (message: string) => void } | undefined
 /**
@@ -62,7 +62,7 @@ export function getCliPollStatus(): { running: boolean; lastFrameAgeMs: number |
  * The engine rides along so a spawned worker gets its capability projection
  * via env (`BCDP_CDP_ENGINE`) instead of re-deriving it.
  */
-export function setAttachEndpoint(wsUrl: string | null, engine: 'chrome' | 'lightpanda' | 'unknown' | null = null): boolean {
+export function setAttachEndpoint(wsUrl: string | null, engine: 'chrome' | 'lightpanda' | 'tabbit' | 'unknown' | null = null): boolean {
   const next = wsUrl && wsUrl !== '' ? wsUrl : null
   const nextEngine = next === null ? null : engine
   if (next === attachWsUrl && nextEngine === attachEngine) return false
@@ -77,7 +77,7 @@ export function getAttachEndpoint(): string | null {
 }
 
 /** The engine of the attached endpoint (null = none attached). */
-export function getAttachEngine(): 'chrome' | 'lightpanda' | 'unknown' | null {
+export function getAttachEngine(): 'chrome' | 'lightpanda' | 'tabbit' | 'unknown' | null {
   return attachEngine
 }
 
@@ -194,11 +194,15 @@ export function markEgoToolCall(sessionId?: string): void {
  * Push one CLI-captured frame into the live watch-panel stream. In the degraded
  * ego-cli mode there is no screencast worker to emit `spaces`/`frame` events, so
  * the poller is their only source: we broadcast a synthetic single-space `spaces`
- * event (tab bar + active page) followed by a `frame` event (the PNG) to every
+ * event (tab bar + active page) followed by a `frame` event (the image) to every
  * connected client. The client's existing SSE handlers render both, so the panel
  * updates the instant a frame lands — no client polling, no chicken/egg.
+ *
+ * `fmt` names the image encoding: the client builds `data:image/<fmt>;base64,…`,
+ * so a JPEG frame MUST say `jpeg` or the panel renders garbage. Default `png`
+ * keeps the ego-cli poller (which captures PNG) unchanged.
  */
-export function broadcastCliFrame(frame: { png: Buffer; url: string; title: string; seq: number; updatedAt: number }): void {
+export function broadcastCliFrame(frame: { png: Buffer; url: string; title: string; seq: number; updatedAt: number; fmt?: 'png' | 'jpeg' }): void {
   if (sseClients.size === 0) return
   const synthetic = [{
     targetId: CLI_FRAME_TARGET_ID,
@@ -208,7 +212,7 @@ export function broadcastCliFrame(frame: { png: Buffer; url: string; title: stri
     lastActive: frame.updatedAt,
   }]
   const spacesFrame = `event: spaces\ndata: ${JSON.stringify(synthetic)}\n\n`
-  const framePayload = { targetId: CLI_FRAME_TARGET_ID, data: frame.png.toString('base64'), fmt: 'png', ts: frame.updatedAt }
+  const framePayload = { targetId: CLI_FRAME_TARGET_ID, data: frame.png.toString('base64'), fmt: frame.fmt ?? 'png', ts: frame.updatedAt }
   const frameEvent = `event: frame\ndata: ${JSON.stringify(framePayload)}\n\n`
   for (const res of sseClients) {
     try {

@@ -118,7 +118,7 @@ export interface EgoContext {
  * (enforced in `sanitizeLinks` / `upsertLink` / the panel). Array order is the
  * priority order and is unchanged by this widening.
  */
-export type BrowserLinkKind = 'cdp' | 'ego-cli' | 'lightpanda'
+export type BrowserLinkKind = 'cdp' | 'ego-cli' | 'lightpanda' | 'tabbit-cli'
 
 /** Fields every sequence entry shares. */
 export interface LinkBase {
@@ -135,8 +135,8 @@ export interface LinkBase {
   probeError?: string
   probeCode?: string
   probeAt?: number
-  /** Lightpanda backend — engine recognized from the last successful probe (`/json/version` `Browser` field). Absent on pre-Lightpanda rows → read as `'unknown'`. */
-  probeEngine?: 'chrome' | 'lightpanda' | 'unknown'
+  /** Engine recognized from the last successful probe (`/json/version` `Browser` field). Absent on pre-Lightpanda rows → read as `'unknown'`. `'tabbit'` is set explicitly for tabbit-cli links (not detected from Browser string). */
+  probeEngine?: 'chrome' | 'lightpanda' | 'tabbit' | 'unknown'
 }
 
 /** `kind: 'cdp'` — exactly what R1 shipped. */
@@ -178,8 +178,19 @@ export interface LightpandaLink extends LinkBase {
   servePath: string
 }
 
+/**
+ * `kind: 'tabbit-cli'` — the Tabbit browser CLI backend (cdp-tabbit-bridge).
+ * Same local-only singleton rule as ego-cli; the plugin drives Tabbit via
+ * `tabbit-cli nodejs` (Playwright execution) rather than raw CDP.
+ */
+export interface TabbitCliLink extends LinkBase {
+  kind: 'tabbit-cli'
+  /** '' = auto-resolve (LOCALAPPDATA\Tabbit\... → PATH → bundled). */
+  cliPath: string
+}
+
 /** One slot of the user's ordered connection sequence. */
-export type BrowserLink = CdpLink | EgoCliLink | LightpandaLink
+export type BrowserLink = CdpLink | EgoCliLink | LightpandaLink | TabbitCliLink
 
 /** @deprecated R7 renamed this to `CdpLink`; kept so R1-era imports still resolve. */
 export type CdpTarget = CdpLink

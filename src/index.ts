@@ -30,8 +30,9 @@
  *   EGO_HELP_INDEX / HUMAN_CHECK_PROBE : 工具索引文案 / 人机验证探针
  * 加工具：�?registerActionTools �?reg(t({...}))，并同步 EGO_HELP_INDEX，跑 npm run build�? */
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import { existsSync, readdirSync } from 'node:fs'
-import { homedir } from 'node:os'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { homedir, tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { importLoginCookies } from './login-import.ts'
 import { initCastServer, markEgoToolCall, getLastEgoActivity, onEgoActivity, setAttachEndpoint, recycleWorker, getCliPollStatus, getAttachEndpoint, broadcastCliFrame } from './cast-server.ts'
@@ -58,8 +59,26 @@ import {
   type EffectiveLink,
   EGO_CLI_KIND,
   LP_KIND,
+  TABBIT_CLI_KIND,
 } from './cdp-targets.ts'
 import { createSubprocessCliIo, mergeCliOutput, resolveCliBinary, spawnArgvFor, type SpawnShape } from './cdp/cli-link.ts'
+import {
+  resolveTabbitCli,
+  runTabbitSnippet,
+  pollTabbitPending,
+  tabbitCreateTask,
+  tabbitFinishTask,
+  tabbitListTabs,
+  tabbitDiagnose,
+  buildNavigateSnippet,
+  buildObserveSnippet,
+  buildClickSnippet,
+  buildFillSnippet,
+  buildScreenshotSnippet,
+  buildFrameCaptureSnippet,
+  translateLocator,
+  type TabbitTab,
+} from './cdp/tabbit-cli-link.ts'
 import { assembleSystemOneBody, buildJudgeRuntime, describeJudge, sendJudge } from './jev/client.ts'
 import { makeJudgeEffects } from './jev/effects.ts'
 import { runAttempt } from './jev/attempt.ts'
@@ -172,7 +191,13 @@ export function createActiveSpaceTracker(defaultSpace: string | number = DEFAULT
  * edit is reflected on the NEXT freshly-created slot.
  */
 export interface SessionSpaceTracker extends ActiveSpaceTracker {
-  setCurrentSession(id: string | undefined): void
+  /**
+   * Set the active session for the current tool call. The optional `linkScope`
+   * parameter (P0-1, Tabbit bridge) isolates slot state per link so switching
+   * between ego-cli / tabbit-cli / cdp does not leak space state across backends.
+   * When omitted, behaviour is identical to the pre-1.8.x single-scope model.
+   */
+  setCurrentSession(id: string | undefined, linkScope?: string): void
   currentSession(): string | undefined
   /**
    * The active space of the most-recently-touched REAL (non-global) session,
@@ -252,12 +277,21 @@ export function createSessionSpaceTracker(
   // session slot — without this it fell back to the `__global__` slot and
   // registered/screenshotted the shared `default` space instead of the agent's
   // own `dsh-agent-<sid8>` space. This tracks where the agent actually works.
+  let linkScope: string = ''  // P0-1: active link id for cross-backend slot isolation
   let lastRealKey: string | null = null
-  const noteReal = (): void => { if (sessionKey !== GLOBAL_SESSION_KEY) lastRealKey = sessionKey }
+  /**
+   * Compose the full slot key. When linkScope is '' (legacy / single-backend),
+   * the key equals sessionKey so all pre-existing behaviour is preserved.
+   */
+  const composeKey = (): string => linkScope ? `${sessionKey}\x00${linkScope}` : sessionKey
+  const noteReal = (): void => { if (sessionKey !== GLOBAL_SESSION_KEY) lastRealKey = composeKey() }
   const slotOf = (key: string): Slot => {
     let s = slots.get(key)
     if (!s) {
-      const def = defaultNameFor(key)
+      // Strip linkScope from the key before naming, so deriveSlotDefaultName
+      // / sessionSpaceToken always receives the pure session id.
+      const bareSession = key.split('\x00')[0]!
+      const def = defaultNameFor(bareSession)
       s = { activeSpace: def, activeName: typeof def === 'string' ? def : null }
       slots.set(key, s)
     }
@@ -267,17 +301,18 @@ export function createSessionSpaceTracker(
   // bounded, so retention (no eviction) is intentional �?a WeakMap over string
   // keys is impossible and a LRU would drop a paused agent's remembered space.
   const withSlot = (fn: (s: Slot, def: string | number) => void): void => {
-    const s = slotOf(sessionKey)
+    const s = slotOf(composeKey())
     fn(s, defaultNameFor(sessionKey))
   }
   return {
-    setCurrentSession: (id) => {
+    setCurrentSession: (id, newLinkScope) => {
       session = id
       sessionKey = id ?? GLOBAL_SESSION_KEY
+      if (newLinkScope !== undefined) linkScope = newLinkScope
       noteReal()
     },
     currentSession: () => session,
-    current: () => slotOf(sessionKey).activeSpace,
+    current: () => slotOf(composeKey()).activeSpace,
     lastActiveSpace: () => (lastRealKey === null ? null : slotOf(lastRealKey).activeSpace),
     opened: (args, result) => {
       noteReal()
@@ -1107,6 +1142,12 @@ export function buildEgoToolArgv(
 }
 
 async function runEgoScript(subprocess: SubprocessService, script: string, exec: ExecLike, cfg: EgoRuntimeConfig, graceOverrideMs?: number): Promise<WarmupResult> {
+  // HARD GUARD: if tabbit-cli is the active link, never spawn ego runtime.
+  // This prevents Chrome launch via any code path (worker, probe, frame poller).
+  const eff = resolveEffectiveLink(cfg.links, cfg.activeTargetId)
+  if (eff?.link.kind === TABBIT_CLI_KIND) {
+    return { ok: false, error: 'tabbit-cli is active: ego runtime launch blocked (no Chrome fallback)', stdout: '', stderr: '' }
+  }
   let handle
   try {
     // R1 �?an `ego-cli` link that opted into `useSdkPath` must get the same
@@ -1326,6 +1367,174 @@ interface EgoToolOptions {
   gate?: (args: Record<string, unknown>) => string | null
 }
 
+/**
+ * Tabbit tab inventory cache (module-level, written by 3s poller, read by tool handlers).
+ * @internal
+ */
+const _tabbitTabCache: { tabs: TabbitTab[]; total: number; complete: boolean; updatedAt: number } = { tabs: [], total: 0, complete: false, updatedAt: 0 }
+
+/**
+ * The last tab ID the agent actively operated on (set by navigate/acquire).
+ * The frame poller uses this to screenshot the correct page.
+ * @internal
+ */
+let _tabbitLastActiveTabId: number | null = null
+/**
+ * The task name used by the last tool call (frame poller must reuse it to access owned tabs).
+ * @internal
+ */
+let _tabbitLastTaskName: string = ''
+
+/**
+ * Tabbit backend dispatcher: when the active link is tabbit-cli, route the tool
+ * call through tabbit-cli nodejs instead of the ego SDK subprocess path.
+ * Returns {ok, ...data} matching toolPayload contract, or null to fall through
+ * to the ego path (e.g. non-tabbit links, unsupported tools).
+ */
+async function tryTabbitExecute(
+  ctx: EgoContext,
+  cfg: EgoRuntimeConfig,
+  toolName: string,
+  args: Record<string, unknown>,
+  taskName: string,
+): Promise<unknown | null> {
+  const { effective } = effectiveChannel(cfg)
+  if (!effective || effective.link.kind !== TABBIT_CLI_KIND) return null
+  const cli = resolveTabbitCli((effective.link as any).cliPath)
+  if (!cli.found) return { ok: false, text: `tabbit-cli not found: ${cli.error}` }
+  const sub = ctx.subprocess
+  // Record task name for frame poller (must reuse same task to access owned tabs).
+  _tabbitLastTaskName = taskName
+  const reqId = `${toolName}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+  // Every run reports the tab(s) it acquired. Remember the last one so the frame
+  // poller screenshots THAT page instead of the task's default about:blank.
+  const trackRun = (receipt: { tabIds?: number[] }): void => {
+    const ids = receipt.tabIds
+    if (ids && ids.length > 0) _tabbitLastActiveTabId = ids[ids.length - 1]!
+  }
+
+  switch (toolName) {
+    case 'bcdp_status': {
+      // Report tabbit backend status: try diagnose (gives browser time to launch)
+      const diag = await tabbitDiagnose(sub, cli.cliPath)
+      return { ok: diag.reachable, available: diag.reachable, backend: 'tabbit-cli', raw: diag.raw.slice(0, 500), path: cli.cliPath }
+    }
+    case 'bcdp_help': {
+      return { ok: true, text: `Tabbit backend active (${cli.cliPath}).\nSupported tools: bcdp_space, bcdp_navigate, bcdp_snapshot, bcdp_click, bcdp_fill, bcdp_screenshot, bcdp_tab op=list.\nUnsupported tools will return errors (no ego fallback).`, backend: 'tabbit-cli' }
+    }
+    case 'bcdp_doctor': {
+      const diag = await tabbitDiagnose(sub, cli.cliPath)
+      return { ok: true, text: `backend: tabbit-cli\ncliPath: ${cli.cliPath}\nreachable: ${diag.reachable}\nraw: ${diag.raw.slice(0, 300)}`, backend: 'tabbit-cli' }
+    }
+    case 'bcdp_space': {
+      const op = str(args.op, 'open')
+      if (op === 'open') {
+        const inv = await tabbitCreateTask(sub, cli.cliPath, taskName)
+        return { ok: true, ...inv, backend: 'tabbit-cli' }
+      }
+      if (op === 'close') {
+        await tabbitFinishTask(sub, cli.cliPath, taskName, Boolean(args.discard))
+        return { ok: true, released: true, backend: 'tabbit-cli' }
+      }
+      if (op === 'list') {
+        const diag = await tabbitDiagnose(sub, cli.cliPath)
+        return { ok: diag.reachable, raw: diag.raw, backend: 'tabbit-cli' }
+      }
+      return { ok: false, text: `bcdp_space: unsupported op=${op} on tabbit backend` }
+    }
+    case 'bcdp_tab': {
+      const op = str(args.op, 'list')
+      if (op === 'list') {
+        // Read from 3s poller cache if fresh (<5s), else live-fetch.
+        if (Date.now() - _tabbitTabCache.updatedAt < 5000 && _tabbitTabCache.tabs.length > 0) {
+          return { ok: true, tabs: _tabbitTabCache.tabs, total: _tabbitTabCache.total, complete: _tabbitTabCache.complete, cached: true, backend: 'tabbit-cli' }
+        }
+        const stateArg = str(args.state, '') as '' | 'available' | 'owned' | 'claimed'
+        const result = await tabbitListTabs(sub, cli.cliPath, taskName, stateArg || undefined)
+        return { ok: true, ...result, backend: 'tabbit-cli' }
+      }
+      return { ok: false, text: `bcdp_tab: op=${op} not yet supported on tabbit backend` }
+    }
+    case 'bcdp_navigate': {
+      const url = str(args.url, '')
+      if (url === '') return { ok: false, text: 'bcdp_navigate: url is required' }
+      const waitUntil = str(args.waitUntil, 'domcontentloaded')
+      const js = buildNavigateSnippet(url, waitUntil)
+      const navTabId = typeof args.tab === 'number' ? args.tab : undefined
+      const { receipt } = await runTabbitSnippet(sub, js, { cliPath: cli.cliPath, taskName, requestId: reqId, timeoutMs: 120000, tabId: navTabId })
+      if (receipt.ok) {
+        // Track the tab this navigate actually ran against (frame poller target).
+        if (navTabId) _tabbitLastActiveTabId = navTabId
+        trackRun(receipt)
+        return { ok: true, ...receipt.data as object, backend: 'tabbit-playwright' }
+      }
+      if (receipt.status === 'queued' || receipt.status === 'running') {
+        const final = await pollTabbitPending(sub, { cliPath: cli.cliPath, taskName, requestId: reqId })
+        if (final.ok) {
+          trackRun(final)
+          return { ok: true, ...final.data as object, backend: 'tabbit-playwright' }
+        }
+        return { ok: false, text: `navigate pending then ${final.status}: ${final.error?.message ?? ''}` }
+      }
+      return { ok: false, text: receipt.error?.message ?? 'navigation failed' }
+    }
+    case 'bcdp_snapshot': {
+      const maxChars = typeof args.maxChars === 'number' ? args.maxChars : 8000
+      const js = buildObserveSnippet(maxChars)
+      const { receipt } = await runTabbitSnippet(sub, js, { cliPath: cli.cliPath, taskName, requestId: reqId })
+      if (receipt.ok) { trackRun(receipt); return { ok: true, text: String(receipt.data ?? ''), format: 'plaintext', backend: 'tabbit-playwright' } }
+      return { ok: false, text: receipt.error?.message ?? 'observe failed' }
+    }
+    case 'bcdp_click': {
+      const selector = str(args.selector, str(args.loc, ''))
+      const locExpr = translateLocator(selector)
+      if (!locExpr) return { ok: false, text: `bcdp_click: cannot translate selector "${selector}" for tabbit backend` }
+      const js = buildClickSnippet(locExpr)
+      const { receipt } = await runTabbitSnippet(sub, js, { cliPath: cli.cliPath, taskName, requestId: reqId })
+      if (receipt.ok) { trackRun(receipt); return { ok: true, ...receipt.data as object, backend: 'tabbit-playwright' } }
+      return { ok: false, text: receipt.error?.message ?? 'click failed' }
+    }
+    case 'bcdp_fill': {
+      const selector = str(args.selector, str(args.loc, ''))
+      const value = str(args.value, '')
+      const locExpr = translateLocator(selector)
+      if (!locExpr) return { ok: false, text: `bcdp_fill: cannot translate selector "${selector}" for tabbit backend` }
+      const js = buildFillSnippet(locExpr, value)
+      const { receipt } = await runTabbitSnippet(sub, js, { cliPath: cli.cliPath, taskName, requestId: reqId })
+      if (receipt.ok) { trackRun(receipt); return { ok: true, ...receipt.data as object, backend: 'tabbit-playwright' } }
+      return { ok: false, text: receipt.error?.message ?? 'fill failed' }
+    }
+    case 'bcdp_screenshot': {
+      // The CLI writes the PNG to a scratch path and returns that path; a "path"
+      // argument from the caller becomes that scratch file. Base64 is read back
+      // here (the receipt cannot carry it — see buildScreenshotSnippet).
+      const requested = str(args.path, '')
+      const shotPath = requested !== '' ? requested : join(tmpdir(), `dsh-browser-cdp-shot-${Date.now()}.png`)
+      const js = buildScreenshotSnippet(shotPath)
+      const { receipt } = await runTabbitSnippet(sub, js, { cliPath: cli.cliPath, taskName, requestId: reqId, timeoutMs: 120000 })
+      if (receipt.ok) {
+        trackRun(receipt)
+        const d = receipt.data as { path?: string; bytes?: number; url?: string; title?: string } | undefined
+        if (typeof d?.path !== 'string') {
+          return { ok: false, text: `bcdp_screenshot: receipt carried no path (status=${receipt.status}, data=${JSON.stringify(d ?? null).slice(0, 160)})` }
+        }
+        let base64 = ''
+        try {
+          base64 = readFileSync(d.path).toString('base64')
+        } catch (err) {
+          return { ok: false, text: `bcdp_screenshot: cannot read ${d.path}: ${String((err as Error)?.message ?? err)}` }
+        }
+        return { ok: true, path: d.path, base64, bytes: d.bytes, url: d.url, title: d.title, backend: 'tabbit-playwright' }
+      }
+      return { ok: false, text: receipt.error?.message ?? 'screenshot failed' }
+    }
+    default:
+      // Tabbit is the active backend: do NOT fall through to ego path.
+      // Unsupported tools return a clear error instead of silently driving Chrome.
+      return { ok: false, text: `bcdp tool "${toolName}" is not yet supported on tabbit-cli backend. Supported: space, navigate, snapshot, click, fill, screenshot, tab list.` }
+  }
+}
+
 function defineEgoTool(ctx: EgoContext, cfg: EgoRuntimeConfig, opts: EgoToolOptions): ToolHandle {
   return defineTool({
     name: opts.name,
@@ -1343,13 +1552,25 @@ function defineEgoTool(ctx: EgoContext, cfg: EgoRuntimeConfig, opts: EgoToolOpti
         // /api/bcdp/spaces; the LivePreviewController transitions on 0 �?>0 and
         // calls betterSidebar.openTab(). Idempotent: the client's transition
         // guard means only the first call per session opens the Tab.
-        cfg.spaceTracker.setCurrentSession(callingSessionId(exec)); markEgoToolCall(callingSessionId(exec))
+        cfg.spaceTracker.setCurrentSession(callingSessionId(exec), resolveEffectiveLink(cfg.links, cfg.activeTargetId)?.link.id ?? ''); markEgoToolCall(callingSessionId(exec))
         // Capability gate: a tool whose dependency face the attached engine
         // cannot satisfy fails HERE �?structured and immediate �?instead of
         // hanging inside the runtime until a timeout.
         if (typeof opts.gate === 'function') {
           const blocked = opts.gate(args)
           if (blocked !== null && blocked !== '') return { ok: false, text: blocked }
+        }
+        // P0-3 / Phase 3: Tabbit backend dispatch — HARD LOCK.
+        // If the activated link is tabbit-cli, NEVER fall through to ego/Chrome.
+        {
+          const effLink = resolveEffectiveLink(cfg.links, cfg.activeTargetId)
+          if (effLink?.link.kind === TABBIT_CLI_KIND) {
+            const tabName = `dsh-${sessionSpaceToken(callingSessionId(exec) ?? '')}`
+            const tabResult = await tryTabbitExecute(ctx, cfg, opts.name, args, tabName)
+            // tabResult is always non-null when tabbit is active (default case returns error).
+            // If somehow null, return explicit block rather than leak to ego.
+            return tabResult ?? { ok: false, text: `tabbit-cli is the active backend but tool "${opts.name}" dispatch failed unexpectedly. Not falling back to ego.` }
+          }
         }
         // Stale-space recovery (browser restart wiped the space table) is
         // handled inside runWithStaleSpaceRetry; the cold-start retry is one
@@ -1758,6 +1979,81 @@ bridge.onChange(() => tiers.reapply())
   })
   ctx.effect?.(() => () => cliPoller.stop())
 
+  // Tabbit tab inventory poller: 3s interval, only active when tabbit-cli is the effective link.
+  // Writes to module-level _tabbitTabCache for instant reads by tool handlers.
+  const tabbitTabTimer = setInterval(async () => {
+    const eff = resolveEffectiveLink(cfg.links, cfg.activeTargetId)
+    if (eff?.link.kind !== TABBIT_CLI_KIND) return
+    const cli = resolveTabbitCli((eff.link as any).cliPath)
+    if (!cli.found) return
+    try {
+      const taskName = `dsh-${sessionSpaceToken('poll')}`
+      const result = await tabbitListTabs(ctx.subprocess, cli.cliPath, taskName)
+      Object.assign(_tabbitTabCache, result, { updatedAt: Date.now() })
+    } catch { /* best-effort, never crash the timer */ }
+  }, 3000)
+  ctx.effect?.(() => () => clearInterval(tabbitTabTimer))
+
+  // Tabbit frame poller: captures screenshot of the agent's active tab every 3s for the observation window.
+  let tabbitFrameSeq = 0
+  // One tick in flight at a time: a capture of a heavy page takes ~2.6 s while
+  // the interval is 3 s, so without this guard ticks stack up and each one
+  // spawns another tabbit-cli process against the same tab.
+  let tabbitFrameInFlight = false
+  // Scratch file the CLI writes each frame into. Host and CLI share one
+  // filesystem, so the receipt only carries this path — see
+  // buildFrameCaptureSnippet for why the bytes themselves cannot travel.
+  const tabbitFramePath = join(tmpdir(), `dsh-browser-cdp-frame-${process.pid}.jpg`)
+  const tabbitFrameTimer = setInterval(async () => {
+    const eff = resolveEffectiveLink(cfg.links, cfg.activeTargetId)
+    if (eff?.link.kind !== TABBIT_CLI_KIND) return
+    const cli = resolveTabbitCli((eff.link as any).cliPath)
+    if (!cli.found) return
+    if (egoLockBusy()) return
+    // Must use the SAME task name as the tool call (Tabbit ownership is per-task).
+    if (!_tabbitLastTaskName) return // No task yet, skip until first tool call establishes one.
+    if (tabbitFrameInFlight) return
+    tabbitFrameInFlight = true
+    try {
+      const reqId = `frame-${Date.now()}`
+      const js = buildFrameCaptureSnippet(tabbitFramePath)
+      // `--tab` is REQUIRED. Without it the CLI runs the snippet against the
+      // task's DEFAULT page, which is a fresh about:blank: the panel gets
+      // nothing and the capture burns the full hard deadline. Target the tab a
+      // tool actually drove, else whatever the inventory flags as active.
+      const target = _tabbitLastActiveTabId ?? _tabbitTabCache.tabs.find((t) => t.active === true)?.tabId
+      const { receipt } = await runTabbitSnippet(ctx.subprocess, js, {
+        cliPath: cli.cliPath,
+        taskName: _tabbitLastTaskName,
+        requestId: reqId,
+        timeoutMs: 15000,
+        ...(typeof target === 'number' ? { tabId: target } : {}),
+      })
+      const data = receipt.data as { path?: string; url?: string; title?: string; skipped?: string } | undefined
+      if (receipt.ok && data?.skipped === 'blank') return // blank page: nothing to show
+      if (receipt.ok && typeof data?.path === 'string') {
+        const png = readFileSync(data.path)
+        tabbitFrameSeq++
+        broadcastCliFrame({ png, url: data.url ?? '', title: data.title ?? '', seq: tabbitFrameSeq, updatedAt: Date.now(), fmt: 'jpeg' })
+        return
+      }
+      // `ok` without a path means the receipt value was demoted to a `resource`
+      // (no `value` field). That is the silent failure that kept the panel empty
+      // while every capture still reported success — never swallow it.
+      if (receipt.ok) {
+        ctx.logger?.warn?.(`dsh-browser-cdp: tabbit frame receipt carried no path (status=${receipt.status}, data=${JSON.stringify(data ?? null).slice(0, 120)})`)
+      } else if (receipt.status !== 'queued' && receipt.status !== 'running') {
+        ctx.logger?.warn?.(`dsh-browser-cdp: tabbit frame capture failed: ${receipt.error?.message ?? receipt.status}`)
+      }
+    } catch (err) {
+      ctx.logger?.warn?.(`dsh-browser-cdp: tabbit frame poller error: ${String((err as Error)?.message ?? err)}`)
+    } finally {
+      tabbitFrameInFlight = false
+    }
+  }, 3000)
+  ctx.effect?.(() => () => clearInterval(tabbitFrameTimer))
+  ctx.effect?.(() => () => clearInterval(tabbitFrameTimer))
+
   const triggerCdpRefresh = (() => {
     let inFlight = false
     let pending = false
@@ -1950,9 +2246,10 @@ bridge.onChange(() => tiers.reapply())
           // the user's own daily instance, not an agent-owned one. The command
           // is currently an unknown no-op on the native CLI, but "fixing" it
           // would kill the user's browser �?an explicit non-goal, not a TODO.
-          if (effectiveChannel(cfg).effective?.link.kind === EGO_CLI_KIND) {
+          const linkKind = effectiveChannel(cfg).effective?.link.kind
+          if (linkKind === EGO_CLI_KIND || linkKind === TABBIT_CLI_KIND) {
             reapedFor = last
-            ctx.logger?.info?.('dsh-browser-cdp: idle reaper skipped: ego-cli owns the user\'s browser (never --stop it)')
+            ctx.logger?.info?.(`dsh-browser-cdp: idle reaper skipped: ${linkKind} owns the user\'s browser (never --stop it)`)
             return
           }
           // T2.14 �?a locally launched managed browser reaps by pid, not CLI.
@@ -2016,8 +2313,8 @@ bridge.onChange(() => tiers.reapply())
     try {
       // R4/F3 �?teardown must not stop an `ego-cli` link's browser either: it
       // is the user's own ego lite instance and outlives this plugin.
-      if (effectiveChannel(cfg).effective?.link.kind === EGO_CLI_KIND) {
-        ctx.logger?.info?.('dsh-browser-cdp: teardown skipped --stop: ego-cli owns the user\'s browser')
+      if (effectiveChannel(cfg).effective?.link.kind === EGO_CLI_KIND || effectiveChannel(cfg).effective?.link.kind === TABBIT_CLI_KIND) {
+        ctx.logger?.info?.('dsh-browser-cdp: teardown skipped --stop: user-owned browser (ego-cli/tabbit-cli)')
         return
       }
       const handle = ctx.subprocess.spawn({
@@ -3146,10 +3443,14 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
       // Lightpanda backend �?the engine never fires Page.downloadWillBegin/
       // downloadProgress, so `page.waitForEvent('download')` would just hang
       // until the timeout. Fail fast with the engine-aware reason instead.
-      gate: () =>
-        defaultAttachCache.get().engine === 'lightpanda'
-          ? 'engine-unsupported: the attached browser is Lightpanda, which has no Page download events �?bcdp_download cannot capture files on this engine. Trigger the download another way (e.g. fetch() the URL in-page and return the bytes).'
-          : null,
+      gate: () => {
+        const eng = defaultAttachCache.get().engine
+        if (eng === 'lightpanda')
+          return 'engine-unsupported: Lightpanda has no Page download events, bcdp_download cannot capture files. Use fetch() in-page instead.'
+        if (eng === 'tabbit')
+          return 'engine-unsupported: Tabbit CLI mode does not expose Playwright download events. Use page.fetch() in bcdp_script to download via browser network.'
+        return null
+      },
       buildScript: (args) => {
         const sel = str(args.triggerSelector, '')
         const script = str(args.triggerScript, '')
@@ -3301,7 +3602,7 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
       timeoutMs: 15_000,
       execute: async (args: Record<string, unknown>, exec: ToolExec) =>
         withEgoLock(async () => {
-          cfg.spaceTracker.setCurrentSession(callingSessionId(exec)); markEgoToolCall(callingSessionId(exec))
+          cfg.spaceTracker.setCurrentSession(callingSessionId(exec), resolveEffectiveLink(cfg.links, cfg.activeTargetId)?.link.id ?? ''); markEgoToolCall(callingSessionId(exec))
           const result = await runWithStaleSpaceRetry(
             ctx,
             cfg,
@@ -3594,7 +3895,7 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
         },
         timeoutMs: TOOL_TIMEOUT_MS,
         execute: async (args: Record<string, unknown>, exec: ToolExec) => {
-          cfg.spaceTracker.setCurrentSession(callingSessionId(exec)); markEgoToolCall(callingSessionId(exec))
+          cfg.spaceTracker.setCurrentSession(callingSessionId(exec), resolveEffectiveLink(cfg.links, cfg.activeTargetId)?.link.id ?? ''); markEgoToolCall(callingSessionId(exec))
           // Honor the documented per-run timeout override (integer ms). Falls
           // back to the plugin's default grace when absent/invalid.
           const timeoutMs =
@@ -3758,7 +4059,7 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
       },
       timeoutMs: 10_000,
       execute: async (_args: Record<string, unknown>, exec: ToolExec) => {
-        cfg.spaceTracker.setCurrentSession(callingSessionId(exec)); markEgoToolCall(callingSessionId(exec))
+        cfg.spaceTracker.setCurrentSession(callingSessionId(exec), resolveEffectiveLink(cfg.links, cfg.activeTargetId)?.link.id ?? ''); markEgoToolCall(callingSessionId(exec))
         const judge = judgeCfg()
         const runtime = judgeRuntimeOf()
         const { attach } = effectiveChannel(cfg)
@@ -3829,7 +4130,7 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
       },
       timeoutMs: 60_000,
       execute: async (args: Record<string, unknown>, exec: ToolExec) => {
-        cfg.spaceTracker.setCurrentSession(callingSessionId(exec)); markEgoToolCall(callingSessionId(exec))
+        cfg.spaceTracker.setCurrentSession(callingSessionId(exec), resolveEffectiveLink(cfg.links, cfg.activeTargetId)?.link.id ?? ''); markEgoToolCall(callingSessionId(exec))
         const blocked = attachGate()
         if (blocked !== '') return { ok: false, text: blocked }
         const goal = str(args.goal, '')
@@ -3954,7 +4255,7 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
       },
       timeoutMs: 60_000,
       execute: async (args: Record<string, unknown>, exec: ToolExec) => {
-        cfg.spaceTracker.setCurrentSession(callingSessionId(exec)); markEgoToolCall(callingSessionId(exec))
+        cfg.spaceTracker.setCurrentSession(callingSessionId(exec), resolveEffectiveLink(cfg.links, cfg.activeTargetId)?.link.id ?? ''); markEgoToolCall(callingSessionId(exec))
         const blocked = attachGate()
         if (blocked !== '') return { ok: false, text: blocked }
         const judge = judgeCfg()
@@ -4032,7 +4333,7 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
       },
       timeoutMs: TOOL_TIMEOUT_MS,
       execute: async (args: Record<string, unknown>, exec: ToolExec) => {
-        cfg.spaceTracker.setCurrentSession(callingSessionId(exec)); markEgoToolCall(callingSessionId(exec))
+        cfg.spaceTracker.setCurrentSession(callingSessionId(exec), resolveEffectiveLink(cfg.links, cfg.activeTargetId)?.link.id ?? ''); markEgoToolCall(callingSessionId(exec))
         const blocked = attachGate()
         if (blocked !== '') return { ok: false, text: blocked }
         const goal = str(args.goal, '')
@@ -4107,7 +4408,7 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
       },
       timeoutMs: TOOL_TIMEOUT_MS,
       execute: async (args: Record<string, unknown>, exec: ToolExec) => {
-        cfg.spaceTracker.setCurrentSession(callingSessionId(exec)); markEgoToolCall(callingSessionId(exec))
+        cfg.spaceTracker.setCurrentSession(callingSessionId(exec), resolveEffectiveLink(cfg.links, cfg.activeTargetId)?.link.id ?? ''); markEgoToolCall(callingSessionId(exec))
         const blocked = attachGate()
         if (blocked !== '') return { ok: false, text: blocked }
         const url = str(args.url, '')

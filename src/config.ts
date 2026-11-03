@@ -99,7 +99,7 @@ export const Config = z.object({
       probeError: z.string(),
       probeCode: z.string(),
       probeAt: z.number(),
-      probeEngine: z.union(['chrome', 'lightpanda', 'unknown']),
+      probeEngine: z.union(['chrome', 'lightpanda', 'tabbit', 'unknown']),
     }),
     z.object({
       kind: z.string(),
@@ -114,7 +114,7 @@ export const Config = z.object({
       probeError: z.string(),
       probeCode: z.string(),
       probeAt: z.number(),
-      probeEngine: z.union(['chrome', 'lightpanda', 'unknown']),
+      probeEngine: z.union(['chrome', 'lightpanda', 'tabbit', 'unknown']),
     }),
     z.object({
       kind: z.string(),
@@ -128,7 +128,7 @@ export const Config = z.object({
       probeError: z.string(),
       probeCode: z.string(),
       probeAt: z.number(),
-      probeEngine: z.union(['chrome', 'lightpanda', 'unknown']),
+      probeEngine: z.union(['chrome', 'lightpanda', 'tabbit', 'unknown']),
     }),
   ])).description('Ordered connection sequence: CDP endpoints and (at most one) local ego CLI link. The ACTIVATED entry receives every bcdp_* call; if the activation points at a disabled or removed entry, the FIRST enabled link in this order takes over (logged and shown by bcdp_doctor). Order IS the priority order.').volatile(),
   activeTargetId: z.string().description('Id of the activated entry in links. Empty = nothing activated (no silent adoption). A disabled/removed entry here falls back to the first enabled link in order.').volatile(),
@@ -538,6 +538,6 @@ export function normalizeProbeState<T extends LinkBase>(link: T): T {
     probeAt: typeof link.probeAt === 'number' && Number.isFinite(link.probeAt) ? link.probeAt : 0,
     // Lightpanda backend: rows written before recognition carry no engine —
     // converge to 'unknown' (= full capabilities) instead of null-check ladders.
-    probeEngine: link.probeEngine === 'chrome' || link.probeEngine === 'lightpanda' ? link.probeEngine : 'unknown',
+    probeEngine: link.probeEngine === 'chrome' || link.probeEngine === 'lightpanda' || link.probeEngine === 'tabbit' ? link.probeEngine : 'unknown',
   }
 }

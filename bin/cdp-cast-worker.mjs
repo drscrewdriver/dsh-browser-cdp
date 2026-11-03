@@ -6300,7 +6300,9 @@ const FULL = {
 /**
 * The capability projection per engine. `chrome` / `unknown` → full
 * capabilities (bit-for-bit today's behavior); `lightpanda` → the analysis
-* (docs/plans/2026-10-04-lightpanda-backend-analysis.md §7) projection.
+* (docs/plans/2026-10-04-lightpanda-backend-analysis.md §7) projection;
+* `tabbit` → CLI-protocol limitations (no download events, no overlay pick,
+* no raw CDP screencast through the plugin's usual path).
 */
 function capabilitiesFor(engine) {
 	if (engine === "lightpanda") return {
@@ -6310,6 +6312,16 @@ function capabilitiesFor(engine) {
 		bindingCalled: false,
 		imageFormat: "png",
 		loadEvent: false,
+		downloadEvents: false,
+		browserClose: false
+	};
+	if (engine === "tabbit") return {
+		engine: "tabbit",
+		screencast: true,
+		overlay: false,
+		bindingCalled: false,
+		imageFormat: "jpeg",
+		loadEvent: true,
 		downloadEvents: false,
 		browserClose: false
 	};
@@ -6331,7 +6343,10 @@ const BCDP_CDP_ENGINE = "BCDP_CDP_ENGINE";
 * conservatively break a Chrome endpoint.
 */
 function capabilitiesFromEnvValue(value) {
-	return capabilitiesFor(value !== void 0 && value.trim() === "lightpanda" ? "lightpanda" : "unknown");
+	const v = (value ?? "").trim();
+	if (v === "lightpanda") return capabilitiesFor("lightpanda");
+	if (v === "tabbit") return capabilitiesFor("tabbit");
+	return capabilitiesFor("unknown");
 }
 
 //#endregion

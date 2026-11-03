@@ -172,6 +172,21 @@ export interface TabbitRunResult {
 }
 
 /**
+ * `--timeout-ms` accepted range, straight from the CLI's own rejection message:
+ *
+ *   "--timeout-ms must be from 60000 through 180000; the default is 60000, so
+ *    omit it unless the program needs longer"
+ *
+ * Anything shorter makes the CLI refuse the whole request with REQUEST_FAILED
+ * and never run the snippet. This is a hard contract, so it is enforced here
+ * once instead of at every call site — the 3 s frame poller used to pass 10 s /
+ * 15 s and therefore NEVER captured a frame, which is invisible because the
+ * rejection surfaces as an ordinary "failed" receipt rather than an exception.
+ */
+export const TABBIT_MIN_TIMEOUT_MS = 60000
+export const TABBIT_MAX_TIMEOUT_MS = 180000
+
+/**
  * Execute a Playwright JS snippet via tabbit-cli nodejs.
  * Writes JS code to stdin, collects stdout JSON receipt.
  */
@@ -181,7 +196,13 @@ export async function runTabbitSnippet(
   opts: TabbitRunOptions,
 ): Promise<TabbitRunResult> {
   const args = ['nodejs', '--task', opts.taskName, '--request-id', opts.requestId]
-  if (opts.timeoutMs) args.push('--timeout-ms', String(opts.timeoutMs))
+  // Only forward a timeout the CLI will accept; out-of-range is omitted so the
+  // CLI applies its own 60 s default. A sub-60 s deadline is expressed INSIDE
+  // the snippet (a Promise.race), not on the command line.
+  const timeout = opts.timeoutMs === undefined
+    ? undefined
+    : Math.min(TABBIT_MAX_TIMEOUT_MS, Math.max(TABBIT_MIN_TIMEOUT_MS, opts.timeoutMs))
+  if (timeout !== undefined) args.push('--timeout-ms', String(timeout))
   if (opts.tabId !== undefined) args.push('--tab', String(opts.tabId))
   if (opts.groupId !== undefined) args.push('--group', String(opts.groupId))
 
@@ -194,7 +215,7 @@ export async function runTabbitSnippet(
       stdout: { maxBytes: 4 * 1024 * 1024 },
       stderr: { maxBytes: 64 * 1024 },
     },
-    graceMs: (opts.timeoutMs ?? 60000) + 15000, // program timeout + grace
+    graceMs: (timeout ?? TABBIT_MIN_TIMEOUT_MS) + 15000, // program timeout + grace
   })
 
   const { exitCode } = await handle.done
@@ -365,7 +386,35 @@ export function buildFillSnippet(locatorExpr: string, value: string): string {
   return `await ${locatorExpr}.fill(${JSON.stringify(value)}); return {filled: true};`
 }
 
-export function buildScreenshotSnippet(outPath: string): string {
+/**
+ * In-snippet capture deadline (ms).
+ *
+ * `Page.captureScreenshot` is NOT reliably fast in this runtime: the same tab
+ * that answers in 132 ms can also never answer at all, and an unanswered send
+ * blocks the whole evaluation until the CLI's hard deadline, which takes the
+ * executor down and kills every other call in that task. A short `Promise.race`
+ * inside the snippet keeps a stuck capture from becoming a stuck task.
+ */
+export const TABBIT_CAPTURE_DEADLINE_MS = 8000
+
+/** The race-guarded capture expression shared by both snippet builders. */
+function captureWithDeadline(format: 'png' | 'jpeg', quality: number | undefined, deadlineMs: number): string[] {
+  const params = `{format: "${format}"${quality === undefined ? '' : `, quality: ${quality}`}, fromSurface: true}`
+  return [
+    `const c = await context.newCDPSession(page);`,
+    `let r = null, capErr = null;`,
+    `try {`,
+    `  r = await Promise.race([`,
+    `    c.send("Page.captureScreenshot", ${params}),`,
+    `    new Promise((_, reject) => setTimeout(() => reject(new Error("capture-deadline")), ${deadlineMs})),`,
+    `  ]);`,
+    `} catch (e) { capErr = String((e && e.message) || e); }`,
+    `try { await c.detach(); } catch {}`,
+    `if (capErr !== null || !r) return {skipped: "capture-timeout", error: capErr, url: page.url()};`,
+  ]
+}
+
+export function buildScreenshotSnippet(outPath: string, deadlineMs = TABBIT_CAPTURE_DEADLINE_MS): string {
   // Same demotion trap as the frame poller: a viewport PNG base64 exceeds
   // tabbit-cli's inline threshold, so the receipt comes back as a `resource`
   // ({type, resourceId, byteLength}) with NO `value` — which is why this tool
@@ -373,12 +422,10 @@ export function buildScreenshotSnippet(outPath: string): string {
   // return the path; the host reads it.
   //
   // `page.screenshot()` is deliberately NOT used: in this runtime it blocks on
-  // font loading and dies at its 30 s timeout (observed repeatedly on
-  // baidu.com). A page-scoped CDP session captures the same surface in ~0.1–2.6 s.
+  // font loading and dies at its 30 s timeout (observed repeatedly on baidu.com).
   const p = JSON.stringify(outPath)
   return [
-    `const c = await context.newCDPSession(page);`,
-    `let r; try { r = await c.send("Page.captureScreenshot", {format: "png", fromSurface: true}); } finally { try { await c.detach(); } catch {} }`,
+    ...captureWithDeadline('png', undefined, deadlineMs),
     `const buf = Buffer.from(r.data, "base64");`,
     `const fs = await import("node:fs");`,
     `fs.writeFileSync(${p}, buf);`,
@@ -408,13 +455,16 @@ export const TABBIT_FRAME_JPEG_QUALITY = 50
  * its hard deadline (observed: 60 s EVALUATION_TIMEOUT), and a blank frame tells
  * the panel nothing anyway.
  */
-export function buildFrameCaptureSnippet(outPath: string, quality = TABBIT_FRAME_JPEG_QUALITY): string {
+export function buildFrameCaptureSnippet(
+  outPath: string,
+  quality = TABBIT_FRAME_JPEG_QUALITY,
+  deadlineMs = TABBIT_CAPTURE_DEADLINE_MS,
+): string {
   const p = JSON.stringify(outPath)
   return [
     `const url = page.url();`,
     `if (!url || url === "about:blank") return {skipped: "blank", url: url || ""};`,
-    `const c = await context.newCDPSession(page);`,
-    `let r; try { r = await c.send("Page.captureScreenshot", {format: "jpeg", quality: ${quality}, fromSurface: true}); } finally { try { await c.detach(); } catch {} }`,
+    ...captureWithDeadline('jpeg', quality, deadlineMs),
     `const buf = Buffer.from(r.data, "base64");`,
     `const fs = await import("node:fs");`,
     `fs.writeFileSync(${p}, buf);`,

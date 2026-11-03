@@ -1514,7 +1514,11 @@ async function tryTabbitExecute(
       const { receipt } = await runTabbitSnippet(sub, js, { cliPath: cli.cliPath, taskName, requestId: reqId, timeoutMs: 120000 })
       if (receipt.ok) {
         trackRun(receipt)
-        const d = receipt.data as { path?: string; bytes?: number; url?: string; title?: string } | undefined
+        const d = receipt.data as { path?: string; bytes?: number; url?: string; title?: string; skipped?: string; error?: string } | undefined
+        // A stuck capture comes back as a `skipped` marker, never as a hung call.
+        if (d?.skipped !== undefined) {
+          return { ok: false, text: `bcdp_screenshot: capture did not complete (${d.skipped}${d.error ? `: ${d.error}` : ''}) on ${d.url ?? 'unknown page'}. The page may still be loading or the renderer is not producing frames.` }
+        }
         if (typeof d?.path !== 'string') {
           return { ok: false, text: `bcdp_screenshot: receipt carried no path (status=${receipt.status}, data=${JSON.stringify(d ?? null).slice(0, 160)})` }
         }
@@ -2000,6 +2004,9 @@ bridge.onChange(() => tiers.reapply())
   // the interval is 3 s, so without this guard ticks stack up and each one
   // spawns another tabbit-cli process against the same tab.
   let tabbitFrameInFlight = false
+  // Last skip reason logged, so a persistent skip (blank page / stuck capture)
+  // prints once instead of every 3 s.
+  let tabbitFrameSkipLogged = ''
   // Scratch file the CLI writes each frame into. Host and CLI share one
   // filesystem, so the receipt only carries this path — see
   // buildFrameCaptureSnippet for why the bytes themselves cannot travel.
@@ -2022,15 +2029,30 @@ bridge.onChange(() => tiers.reapply())
       // nothing and the capture burns the full hard deadline. Target the tab a
       // tool actually drove, else whatever the inventory flags as active.
       const target = _tabbitLastActiveTabId ?? _tabbitTabCache.tabs.find((t) => t.active === true)?.tabId
+      // NO `timeoutMs` here: the CLI rejects anything below 60000, and a 60 s
+      // poll window is meaningless for a 3 s cadence anyway. The short deadline
+      // lives inside the snippet (TABBIT_CAPTURE_DEADLINE_MS), so a stuck
+      // capture returns in ~8 s instead of holding the executor.
       const { receipt } = await runTabbitSnippet(ctx.subprocess, js, {
         cliPath: cli.cliPath,
         taskName: _tabbitLastTaskName,
         requestId: reqId,
-        timeoutMs: 15000,
         ...(typeof target === 'number' ? { tabId: target } : {}),
       })
-      const data = receipt.data as { path?: string; url?: string; title?: string; skipped?: string } | undefined
-      if (receipt.ok && data?.skipped === 'blank') return // blank page: nothing to show
+      const data = receipt.data as { path?: string; url?: string; title?: string; skipped?: string; error?: string } | undefined
+      // `skipped` covers both "page is blank" and "capture did not answer in
+      // time". Both are expected, neither is an error worth warning about every
+      // 3 s — log once per distinct reason so a genuinely stuck tab is visible
+      // without flooding the log.
+      if (receipt.ok && data?.skipped !== undefined) {
+        const key = `${data.skipped}:${data.error ?? ''}`
+        if (tabbitFrameSkipLogged !== key) {
+          tabbitFrameSkipLogged = key
+          ctx.logger?.info?.(`dsh-browser-cdp: tabbit frame skipped (${key}) url=${data.url ?? '?'}`)
+        }
+        return
+      }
+      tabbitFrameSkipLogged = ''
       if (receipt.ok && typeof data?.path === 'string') {
         const png = readFileSync(data.path)
         tabbitFrameSeq++

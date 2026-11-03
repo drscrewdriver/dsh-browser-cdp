@@ -3,7 +3,11 @@ import {
   buildFrameCaptureSnippet,
   buildScreenshotSnippet,
   parseTabbitReceipt,
+  runTabbitSnippet,
+  TABBIT_CAPTURE_DEADLINE_MS,
   TABBIT_FRAME_JPEG_QUALITY,
+  TABBIT_MAX_TIMEOUT_MS,
+  TABBIT_MIN_TIMEOUT_MS,
   type TabbitTab,
 } from "../src/cdp/tabbit-cli-link.ts";
 
@@ -57,7 +61,19 @@ describe("tabbit frame-capture snippet", () => {
 
   it("always detaches the CDP session, even when the capture throws", () => {
     expect(buildFrameCaptureSnippet(OUT)).toContain("await c.detach()");
-    expect(buildFrameCaptureSnippet(OUT)).toMatch(/finally \{ try \{ await c\.detach\(\); \}/);
+    expect(buildFrameCaptureSnippet(OUT)).toMatch(/try \{ await c\.detach\(\); \} catch \{\}/);
+  });
+
+  it("bounds the capture with a race so a stuck send cannot hang the task", () => {
+    // Live evidence: the same tab that answers in 132 ms can also never answer.
+    // An unanswered send blocks the evaluation until the CLI's hard deadline and
+    // takes the whole task executor down with it.
+    const js = buildFrameCaptureSnippet(OUT);
+    expect(js).toContain("Promise.race");
+    expect(js).toContain(`capture-deadline`);
+    expect(js).toContain(String(TABBIT_CAPTURE_DEADLINE_MS));
+    // And the timeout must resolve into a marker, not an unhandled rejection.
+    expect(js).toContain('skipped: "capture-timeout"');
   });
 
   it("escapes the output path instead of interpolating it raw", () => {
@@ -149,5 +165,61 @@ describe("TabbitTab", () => {
     };
     expect(t.tabId).toBe(305297576);
     expect(t.active).toBe(true);
+  });
+});
+
+// The CLI rejects the WHOLE request when --timeout-ms is outside 60000..180000:
+//
+//   "--timeout-ms must be from 60000 through 180000; the default is 60000, so
+//    omit it unless the program needs longer"
+//
+// The 3 s frame poller used to pass 10000/15000, so it never ran a single
+// snippet — and the rejection arrives as an ordinary failed receipt, which is
+// why it looked like a silent capture failure rather than a usage error.
+describe("runTabbitSnippet --timeout-ms contract", () => {
+  async function captureArgv(timeoutMs?: number): Promise<string[]> {
+    const argv: string[] = [];
+    const subprocess = {
+      spawn: (opts: { argv: string[] }) => {
+        argv.push(...opts.argv);
+        return {
+          done: Promise.resolve({ exitCode: 0 }),
+          collected: {
+            stdout: { readFrom: () => ({ text: '{"status":"succeeded","result":{"value":{"ok":true}}}' }) },
+            stderr: { readFrom: () => ({ text: "" }) },
+          },
+        };
+      },
+    } as unknown as Parameters<typeof runTabbitSnippet>[0];
+    await runTabbitSnippet(subprocess, "return {ok:true};", {
+      cliPath: "C:\\fake\\tabbit-cli.exe",
+      taskName: "t",
+      requestId: "r",
+      ...(timeoutMs === undefined ? {} : { timeoutMs }),
+    });
+    return argv;
+  }
+
+  const timeoutValue = (argv: string[]): string | undefined => {
+    const i = argv.indexOf("--timeout-ms");
+    return i === -1 ? undefined : argv[i + 1];
+  };
+
+  it("omits the flag entirely when no timeout is requested", async () => {
+    expect(timeoutValue(await captureArgv())).toBeUndefined();
+  });
+
+  it("lifts a too-small timeout up to the CLI minimum", async () => {
+    // 15000 was the poller's value: it made the CLI refuse the request outright.
+    expect(timeoutValue(await captureArgv(15000))).toBe(String(TABBIT_MIN_TIMEOUT_MS));
+    expect(timeoutValue(await captureArgv(10000))).toBe(String(TABBIT_MIN_TIMEOUT_MS));
+  });
+
+  it("clamps an oversized timeout down to the CLI maximum", async () => {
+    expect(timeoutValue(await captureArgv(999999))).toBe(String(TABBIT_MAX_TIMEOUT_MS));
+  });
+
+  it("passes a valid timeout through untouched", async () => {
+    expect(timeoutValue(await captureArgv(120000))).toBe("120000");
   });
 });

@@ -6,9 +6,12 @@
 - **修法**：截图字节不再走回执。新增 `buildFrameCaptureSnippet(outPath)`、改写 `buildScreenshotSnippet(outPath)`：snippet 内 `fs.writeFileSync` 落盘，回执只带路径（几十字节，稳定内联）；host 侧 `readFileSync` 取字节后 `broadcastCliFrame`。`bcdp_screenshot` 现在返回 `{path, base64, bytes, url, title}`，`path` 与工具描述一致。
 - **绕开 `page.screenshot()` 的字体等待**：该 API 在 Tabbit 运行时卡在 `waiting for fonts to load` 直到 30s 超时（百度首页实测重复复现）；改用 page 作用域 `context.newCDPSession(page)` + `Page.captureScreenshot`（同页实测 132ms–2.6s）。`about:blank` 直接跳过——空页会把 CLI 拖到 60s 硬截止（实测 `EVALUATION_TIMEOUT`），且空白帧对面板无意义。
 - **轮询必须带 `--tab`**：不带时 CLI 跑的是任务的**默认页**（全新 `about:blank`），截图永远是空页。原来赋值却从未被读取的 `_tabbitLastActiveTabId` 现在真正生效：`TabbitReceipt` 新增 `tabIds`（从 `result.acquisition.tabIds` 提升——它和 `result.value` 平级，旧解析把它丢了），每个 tabbit 工具调用后记录，轮询优先用它，回落到库存里 `active: true` 的 tab。
-- **并发与可观测**：一轮截图未返回时跳过下一 tick（重页面 2.6s 对 3s 间隔会堆叠 spawn）；`receipt.ok` 但无路径时明确告警（不再静默）；`broadcastCliFrame` 新增可选 `fmt`（JPEG 帧必须标 `jpeg`，否则客户端按 `data:image/png` 装 JPEG 字节）；`TabbitTab` 类型补上 CLI 实际字段 `tabId`/`active`（原类型写的是 `id`、丢了 `active`）。
+- **`--timeout-ms` 硬契约（第二处根因，实测才发现）**：CLI 只接受 60000–180000，超出直接 `REQUEST_FAILED` 整请求拒绝、snippet 根本不执行。而轮询器传的是 10000/15000 —— 也就是说**即使截图逻辑修好，轮询也从未真正跑过一次**；更隐蔽的是这个拒绝以普通 failed 回执出现，不像异常。现在在 `runTabbitSnippet` 一处夹紧（超范围自动夹到最近合法值、未传则省略走 CLI 默认 60s），短截止改由 snippet 内的 `Promise.race` 表达。
+- **截图本身不可靠，需在 snippet 内设截止**：同一个 tab 可以 132ms 返回，也可以永不返回；不设截止时会把整个 evaluation 拖到 CLI 硬截止（60s），**连带杀掉该 task 的执行器**、影响后续所有调用。新增 `TABBIT_CAPTURE_DEADLINE_MS`（默认 8000ms），超时返回 `{skipped: "capture-timeout"}` 而非挂死；`bcdp_screenshot` 对此给出明确失败文案而不是空等。
+- **并发与可观测**：一轮截图未返回时跳过下一 tick（重页面 2.6s 对 3s 间隔会堆叠 spawn）；`receipt.ok` 但无路径时明确告警（不再静默）；持续的 `skipped` 原因只打一次 `info`，避免每 3s 刷屏；`broadcastCliFrame` 新增可选 `fmt`（JPEG 帧必须标 `jpeg`，否则客户端按 `data:image/png` 装 JPEG 字节）；`TabbitTab` 类型补上 CLI 实际字段 `tabId`/`active`（原类型写的是 `id`、丢了 `active`）。
 - **顺带**：`findLink`/`resolveEffectiveLink` 对缺失的 links 列表返回 null 而非抛错（两者现在跑在每个工具调用与轮询 tick 上，部分配置不应从工具路径抛出）。
-- 测试：新增 `tests/tabbit-cli-link.test.ts` 14 例（回执只带路径不带字节 / 走 CDP 而非 `page.screenshot` / JPEG 质量 / 空白页跳过早于抓图 / finally detach / 路径转义 / `tabIds` 提升 / `resource` 降级形状）；全量 940 passed / 13 skipped，typecheck 双配置无错。
+- 测试：新增 `tests/tabbit-cli-link.test.ts` 19 例（回执只带路径不带字节 / 走 CDP 而非 `page.screenshot` / JPEG 质量 / 空白页跳过早于抓图 / detach / 路径转义 / race 截止与 `capture-timeout` 标记 / `tabIds` 提升 / `resource` 降级形状 / `--timeout-ms` 四种夹紧情形）；全量 945 passed / 13 skipped，typecheck 双配置无错。
+- **实测边界（交接必读）**：修后的 snippet 在真实百度 SERP tab 上跑通——`status=succeeded`、`elapsedMs=8228`、落盘 302972 字节、JPEG 魔数 `FF D8 FF E0` 与结束标记 `FF D9` 均正确。但注意 **8228ms 已贴着 8s 截止线**：在 tab 争用/重页面下抓一帧接近 8 秒，远超 3s 轮询间隔，所以观察窗当前实际刷新率约「8 秒一帧」而非「3 秒一帧」。若要真做到 3 秒一帧，需要降视口/降质量或改用 screencast 通道，属后续优化项，不在本次范围。
 
 ## 1.7.9 (2026-11-04)
 

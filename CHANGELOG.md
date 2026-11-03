@@ -1,3 +1,10 @@
+## 1.7.9 (2026-11-04)
+
+**降级帧刷新 5s → 3s；`bcdp_doctor` 新增会话作用域诊断行。**
+
+- `CliFramePoller` 间隔由 5000ms 改为 **3000ms**（`/spaces` 的 `cliFrameIntervalMs` 同步为 3000）。
+- `bcdp_doctor` 在 `frame source:` 行后新增 `session scope:` 行，同时打印 `callingSessionId(exec)`、本次调用空间 `cfg.activeSpace`、poller 实际观察的 `spaceTracker.lastActiveSpace()`、`defaultSpace` 与 `isolateSpaces`。用于定位“空间名仍为 default”的真正成因：若 `id=(none → global slot)` 且 `thisCallSpace=default`，则是宿主未给工具执行携带 `exec.agent.session.id`（会话作位于 harness 层失效），而非 poller 本身——poller 已不再主动注册 default。
+
 ## 1.7.8 (2026-11-04)
 
 **修 1.7.7 实测两 bug：降级帧源错用 `default` 空间 + 观察窗无画面反馈。**

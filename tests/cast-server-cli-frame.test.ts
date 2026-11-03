@@ -104,7 +104,7 @@ describe("spaces cliFrameMode synthesis", () => {
     const data = res.json()
     expect(data.ok).toBe(true)
     expect(data.cliFrameMode).toBe(true)
-    expect(data.cliFrameIntervalMs).toBe(5000)
+    expect(data.cliFrameIntervalMs).toBe(3000)
     const spaces = data.spaces as Array<Record<string, unknown>>
     expect(spaces).toHaveLength(1)
     expect(spaces[0].targetId).toBe(CLI_FRAME_TARGET_ID)

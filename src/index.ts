@@ -1751,7 +1751,7 @@ bridge.onChange(() => tiers.reapply())
   // that publishes the endpoint. Started ONLY when an ego-cli link owns routing,
   // no CDP ws resolved, the CLI is ready, and the operator kept the fallback on.
   const cliPoller = new CliFramePoller({
-    intervalMs: 5000,
+    intervalMs: 3000,
     capture: () => spawnCliFrameCapture(ctx.subprocess, cfg, cfg.spaceTracker.lastActiveSpace()),
     isBusy: egoLockBusy,
     onFrame: (frame) => broadcastCliFrame(frame),
@@ -3436,11 +3436,27 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
         const frameSource = getAttachEndpoint()
           ? 'screencast (CDP)'
           : cliPoll.running
-            ? `cli-poll (5s interval, seq ${cliPoll.frameSeq}${cliPoll.lastFrameAgeMs !== null ? `, last frame ${cliPoll.lastFrameAgeMs}ms ago` : ', no frame yet'})`
+            ? `cli-poll (3s interval, seq ${cliPoll.frameSeq}${cliPoll.lastFrameAgeMs !== null ? `, last frame ${cliPoll.lastFrameAgeMs}ms ago` : ', no frame yet'})`
             : cfg.cliFramePollEnabled === false
               ? 'none (cliFramePollEnabled off)'
               : 'none'
         lines.push(`frame source: ${frameSource}`)
+        // Session-scope diagnostic: the ego-cli poller observes
+        // spaceTracker.lastActiveSpace(); a `default` there means the agent's
+        // own bcdp_* calls are NOT carrying a session id (exec.agent.session.id
+        // absent → global slot → shared `default`), i.e. isolation is off at the
+        // harness layer, not a poller bug. Print all three so the next smoke is
+        // evidence, not inference.
+        {
+          const sid = callingSessionId(exec)
+          const pollSpace = cfg.spaceTracker.lastActiveSpace()
+          lines.push(
+            `session scope: id=${sid ?? '(none → global slot)'}` +
+            ` thisCallSpace=${cfg.activeSpace}` +
+            ` pollerObserves=${pollSpace ?? '(null: poller will skip / no default registered)'}` +
+            ` defaultSpace=${cfg.defaultSpace} isolateSpaces=${cfg.isolateSpaces}`,
+          )
+        }
         // ── Lightpanda backend: engine, degradation list, per-OS install hint ──
         if (attachNow.engine !== undefined) {
           lines.push(`engine: ${attachNow.engine}`)

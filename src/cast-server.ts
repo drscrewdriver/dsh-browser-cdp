@@ -737,7 +737,7 @@ export function initCastServer(
             ok: true,
             toolCallCount,
             cliFrameMode: true,
-            cliFrameIntervalMs: 5000,
+            cliFrameIntervalMs: 3000,
             spaces: [{
               targetId: CLI_FRAME_TARGET_ID,
               url: cliFrame.url,

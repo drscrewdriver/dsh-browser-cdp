@@ -53,9 +53,13 @@ describe("profilesFromLocalState", () => {
         },
       },
     });
-    const profiles = profilesFromLocalState(json, "C:\\UD");
+    // userDataDir 在不同 OS 上形式不同（Windows 带盘符 + 反斜杠；POSIX 以 / 开）；
+    // 断言的 dir 也交给同 OS 的 join 同形拼接，避免 Linux CI 把 Windows 风格输入
+    // 当普通文件名拼到 / 呮后。
+    const UDDIR = process.platform === "win32" ? "C:\\UD" : "/UD";
+    const profiles = profilesFromLocalState(json, UDDIR);
     expect(profiles).toHaveLength(2);
-    expect(profiles[0]).toEqual({ dir: "C:\\UD\\Default", dirName: "Default", name: "Person 1" });
+    expect(profiles[0]).toEqual({ dir: join(UDDIR, "Default"), dirName: "Default", name: "Person 1" });
     expect(profiles[1].name).toBe("Work");
   });
 

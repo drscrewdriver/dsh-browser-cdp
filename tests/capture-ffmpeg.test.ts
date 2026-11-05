@@ -42,7 +42,10 @@ describe("FFmpeg encoder probing", () => {
     await expect(selectEncoder("ffmpeg", "h264_nvenc", probeSpawn([], "none"))).rejects.toThrow(expect.objectContaining({ code: "ffmpeg-encoder-unavailable" }));
   });
 
-  it("uses Media Foundation hardware encoding first on Windows", async () => {
+  it.skipIf(process.platform !== "win32")("uses Media Foundation hardware encoding first on Windows", async () => {
+    // probe 中 selectEncoder 内部仍会看 process.platform 剪分支（hw_encoding 只在
+    // win32 下嗂入 argv），Linux CI 上 argv 中缺 -hw_encoding 与 gfxcapture 两项，
+    // 断言假阴。本测试专测 Windows 的优先级顺序，非 win32 上 skip。
     const calls: string[][] = [];
     const selected = await selectEncoder("ffmpeg", "auto", ((path: string, argv: readonly string[]) => {
       const child = new EventEmitter() as FakeChild;

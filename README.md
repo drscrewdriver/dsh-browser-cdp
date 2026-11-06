@@ -1,9 +1,13 @@
 # dsh-browser-cdp — 看得见的 Agent 浏览器（CDP 接入）
 
+> 看得见的 Agent 浏览器（CDP 接入），同时驱动 egolite / Tabbit / Chrome / Edge / Brave / Lightpanda。常驻只有 `bcdp_status`（401 字符），其余 33 个 `bcdp_*` 工具按活动批次解锁——不碰浏览器的会话不缴 schema token 税（实测 −91.9%）。实时观察窗支持直接点击/滚动/中文输入，点选元素以 `@"picks/*.json"` 引用投进输入框，人机验证提醒；非 CDP 通道（ego CLI / Tabbit CLI）以 3s 轮询同步画面。宿主 `0.1.7-rc.1 ~ 0.2.2-rc.1` 精确枚举（10 个 rc）。
+>
+> Visible agent browser for DSH over CDP, also driving egolite / Tabbit / Chrome / Edge / Brave / Lightpanda. Only `bcdp_status` stays resident (401 chars); the other 33 context-optimized `bcdp_*` tools unlock per activity batch, so non-browser sessions pay no schema tax (−91.9% measured). Realtime watch panel with direct click/scroll/IME, element picks quoted into the composer as `@"picks/*.json"`, human-verification notices; non-CDP channels (ego CLI / Tabbit CLI) sync frames by 3s polling. Host `0.1.7-rc.1 ~ 0.2.2-rc.1` (exact enumeration, 10 rc).
+
 [简体中文](README.md) | [Français](README.fr.md) | [Deutsch](README.de.md) | [Italiano](README.it.md) | [Русский](README.ru.md) | [Español](README.es.md)
 
 <p align="center">
-  <img src="https://img.shields.io/badge/DSH-0.1.7--rc.1~0.2.1--rc.5-blue" alt="DSH 0.1.7-rc.1 ~ 0.2.1-rc.5">
+  <img src="https://img.shields.io/badge/DSH-0.1.7--rc.1~0.2.2--rc.1-blue" alt="DSH 0.1.7-rc.1 ~ 0.2.2-rc.1">
   <img src="https://img.shields.io/badge/DSH--better--sidebar-%3E%3D0.12.2(optional)-red" alt="dsh-better-sidebar >= 0.12.2 (optional)">
   <img src="https://img.shields.io/badge/Node-%3E%3D22-brightgreen?logo=node.js&logoColor=white" alt="Node >= 22">
 </p>
@@ -14,11 +18,11 @@
 
 | 依赖 | 最低版本 | 推荐版本 | 说明 |
 |---|---|---|---|
-| **DSH** (DeepSeek Harness) | `0.1.7-rc.1` | `0.1.7-rc.1 ~ 0.2.1-rc.4`（精确枚举） | 精确枚举 8 个 rc 版本，engines 与全部 dsh peer 同串（无区间/caret）：`0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-rc.1 || 0.2.1-rc.2 || 0.2.1-rc.3 || 0.2.1-rc.4 || 0.2.1-rc.5`；宿主对插件 API 向后兼容（0.2.0 的 composer/`forkSession` 为签名扩展，插件仅作调用方，免改）。声明式设置面自 0.1.7 引入（Config `.volatile()` 字段自动生成设置表单），0.2.0/0.2.1 延续该形态。DSH `0.1.2-rc.1` ~ `0.1.5-rc.3` 请使用 **0.17.x** 版本线，0.1.0-rc.x / 0.1.1-rc.x 请使用 v0.8.0 及更早版本 |
+| **DSH** (DeepSeek Harness) | `0.1.7-rc.1` | `0.1.7-rc.1 ~ 0.2.2-rc.1`（精确枚举） | 精确枚举 10 个 rc 版本，engines 与全部 dsh peer 同串（无区间/caret）：`0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-rc.1 || 0.2.1-rc.2 || 0.2.1-rc.3 || 0.2.1-rc.4 || 0.2.1-rc.5 || 0.2.2-rc.1`；宿主对插件 API 向后兼容（0.2.0 的 composer/`forkSession` 为签名扩展，插件仅作调用方，免改）。声明式设置面自 0.1.7 引入（Config `.volatile()` 字段自动生成设置表单），0.2.0/0.2.1 延续该形态。DSH `0.1.2-rc.1` ~ `0.1.5-rc.3` 请使用 **0.17.x** 版本线，0.1.0-rc.x / 0.1.1-rc.x 请使用 v0.8.0 及更早版本 |
 | **dsh-better-sidebar** | `0.12.2`（可选） | `≥ 0.17.1` | 未安装时自动回退浮动观察球；`< 0.12.2` 可运行但外部链接拦截（`urlTarget`）静默降级 |
 | **Node.js** | `22` | — | harness 环境自带 |
 
-**DSH 全版本适配说明**：本版本（**1.2.1 起**；1.2.2 起追加 0.2.1-rc.2）面向 DSH `0.1.7-rc.1 ~ 0.2.1-rc.5`（精确枚举 9 个 rc）：相对 0.1.7 线（v0.17.x）**零代码改动**，纯依赖/元数据换代——0.2.0 宿主对插件 API 向后兼容，本插件经 `ctx.get('conversation').input` 门面投递选区（不调 `submit()`、不 override），不在 0.2.0 变更影响面内。声明式设置面自 0.1.7 引入：插件不再注册任何设置节（`ctx.settings` 注册类 API 已被宿主删除），改为在 Config schema 上以 `.volatile()` 标记可配置字段，由宿主设置页自动生成表单；volatile 字段变更通过 `loader/volatile-update` 事件热生效，无需重载插件。核心宿主 API（`defineTool`、`ctx.tools.register`、`ctx.subprocess.spawn`、`ctx.webServer.register`、`ctx.inject`、`ModuleLoader` CJS factory、`cordis.patch.yml`）沿用 0.1.2 以来形态。DSH `0.1.2-rc.1` ~ `0.1.5-rc.3` 请使用 **0.17.x** 版本线。
+**DSH 全版本适配说明**：本版本（**1.2.1 起**；1.2.2 起追加 0.2.1-rc.2，1.7.10/1.7.11 起追加 0.2.2-rc.1）面向 DSH `0.1.7-rc.1 ~ 0.2.2-rc.1`（精确枚举 10 个 rc）：相对 0.1.7 线（v0.17.x）**零代码改动**，纯依赖/元数据换代——0.2.0 宿主对插件 API 向后兼容，本插件经 `ctx.get('conversation').input` 门面投递选区（不调 `submit()`、不 override），不在 0.2.0 变更影响面内。声明式设置面自 0.1.7 引入：插件不再注册任何设置节（`ctx.settings` 注册类 API 已被宿主删除），改为在 Config schema 上以 `.volatile()` 标记可配置字段，由宿主设置页自动生成表单；volatile 字段变更通过 `loader/volatile-update` 事件热生效，无需重载插件。核心宿主 API（`defineTool`、`ctx.tools.register`、`ctx.subprocess.spawn`、`ctx.webServer.register`、`ctx.inject`、`ModuleLoader` CJS factory、`cordis.patch.yml`）沿用 0.1.2 以来形态。DSH `0.1.2-rc.1` ~ `0.1.5-rc.3` 请使用 **0.17.x** 版本线。
 
 **dsh-better-sidebar 适配说明**：本插件通过 `ctx.betterSidebar` 服务（try-catch 防御性获取）注册侧边栏 Tab 并监听外部链接。关键 API 引入版本：
 
@@ -144,25 +148,28 @@ dshx list                                                # 应显示：[on] dsh-
 
 无需宿主侧任何配置：`resolveEgoEnv` 自动探测 root / 无显示器并兜底。观察窗 host 路由（`/api/bcdp/spaces` 等）仅在有 HTTP server 时注册，headless 是安全 no-op。
 
-## 连接方式：CDP 端点 / 本机 ego CLI
+## 连接方式：CDP 端点 / 本机 ego CLI / 本机 Tabbit CLI / Lightpanda
 
-**连接目标直接在设置里增删改**（0.18.1 起，与 0.17.x 线同源）：设置卡有两处入口——「起子插件设置」family 区的本插件 tab（装了 `dsh-thinking-levels` 时），以及**插件详情页**的设置卡（`plugins.bundle.config`，不装 thinking-levels 时的独立入口）；两处渲染同一份组件。每行支持：启用开关、激活、标签/端点/CLI 路径就位编辑、逐行**探测**、上移/下移、删除（删激活行会同时清空激活，**绝不顺延**）；底部内联表单直接添加 CDP 端点或本机 ego CLI（第二条本机 CLI 会被拒绝）。写回落在活动 profile 的 `cordis.patch.yml`，跨重启保留。0.18.1 之前，连接序列只能在 profile 的 `cordis.patch.yml` `links` 中手工维护。
+**连接目标直接在设置里增删改**（0.18.1 起，与 0.17.x 线同源）：设置卡有两处入口——「起子插件设置」family 区的本插件 tab（装了 `dsh-thinking-levels` 时），以及**插件详情页**的设置卡（`plugins.bundle.config`，不装 thinking-levels 时的独立入口）；两处渲染同一份组件。每行支持：启用开关、激活、标签/端点/CLI 路径就位编辑、逐行**探测**、上移/下移、删除（删激活行会同时清空激活，**绝不顺延**）；底部内联表单直接添加 CDP 端点、本机 ego CLI、Lightpanda 或本机 Tabbit CLI（第二条本机 CLI / Tabbit 行会被拒绝）。写回落在活动 profile 的 `cordis.patch.yml`，跨重启保留。0.18.1 之前，连接序列只能在 profile 的 `cordis.patch.yml` `links` 中手工维护。
 
-设置面板里的连接列表是**有序**的——**顺序即优先级**，被激活的那一项驱动每一次 `bcdp_*` 调用。列表元素有两种类型：
+设置面板里的连接列表是**有序**的——**顺序即优先级**，被激活的那一项驱动每一次 `bcdp_*` 调用。列表元素有四种类型：
 
 | 类型 | 它做什么 | 约束 |
 |---|---|---|
 | **CDP 端点** | 把一个已开调试端口的浏览器地址交给内置运行时（注入 `EGO_LINUX_CDP_URL`），运行时**附着**上去 | 可多条 |
 | **本机 ego CLI** | 由本机 ego CLI **自己**驱动它本机的 ego 浏览器——**不注入任何端点** | **仅限本机，全局至多一条** |
+| **本机 Tabbit CLI** | 由本机 `tabbit-cli` 驱动它本机的 Tabbit 浏览器（`tabbit-cli nodejs` 执行 Playwright 片段）——**不走插件的裸 CDP 通道** | **仅限本机，全局至多一条** |
+| **Lightpanda** | 插件托管启动的无头文本渲染引擎（详见下节），对插件而言是一个普通 CDP 端点 | 全局至多一条 |
 
-**为什么需要第二种**：注入用的 `EGO_LINUX_CDP_URL` 是**内置运行时（Linux 线）**的私有契约，macOS 上用 `ego lite` app 附带的那个原生 `ego-browser` **根本不读它**。所以在只有"CDP 端点"这一种类型时，macOS 用户无法用上自己那个已登录的 ego——只能连远端端口，或让内置运行时另起一个 stock Chromium。本机 CLI 类型补的就是这条路。
+**为什么需要第二种**：注入用的 `EGO_LINUX_CDP_URL` 是**内置运行时（Linux 线）**的私有契约，macOS 上用 `ego lite` app 附带的那个原生 `ego-browser` **根本不读它**。所以在只有"CDP 端点"这一种类型时，macOS 用户无法用上自己那个已登录的 ego——只能连远端端口，或让内置运行时另起一个 stock Chromium。本机 CLI 类型补的就是这条路。Tabbit 行则是同类需求的另一条：**只有 `tabbit-cli` 能驱 Tabbit 自己的任务生命周期**（CLI 不对外开调试端口），所以插件不做裸 CDP 而是拼 Playwright 片段下发（详见下节「Tabbit 后端」）。
 
-解析顺序（`cliPath` 留空时）：显式路径 → PATH 上的 `ego-browser` → macOS app 包内 helper（`/Applications/ego lite.app/…/Helpers/ego-browser`）→ 插件内置运行时。
+解析顺序（`cliPath` 留空时）：显式路径 → PATH 上的 `ego-browser` → macOS app 包内 helper（`/Applications/ego lite.app/…/Helpers/ego-browser`）→ 插件内置运行时。Tabbit 行的解析顺序（`cliPath` 留空时）：显式路径 → `%LOCALAPPDATA%\Tabbit\LocalAgent\bin\tabbit-cli(.exe)`（Windows）→ `~/.local/bin` / `/usr/local/bin`（macOS/Linux）→ PATH 探测。
 
-两个默认值值得知道：
+三个默认值值得知道：
 
 - **`useSdkPath` 默认关闭**：关闭时用 CLI 自带的 harness（配套的那套）；打开后，**探测与每一次工具执行**都会注入 `--sdk-path <插件内置 harness>`。这一点很关键：只在探测时带、执行时不带，脚本首行就会崩 `ReferenceError: taskSpaces is not defined`（1.2.4 修复的 P0）。若 CLI 不认这个旗标，探测会记一条提示并**自动重试一次不带它**；此时只有 CLI 自带的 harness 确实暴露 `taskSpaces` / `browser` 门面才算就绪，否则显式判失败并给出缺失的门面名——不再假阳性。
 - **就绪探测是 `nodejs` 通道上的 facade 探针**（与干活同一条通道）：只检查注入后的 `taskSpaces` / `browser` / `page` 全局，不启动也不等待浏览器，实测约 300 ms；`bcdp_status` 走同一判据。
+- **Tabbit 的 `--timeout-ms` 被夹紧到 60000–180000**：超出范围 CLI 直接整请求拒绝（snippet 根本不执行），所以下发前在一处夹紧到最近合法值；单帧/截图的短截止不由它表达，而是写在 snippet 内的 `Promise.race`（默认 8s 截止，超时返回 `skipped: capture-timeout`）。
 
 ### 双 API 面共存风险
 
@@ -170,12 +177,24 @@ dshx list                                                # 应显示：[on] dsh-
 
 与其它开关的关系：
 
-- `cdpMode`：`auto` 按激活项（两种类型都行）；`remote` **只接受 CDP 端点**，激活项是本机 CLI 时会显式报 `mode-kind-mismatch`；`local` 走受管本地启动器。
-- `remoteEnabled`（远端总开关）**只管远端 CDP**，不影响本机 CLI 连接。
+- `cdpMode`：`auto` 按激活项（四种类型都行）；`remote` **只接受 CDP 端点**，激活项是本机 CLI / Tabbit 时会显式报 `mode-kind-mismatch`；`local` 走受管本地启动器。
+- `remoteEnabled`（远端总开关）**只管远端 CDP**，不影响本机 CLI / Tabbit 连接。
 - `allowLocalFallback` / `localHeadless` / `localUserDataDir` 只作用于 CDP 端点的回落与受管启动。
 - `allowProbeColdStart`（**默认关**）：就绪探测**绝不拉起 ego 浏览器**——`--status` 证明浏览器已在跑才做 heredoc 验证，否则跳过，浏览器推迟到首个真实 `bcdp_*` 调用才启动（插件挂载/改设置不再弹浏览器窗口）。打开 = 挂载探测预先验证 SDK harness（可能当场弹出浏览器窗口）。
 
 `bcdp_doctor` 会报告当前序列类型计数、CLI 实际解析到的路径与形态，以及（若同机装了旧版 `dsh-ego-browser`）一条共存提示。
+
+> 现行口径：doctor 的 `links:` 计数行只列 cdp / ego-cli / lightpanda 三种，**tabbit 行不计入该行**；Tabbit 作激活后端时以 `bcdp_status` / `bcdp_help` 报出的 `backend: tabbit-cli` 为准。
+
+## Tabbit 后端（本机 Tabbit 浏览器，可选通道）
+
+[Tabbit 浏览器](https://github.com/Tabbit-Browser)本身是 Chromium，但本插件不直接拿它的调试端口：激活 `tabbit-cli` 连接行后，每次 `bcdp_*` 调用被翻译成一段 Playwright 片段，经 `tabbit-cli nodejs` 在浏览器内嵌运行时里执行（适配层 `src/cdp/tabbit-cli-link.ts`）。也就是说 Tabbit 是**第四条连接通道**，与 CDP 端点 / 本机 ego CLI / Lightpanda 并列，按列表优先级争用。
+
+- **添加入口**：设置面板底部表单选「本机 Tabbit CLI」（默认标签 `Tabbit 浏览器`）；第二会被拒绝。`cliPath` 留空走上方的自动解析链。
+- **支持的工具**（1.7.10 现行口径）：`bcdp_space`、`bcdp_navigate`、`bcdp_snapshot`、`bcdp_click`、`bcdp_fill`、`bcdp_screenshot`、`bcdp_tab op=list`，以及入口类 `bcdp_status` / `bcdp_help` / `bcdp_doctor`。**未覆盖的工具明确报错而不静默回落 Chrome**——激活 Tabbit 时插件会硬拒内置运行时启动（避免“以为在 Tabbit 里做、实际驱动了另一个浏览器”）。
+- **能力降级由连接模式决定**（`src/cdp/capabilities.ts` 的 `tabbit` 投影）：`Browser.*` / `Target.*` 域不可达→无标签枚举与窗口关闭；Overlay 点选不可用→观察窗不能“点选元素引用进输入框”；下载事件不可用→`bcdp_download` 不可用；`Runtime.addBinding` 不可靠→`bindingCalled` 关闭。画面与截图走 page 作域的 `newCDPSession` + `Page.captureScreenshot`，JPEG 原生可用。
+- **观察窗画面**：与内置运行时非 CDP 连接模式同一机制——后台轮询而非 screencast 直推，间隔 3s；重页面上单帧捕获可能贴近 8s 截止线（实测），所以高负载页面的实际刷新率会低于 3s，卡住的帧以 `skipped` 返回而不是挂死面板。
+- **与 dsh-tabbit 插件的关系**：两者都能驱 Tabbit，但工具面与任务生命周期各自管理。同机共装时建议**二选一**，避免两个 harness 抢同一个 Tabbit 任务槽。
 
 ## Lightpanda 后端（可选引擎，beta）
 
@@ -317,6 +336,7 @@ wait / space / escape 三族已按 `op` 合并，旧工具名**移除**（不保
 - `cdp`：`Page.startScreencast` JPEG，默认 20 FPS。每个源帧立即按 Chrome 提供的帧 ID ACK，只保留最新待发帧；仅捕获当前观看标签，静态页恢复截图默认 3 秒一次。
 - `ffmpeg`：Windows 以 `gfxcapture(hwnd)` 直接采集目标 Chrome 窗口的 D3D11 surface；其他平台使用显示来源 crop。随后编码 H.264 fragmented MP4 → HTTP 二进制 chunk → MediaSource `<video>`，不经过 Base64/SSE。
 - `auto`：默认选择 CDP，不检测成功也不会自动下载 FFmpeg。FFmpeg 安装并通过能力检查后才可选择；已保存的 FFmpeg 后端若后来失效，本次观察会回退 CDP 并展示原因。
+- **非 CDP 连接模式（本机 ego CLI / 本机 Tabbit CLI）**：这两类通道拿不到 `Page.startScreencast` 直推，观察窗改走**后台轮询拍帧**——每 3s 一次，帧写到临时文件后由 host 读回再广播（回执只带路径，不带字节）。因此它是“看快照”而不是“看直播”：静态页约 3s 一帧，重页面（单帧接近 8s 截止线）会明显低于这个频率；拿不到帧时以 `skipped` 标记跳过，不会挂死面板。
 - Windows FFmpeg 必须包含 `gfxcapture`。插件按 browser PID、target title 和 CDP window bounds 匹配 HWND；窗口移动或被遮挡时仍捕获目标页面，并且不允许回退到桌面录制。若 target 是同一 Chrome 窗口里的后台 tab，会明确报错而不是展示当前可见 tab 或抢用户焦点。macOS 首次使用需要“屏幕录制”权限；X11 需要 Chromium 与 FFmpeg 共享 `DISPLAY`；Wayland 缺少 Portal/PipeWire 输入时会提示切回 CDP。
 
 托管 FFmpeg 安装到 `~/.dsh/cache/ego-browser/ffmpeg/`，不会写入插件目录。Windows/Linux 使用固定 BtbN release tag；macOS 使用固定的 `ffmpeg-static` GitHub release 资产（其 Intel/Apple Silicon 二进制分别来源于 Evermeet/OSXExperts）。所有下载均固定资源 SHA-256，只提取 FFmpeg 主程序，不安装 `ffprobe` 或 `ffplay`。Windows/Linux 解包使用系统 `tar`；缺少时会在下载前明确报错。
@@ -325,7 +345,7 @@ wait / space / escape 三族已按 `op` 合并，旧工具名**移除**（不保
 
 ## 工作原理
 
-- **工具层**：每个工具把参数拼成 JS 脚本，经 `ctx.subprocess` 用 `ego-browser nodejs` 喂给 stdin 运行，宿主经 CDP 驱动共享 Chromium。结果以 `@@DSH_RESULT@@` 哨兵行解析。所有 `bcdp_*` 经进程内互斥锁串行化，错误统一归一。
+- **工具层**：每个工具把参数拼成 JS 脚本，经 `ctx.subprocess` 用 `ego-browser nodejs` 喂给 stdin 运行，宿主经 CDP 驱动共享 Chromium。结果以 `@@DSH_RESULT@@` 哨兵行解析。所有 `bcdp_*` 经进程内互斥锁串行化，错误统一归一。激活项是本机 Tabbit CLI 时走分发器 `dispatchTabbit`：参数拼成 Playwright 片段经 `tabbit-cli nodejs` 执行，不复用 ego 子进程路径，也不得落到内置运行时。
 - **观察窗**：`lib/client.js` 管理 watcher lease、JPEG `<img>` 与 MSE `<video>`；`lib/cast-server.js` 代理元数据 SSE、watch API 和带背压的二进制视频；worker 中 `CaptureManager` 保证同时只有一个活动后端和一个当前 target。CDP 控制面（标签、viewport、输入、验证码）独立于画面后端。
 
 ## JEV 风格管道：让 LLM 把控浏览器循环（阶段 10）
@@ -380,6 +400,7 @@ pnpm run build   # tsdown 三 bundle：lib/index.js + lib/client.js + bin/cdp-ca
 - **快照质量**：Linux 用 CDP `DOMSnapshot` 重建语义树，非 macOS 内核级，复杂 iframe/画布场景可能降级。
 - **宿主可靠性（Linux）**：未合并的社区 PR，跨 CLI 调用间可能丢 tab/空间状态；插件已内置防御，简单流程稳定，复杂流程可能需重试。
 - **登录态持久化**：Chrome 运行期 Cookie 仅优雅关闭时落盘，强杀重启需重登。
+- **Tabbit 通道覆盖面**：仅 `space` / `navigate` / `snapshot` / `click` / `fill` / `screenshot` / `tab op=list` 已接入，其余工具返回明确错误而不回落其他后端；观察窗只能看帧、不能点选元素引用，无下载事件（`capabilities.ts` 的 `tabbit` 投影：`overlay` / `bindingCalled` / `downloadEvents` / `browserClose` 均为 false）。`bcdp_jev_*` 评审链在 Tabbit 下没有接入分发器，调用返回“尚未支持”而不是错驱另一个浏览器。
 - 输出 schema 为宽松 `additionalProperties: true`，客户端以实际返回值为准。
 
 ## 许可与署名

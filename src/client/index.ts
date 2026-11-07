@@ -132,6 +132,9 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 			historyShow: 'Show history',
 			noHistory: 'No browsing history',
 			current: 'current',
+			atQuote: 'Quote whole page as an anchor report (@)',
+			atQuoted: '✓ Page anchor report quoted',
+			atQuoteFailed: 'Anchor report failed',
 			refresh: 'Refresh',
 			backToLive: '← Back to live',
 			dragHint: 'Drag to move panel',
@@ -229,6 +232,9 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 			historyShow: '历史浏览轨迹',
 			noHistory: '暂无浏览记录',
 			current: '当前',
+			atQuote: '将整页引用为锚点报告（@）',
+			atQuoted: '✓ 整页锚点报告已引用',
+			atQuoteFailed: '锚点报告失败',
 			refresh: '刷新',
 			backToLive: '← 返回实时',
 			dragHint: '拖动移动面板',
@@ -698,9 +704,17 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 .dsh-ego-hitem { display:flex; gap:8px; align-items:center; padding:6px; border-radius:9px; cursor:pointer;
   transition: background .15s ease; }
 .dsh-ego-hitem:hover { background: rgba(255,255,255,.1); }
+.dsh-ego-hinfo { min-width:0; flex:1; }
+.dsh-ego-hat { flex:none; width:24px; height:24px; border-radius:7px; border:1px solid rgba(255,255,255,.16);
+  background: rgba(0,0,0,.22); color:#f5f5f7; font-size:13px; line-height:1; cursor:pointer; opacity:0;
+  transition: opacity .15s ease, background .15s ease; }
+.dsh-ego-hitem:hover .dsh-ego-hat { opacity:.85; }
+.dsh-ego-hat:hover { opacity:1 !important; background: rgba(10,132,255,.5); }
+.dsh-ego-hat.busy { opacity:1 !important; color:#86868b; }
+.dsh-ego-hat.done { opacity:1 !important; background:#30d158; color:#000; }
+.dsh-ego-hat.err { opacity:1 !important; background:#ff453a; color:#fff; }
 .dsh-ego-hthumb { width:58px; height:42px; border-radius:6px; object-fit:cover; background:#000;
   flex-shrink:0; border:1px solid rgba(255,255,255,.14); }
-.dsh-ego-hinfo { min-width:0; }
 .dsh-ego-hurl { font-size:10.5px; color:#86868b; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .dsh-ego-htitle { font-size:10.5px; font-weight:500; color:#f5f5f7; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .dsh-ego-hactive { color:#30d158; font-size:10.5px; }
@@ -1555,8 +1569,19 @@ h('button', { type: 'button', disabled: !writable || isFull(links) || hasCliLink
 								<div class="dsh-ego-htitle">${escapeHtml(s.title || (s.url || wt('newTab')))}</div>
 								<div class="dsh-ego-hurl">${escapeHtml(s.url || '(about:blank)')}</div>
 								${active ? '<div class="dsh-ego-hactive">● ' + wt('current') + '</div>' : ''}
-							</div>`
+							</div>
+							<button class="dsh-ego-hat" type="button" title="${escapeHtml(wt('atQuote'))}">@</button>`
 						item.addEventListener('click', () => openPreview(s))
+						const hatBtn = item.querySelector('.dsh-ego-hat')
+						if (hatBtn) hatBtn.addEventListener('click', (ev: any) => {
+							ev.stopPropagation()
+							hatBtn.classList.add('busy')
+							deliverTabReport(ctx, s).then((r: any) => {
+								hatBtn.classList.remove('busy')
+								if (r && r.ok) { hatBtn.classList.add('done'); setTimeout(() => hatBtn.classList.remove('done'), 1200) }
+								else { hatBtn.classList.add('err'); setTimeout(() => hatBtn.classList.remove('err'), 1500); console.warn('dsh-browser-cdp: tab anchor report failed', r && r.code) }
+							}).catch(() => { hatBtn.classList.remove('busy') })
+						})
 						historyList.appendChild(item)
 					}
 				}
@@ -2675,6 +2700,14 @@ clearTimeout((panel as any)._dshHideT)
 }
 .dsh-ego-side-hitem:hover { background: rgba(128,128,128,.15); }
 .dsh-ego-side-hitem.active { background: rgba(10,132,255,.15); }
+.dsh-ego-side-hat { flex: none; width: 22px; height: 22px; border-radius: 6px; font: inherit; font-size: 12px;
+  line-height: 1; cursor: pointer; border: 1px solid rgba(128,128,128,.28); background: transparent; opacity: 0;
+  transition: opacity .15s ease, background .15s ease; color: inherit; }
+.dsh-ego-side-hitem:hover .dsh-ego-side-hat { opacity: .8; }
+.dsh-ego-side-hat:hover { opacity: 1; background: rgba(10,132,255,.4); color: #fff; }
+.dsh-ego-side-hat.busy { opacity: 1; color: rgba(128,128,128,.6); }
+.dsh-ego-side-hat.done { opacity: 1; background: #30d158; color: #000; border-color: transparent; }
+.dsh-ego-side-hat.err { opacity: 1; background: #ff453a; color: #fff; border-color: transparent; }
 .dsh-ego-side-hthumb {
   width: 52px; height: 38px; border-radius: 5px; object-fit: cover; background: #000;
   flex-shrink: 0; border: 1px solid rgba(128,128,128,.2);
@@ -2790,28 +2823,44 @@ clearTimeout((panel as any)._dshHideT)
 				var content = contents[r.file]
 				var elements: any[] = []
 				var pageTitle = ''
+				var pageUrl = ''
+				var isTabReport = false
+				var truncated = false
+				var degraded = ''
 				if (typeof content === 'string' && content !== '') {
-					try { var obj = JSON.parse(content); elements = (obj && obj.elements) || []; pageTitle = (obj && obj.pageTitle) || '' } catch (e) { pageTitle = '' }
+					try {
+						var obj = JSON.parse(content)
+						elements = (obj && obj.elements) || []
+						pageTitle = (obj && obj.pageTitle) || ''
+						pageUrl = (obj && obj.pageUrl) || ''
+						isTabReport = !!(obj && obj.type === 'tab-anchor-report')
+						truncated = !!(obj && obj.truncated)
+						degraded = (obj && obj.degraded) || ''
+					} catch (e) { pageTitle = '' }
 				}
 				// 计数三态：空内容不给 0——要么加载中（…），要么亮错误码（⚠ no-workspace
 				// / not-found / load-failed），用户看得见故障不再瞎猜。
 				var countText: any
 				if (typeof content !== 'string' || content === '') countText = errs[r.file] ? '⚠ ' + errs[r.file] : '…'
-				else countText = wt('pickCardElements', { n: elements.length })
+				else if (degraded) countText = wt('pickCardElements', { n: 0 }) + ' · ⚠ ' + degraded
+				else countText = wt('pickCardElements', { n: elements.length }) + (truncated ? '+' : '')
 				var head = h('div', { className: 'dsh-cdp-picks-head' },
-					h('span', { style: { fontWeight: 700 } }, '🌐 ' + wt('pickCardTitle')),
+					h('span', { style: { fontWeight: 700 } }, isTabReport ? '🌐 ' + (pageTitle || wt('pickCardTitle')) : '🌐 ' + wt('pickCardTitle')),
 					h('span', { className: 'dsh-cdp-picks-sub' }, '@' + r.file),
-					h('span', { className: 'dsh-cdp-picks-sub' }, pageTitle),
+					isTabReport && pageUrl ? h('span', { className: 'dsh-cdp-picks-sub' }, pageUrl) : h('span', { className: 'dsh-cdp-picks-sub' }, pageTitle),
 					h('span', { className: 'dsh-cdp-picks-sub' }, countText),
 					h('button', { type: 'button', title: wt('pickCardRemove'), className: 'dsh-cdp-picks-close', onClick: function () { removeRef(r.line) } }, '✕'))
 				var chips: any = []
 				if (typeof content !== 'string') chips.push(h('div', { key: 'loading', className: 'dsh-cdp-picks-sub' }, '…'))
 				for (var i = 0; i < elements.length && i < 6; i++) {
 					var el = elements[i] || {}
+					// Tab 报告用 role + anchor 片段，点选块用 tag + describe（保持原行为）。
+					var tagText = isTabReport ? (el.role || '?') : (el.tag || '?')
+					var descText = isTabReport ? ((el.name || '') + (el.anchor ? '  ' + String(el.anchor).slice(0, 8) : '')) : (el.describe || el.name || '')
 					chips.push(h('div', { key: el.n || i, className: 'dsh-cdp-picks-chip' },
 						h('span', { className: 'dsh-cdp-picks-num' }, '#' + (el.n || (i + 1))),
-						h('span', { className: 'dsh-cdp-picks-tag' }, el.tag || '?'),
-						h('span', { className: 'dsh-cdp-picks-desc' }, el.describe || el.name || '')))
+						h('span', { className: 'dsh-cdp-picks-tag' }, tagText),
+						h('span', { className: 'dsh-cdp-picks-desc' }, descText)))
 				}
 				if (elements.length > 6) chips.push(h('div', { key: 'more', className: 'dsh-cdp-picks-sub' }, '… +' + (elements.length - 6)))
 				return h('div', { key: r.file, 'data-dsh-cdp-picks-card': '' }, head, chips)
@@ -3049,6 +3098,55 @@ clearTimeout((panel as any)._dshHideT)
 					} catch (e) {}
 				})()
 				return { ok: true, code: 'archiving', count: 1 }
+			} catch (err) {
+				return { ok: false, code: 'deliver-failed', message: String((err && err.message) || err) }
+			}
+		}
+		// ── 整页 Tab 锚点报告投递（@引用精髓，与点选 picks 同一归档体系）──
+		// 侧栏/浮窗 tab 行的 @ 按钮调用：一次点击 = 一份整页报告（role+name+
+		// anchor），归档进会话工作区 picks/ 目录，composer 只留 @"picks/<file>.json"
+		// 短引用。同 targetId 二次点击扫草稿各引用比对 targetId → 命中者复用原文件
+		// 名覆盖（token 不变）。数据由 host 半 /bcdp/api/tab-anchor-report 一次抓取。
+		async function deliverTabReport(ctx: any, space: any) {
+			try {
+				var sessionId = currentSessionId(ctx.sessions.list.getSnapshot())
+				if (!sessionId) return { ok: false, code: 'no-active-session' }
+				var actx = ctx.sessions.scope(sessionId)
+				if (!actx) return { ok: false, code: 'no-session-scope' }
+				var conversation = ctx.get('conversation')
+				if (!conversation || !conversation.input) return { ok: false, code: 'no-conversation-service' }
+				var input = conversation.input.for(actx)
+				if (!input || typeof input.setDraft !== 'function') return { ok: false, code: 'no-input-facade' }
+				var draft = readDraftText(input)
+				// 同 targetId 覆盖：扫草稿各 picks 引用 → 逐个读归档比对 type+targetId。
+				var reRef = /@"(picks\/([^"\s]+\.json))"/g
+				var mentions: any[] = [], mm
+				while ((mm = reRef.exec(draft)) !== null) mentions.push(mm[2])
+				var existingFile: any = null
+				for (var i = 0; i < mentions.length; i++) {
+					var lres = await postJson('/bcdp/api/picks-load', { file: mentions[i], session: sessionId })
+					if (!lres || lres.ok === false || !lres.value) continue
+					try {
+						var obj = JSON.parse(lres.value.content)
+						if (obj && obj.type === 'tab-anchor-report' && obj.targetId === space.targetId) { existingFile = mentions[i]; break }
+					} catch (e) {}
+				}
+				var body: any = { targetId: space.targetId, session: sessionId }
+				if (space.url) body.url = space.url
+				if (space.title) body.title = space.title
+				if (existingFile) body.file = existingFile
+				var res = await postJson('/bcdp/api/tab-anchor-report', body)
+				if (!res || res.ok === false || !res.value) return { ok: false, code: (res && res.error && res.error.code) || 'report-failed' }
+				var token = typeof res.value.token === 'string' ? res.value.token : '@"picks/' + res.value.file + '"'
+				var pageCount = Number(res.value.count) || 0
+				var chipLabel = '🌐 ' + (space.title || space.url || 'tab') + ' · ' + pageCount
+				var chipOk = await tryInsertPickChip(ctx, sessionId, actx, input, token, chipLabel)
+				if (!chipOk) {
+					var cur = readDraftText(input)
+					cur = cur ? cur + (cur.charAt(cur.length - 1) === '\n' ? '' : '\n') + token : token
+					input.setDraft(cur)
+				}
+				return { ok: true, code: 'delivered', file: res.value.file, count: pageCount, truncated: !!res.value.truncated }
 			} catch (err) {
 				return { ok: false, code: 'deliver-failed', message: String((err && err.message) || err) }
 			}
@@ -3977,7 +4075,22 @@ clearTimeout((panel as any)._dshHideT)
 											h('div', { className: 'dsh-ego-side-htitle' }, s.title || s.url || wt('newTab')),
 											h('div', { className: 'dsh-ego-side-hurl' }, s.url || '(about:blank)'),
 											s.targetId === state.currentTargetId ? h('div', { className: 'dsh-ego-side-hactive' }, '● ' + wt('current')) : null
-										)
+										),
+										h('button', {
+											className: 'dsh-ego-side-hat',
+											type: 'button',
+											title: wt('atQuote'),
+											onClick: function (ev: any) {
+												ev.stopPropagation()
+												var el = ev.currentTarget
+												if (el) el.className = 'dsh-ego-side-hat busy'
+												deliverTabReport(ctx, s).then(function (r: any) {
+													if (!el) return
+													if (r && r.ok) { el.className = 'dsh-ego-side-hat done'; setTimeout(function () { el.className = 'dsh-ego-side-hat' }, 1200) }
+													else { el.className = 'dsh-ego-side-hat err'; setTimeout(function () { el.className = 'dsh-ego-side-hat' }, 1500); console.warn('dsh-browser-cdp: tab anchor report failed', r && r.code) }
+												}).catch(function () { if (el) el.className = 'dsh-ego-side-hat' })
+											},
+										}, '@')
 									)
 								})
 						)

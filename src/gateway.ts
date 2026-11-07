@@ -30,6 +30,7 @@ import {
 } from './cdp-targets.ts'
 import { createSubprocessCliIo } from './cdp/cli-link.ts'
 import { setAttachEndpoint, recycleWorker } from './cast-server.ts'
+import { captureTabReport, TAB_REPORT_FILE_PREFIX } from './tab-report.ts'
 
 export interface PicksStoreDeps {
   /** Workspace picks dir for one session (undefined = none registered). */
@@ -268,6 +269,52 @@ export function registerEgoBrowserGateway(
             } catch (error) {
               writeJson(res, 404, envelopeError('not-found', error instanceof Error ? error.message : String(error)))
             }
+          } else if (method === 'tab-anchor-report') {
+            // Whole-page anchor report: one click → one archived JSON carrying
+            // the page's interactive candidates + snapshot-scoped anchors, and
+            // the composer holds only a `@"picks/<file>.json"` reference. It
+            // reuses the picks store/dock/badge machinery (findings §1) — only
+            // the capture differs from the element-pick path.
+            const repSession = typeof (body as { session?: unknown }).session === 'string' ? (body as { session: string }).session : undefined
+            const repDir = picks ? picks.resolveDir(repSession) : undefined
+            if (!repDir) {
+              writeJson(res, 409, envelopeError('no-workspace', 'no registered workspace resolves for this session'))
+              return
+            }
+            const repTargetId = typeof (body as { targetId?: unknown }).targetId === 'string' ? (body as { targetId: string }).targetId : ''
+            if (repTargetId === '') {
+              writeJson(res, 400, envelopeError('invalid-target', 'targetId is required'))
+              return
+            }
+            const attach = defaultAttachCache.get()
+            if (attach.status !== 'ready' || attach.wsUrl === '') {
+              writeJson(res, 409, envelopeError('attach-not-ready', 'no live CDP attach; activate a target and let the probe finish first'))
+              return
+            }
+            const urlHint = typeof (body as { url?: unknown }).url === 'string' ? (body as { url: string }).url : ''
+            const titleHint = typeof (body as { title?: unknown }).title === 'string' ? (body as { title: string }).title : ''
+            let report: Awaited<ReturnType<typeof captureTabReport>>
+            try {
+              report = await captureTabReport({ wsUrl: attach.wsUrl, targetId: repTargetId, engine: attach.engine, urlHint, titleHint })
+            } catch (error) {
+              const code = (error as { code?: string })?.code || 'capture-failed'
+              writeJson(res, code === 'invalid-target' ? 409 : 502, envelopeError(code, error instanceof Error ? error.message : String(error)))
+              return
+            }
+            // A client-supplied file name is honored ONLY when it passes the
+            // strict check (re-quote the same tab = overwrite); otherwise a
+            // fresh `tab-…` name. Prefix never collides with `picks-…`.
+            const repFile = typeof (body as { file?: unknown }).file === 'string' && /^[A-Za-z0-9._-]+\.json$/.test((body as { file: string }).file)
+              ? (body as { file: string }).file
+              : `${TAB_REPORT_FILE_PREFIX}${repTargetId.slice(0, 8)}-${Date.now()}.json`
+            await mkdir(repDir, { recursive: true })
+            const repTargetPath = resolve(repDir, repFile)
+            if (!repTargetPath.startsWith(resolve(repDir))) {
+              writeJson(res, 400, envelopeError('invalid-path', 'path escapes the picks dir'))
+              return
+            }
+            await writeFile(repTargetPath, JSON.stringify(report, null, 2), 'utf8')
+            writeJson(res, 200, envelopeOk({ file: repFile, token: `@"picks/${repFile}"`, count: report.elements.length, truncated: report.truncated, degraded: report.degraded ?? null }))
           } else {
             writeJson(res, 404, envelopeError('not-found', `unknown ego-browser API method "${method}"`))
           }

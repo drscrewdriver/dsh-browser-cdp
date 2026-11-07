@@ -1,3 +1,15 @@
+## 1.7.11 (2026-11-08)
+
+**新增：整页 Tab 锚点报告 @引用（tab-anchor-report）。**
+
+- **功能**：侧栏 / 浮窗历史列表的每个 tab 项新增 `@` 按钮——一次点击 = 一份整页锚点报告（页面 role+name+快照作用域 anchor），归档到会话工作区 `picks/` 目录，composer 只留 `@"picks/<file>.json"` 短引用，与点选 picks 共用同一归档/dock/badge 体系。参考 dsh-doyourweb 的整页 @引用能力，但落到 CDP 后端。
+- **粒度边界**：搜索框 @候选只做到 **tab 级**（整页打包为一条 token），元素级仍走既有逐元素点选 picks 路径，不把元素打散进列表。
+- **实现**：
+  - host 半 `src/tab-report.ts`（新）：开一条**短时 browser-level `CdpSession`**（不碰常驻 cast worker），`Target.attachToTarget` → `Accessibility.getFullAXTree` → `flattenAxTree` + `isInteractiveRole` 过滤 → `anchorFor(scope, backendNodeId)`，`scope = sha256(pageUrl \0 capturedAt)[:32]` 保证同页二次抓取锚点必变。上限 200 元素、超出 `truncated` 标注；Lightpanda 引擎降级为仅 URL+标题。role+name 取 AX 树而非 `DOMSnapshot.computedStyles`（后者不答 `role`/`aria-label`）。
+  - `src/gateway.ts`：新增 `POST /bcdp/api/tab-anchor-report` 分支，attach 未 ready 返 409 `attach-not-ready`，写档复用 picks 目录，返回 `{file, token, count, truncated, degraded}`。
+  - client 半 `src/client/index.ts`：`deliverTabReport(ctx, space)`（同 targetId 二次点击扫草稿比对复用原文件名覆盖）；浮窗 `renderHistory` + React `EgoBrowserTab` 历史行加 `@` 按钮与 busy/done/err 态样式；dock card 按 `obj.type === 'tab-anchor-report'` 分支渲染（role+anchor 片段 / URL / 元素数+truncated），badge 因匹配同一 `picks/` 正则自动计入。
+- 测试：新增 `tests/tab-report.test.ts` 9 例（scope 确定性 / 跨快照必变 / 文档序编号与锚点 / 去重忽略零值 / 200 截断 / 完整报告形状 / lightpanda 降级 / 二次抓取锚点变化）；typecheck 双配置无错、三产物 build 通过、全量 949 passed。
+
 ## 1.7.10 (2026-11-04)
 
 **修 tabbit 通道观察窗永远空白：帧回执被降级成 `resource` 后静默丢弃；顺带修 `bcdp_screenshot` 返回 `[object Object]`。**

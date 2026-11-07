@@ -1,8 +1,8 @@
 # dsh-browser-cdp — 看得见的 Agent 浏览器（CDP 接入）
 
-> 看得见的 Agent 浏览器（CDP 接入），同时驱动 egolite / Tabbit / Chrome / Edge / Brave / Lightpanda。常驻只有 `bcdp_status`（401 字符），其余 33 个 `bcdp_*` 工具按活动批次解锁——不碰浏览器的会话不缴 schema token 税（实测 −91.9%）。实时观察窗支持直接点击/滚动/中文输入，点选元素以 `@"picks/*.json"` 引用投进输入框，人机验证提醒；非 CDP 通道（ego CLI / Tabbit CLI）以 3s 轮询同步画面。宿主 `0.1.7-rc.1 ~ 0.2.2-rc.1` 精确枚举（10 个 rc）。
+> 看得见的 Agent 浏览器（CDP 接入），同时驱动 egolite / Tabbit / Chrome / Edge / Brave / Lightpanda。常驻只有 `bcdp_status`（401 字符），其余 33 个 `bcdp_*` 工具按活动批次解锁——不碰浏览器的会话不缴 schema token 税（实测 −91.9%）。实时观察窗支持直接点击/滚动/中文输入，点选元素以 `@"picks/*.json"` 引用投进输入框，人机验证提醒；非 CDP 通道（ego CLI / Tabbit CLI）以 3s 轮询同步画面。宿主 `>=0.1.7-rc.1 <0.3.0-0`（窗口 era）。
 >
-> Visible agent browser for DSH over CDP, also driving egolite / Tabbit / Chrome / Edge / Brave / Lightpanda. Only `bcdp_status` stays resident (401 chars); the other 33 context-optimized `bcdp_*` tools unlock per activity batch, so non-browser sessions pay no schema tax (−91.9% measured). Realtime watch panel with direct click/scroll/IME, element picks quoted into the composer as `@"picks/*.json"`, human-verification notices; non-CDP channels (ego CLI / Tabbit CLI) sync frames by 3s polling. Host `0.1.7-rc.1 ~ 0.2.2-rc.1` (exact enumeration, 10 rc).
+> Visible agent browser for DSH over CDP, also driving egolite / Tabbit / Chrome / Edge / Brave / Lightpanda. Only `bcdp_status` stays resident (401 chars); the other 33 context-optimized `bcdp_*` tools unlock per activity batch, so non-browser sessions pay no schema tax (−91.9% measured). Realtime watch panel with direct click/scroll/IME, element picks quoted into the composer as `@"picks/*.json"`, human-verification notices; non-CDP channels (ego CLI / Tabbit CLI) sync frames by 3s polling. Host `>=0.1.7-rc.1 <0.3.0-0` (window era).
 
 [简体中文](README.md) | [Français](README.fr.md) | [Deutsch](README.de.md) | [Italiano](README.it.md) | [Русский](README.ru.md) | [Español](README.es.md)
 
@@ -18,7 +18,7 @@
 
 | 依赖 | 最低版本 | 推荐版本 | 说明 |
 |---|---|---|---|
-| **DSH** (DeepSeek Harness) | `0.1.7-rc.1` | `0.1.7-rc.1 ~ 0.2.2-rc.1`（精确枚举） | 精确枚举 10 个 rc 版本，engines 与全部 dsh peer 同串（无区间/caret）：`0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-rc.1 || 0.2.1-rc.2 || 0.2.1-rc.3 || 0.2.1-rc.4 || 0.2.1-rc.5 || 0.2.2-rc.1`；宿主对插件 API 向后兼容（0.2.0 的 composer/`forkSession` 为签名扩展，插件仅作调用方，免改）。声明式设置面自 0.1.7 引入（Config `.volatile()` 字段自动生成设置表单），0.2.0/0.2.1 延续该形态。DSH `0.1.2-rc.1` ~ `0.1.5-rc.3` 请使用 **0.17.x** 版本线，0.1.0-rc.x / 0.1.1-rc.x 请使用 v0.8.0 及更早版本 |
+| **DSH** (DeepSeek Harness) | `0.1.7-rc.1` | `>=0.1.7-rc.1 <0.3.0-0`（窗口 era） | engines 与全部 dsh peer 同串（单侧 rc 下界 + pre-release 排他上界的窗口）：`>=0.1.7-rc.1 <0.3.0-0`，`<0.3.0-0` 确保排除 0.3.0 线及其 rc；宿主对插件 API 向后兼容（0.2.0 的 composer/`forkSession` 为签名扩展，插件仅作调用方，免改）。声明式设置面自 0.1.7 引入（Config `.volatile()` 字段自动生成设置表单），0.2.0/0.2.1 延续该形态。DSH `0.1.2-rc.1` ~ `0.1.5-rc.3` 请使用 **0.17.x** 版本线，0.1.0-rc.x / 0.1.1-rc.x 请使用 v0.8.0 及更早版本 |
 | **dsh-better-sidebar** | `0.12.2`（可选） | `≥ 0.17.1` | 未安装时自动回退浮动观察球；`< 0.12.2` 可运行但外部链接拦截（`urlTarget`）静默降级 |
 | **Node.js** | `22` | — | harness 环境自带 |
 
@@ -326,6 +326,7 @@ wait / space / escape 三族已按 `op` 合并，旧工具名**移除**（不保
 
 - **主画面**：agent 当前页面实况；点击/拖动/滚轮直接操作页面，Ctrl+滚轮缩放视图、Ctrl+拖动平移，双击复位。点击画面后可直接键盘输入，支持中文 IME、粘贴、Tab/Enter/方向键及 Ctrl/Cmd 快捷键。
 - **选择元素**（点选引用）：点一下工具条进入点选模式，再点实时画面里的任意元素——插件捕获其 `backendNodeId`/`tag`/`id` 与语义描述，以 `[CDP-PICKS]` 结构化块并入对话输入框草稿；同一页面的多次点选自动合并进同一块并依次编号，agent 按编号精确取用。浮动观察球与侧边栏 Tab 均可用。
+- **整页锚点报告**（@引用）：侧栏/历史抽屉里每个 tab 项的 `@` 按钮——一次点击抓取该页全部可交互元素（role+name+快照作用域 `sb-<anchor>`），归档为一份 `@"picks/*.json"` 整页报告投进输入框，让 agent 一眼拿到当前页面上下文而无需逐元素点选。同页二次点击覆盖刷新。这是 tab 粒度的快捷引用，与逐元素点选互补。
 - **标签页条**：顶部横排，点选切换，`×` 关闭。
 - **历史抽屉**（🕘）：按时间回看访问轨迹。
 - 操作时下方网址行就地显示提示，2 秒后恢复。

@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Agent-Browser",
+    "description": "Sichtbarer Agent-Browser für DSH: steuert das mitgelieferte ego-konforme Chromium über CDP, kann einen laufenden Chrome/Edge/Brave anbinden oder über egolite, Tabbit und Lightpanda routen; 34 strukturierte bcdp_*-Tools, von denen standardmäßig nur bcdp_status resident bleibt; Echtzeit-Beobachtungspanel mit Direkteingabe; Nicht-CDP-Kanäle gleichen Frames im 3-Sekunden-Takt."
+  }
+}

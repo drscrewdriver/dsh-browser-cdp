@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "에이전트 브라우저",
+    "description": "DSH용 화면에 보이는 에이전트 브라우저: 동봉된 ego 호환 Chromium을 CDP로 조작하고, 실행 중인 Chrome/Edge/Brave에 연결하거나 egolite·Tabbit·Lightpanda 경로도 쓸 수 있다. 34개의 구조화된 bcdp_* 도구, 기본값에서는 bcdp_status 하나만 상주한다. 실시간 관찰 패널은 클릭·스크롤·IME 직접 입력을 지원하고, 비CDP 경로는 3초 폴링으로 화면을 동기화한다."
+  }
+}

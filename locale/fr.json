@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Navigateur agent",
+    "description": "Navigateur agent visible dans DSH : pilote le Chromium ego-compatible vendu via CDP, peut se connecter à un Chrome/Edge/Brave en cours d'exécution ou passer par egolite, Tabbit et Lightpanda ; 34 outils bcdp_* structurés, seul bcdp_status reste résident par défaut ; panneau d'observation en temps réel avec saisie directe ; les canaux non-CDP synchronisent les images toutes les 3 s."
+  }
+}

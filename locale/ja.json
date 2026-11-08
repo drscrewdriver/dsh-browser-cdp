@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "エージェントブラウザ",
+    "description": "表示可能な agent ブラウザ（DSH）：同梱された ego 対応 Chromium を CDP で操作し、実行中の Chrome/Edge/Brave にも接続でき、egolite・Tabbit・Lightpanda 経由も使用できる。34 の構造化 bcdp_* ツール、既定で常駐は bcdp_status だけ。リアルタイム監視パネルはクリック・スクロール・IME 直接入力に対応し、非 CDP 経路は 3 秒ポーリングで映像を同期する。"
+  }
+}

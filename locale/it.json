@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Browser agent",
+    "description": "Browser agent visible per DSH: gestisce il Chromium ego-compatible vendato via CDP, puo collegarsi a un Chrome/Edge/Brave in运行 o instradare tramite egolite, Tabbit o Lightpanda; 34 tool bcdp_* strutturati, con solo bcdp_status activo por defecto; pannello di osservazione in tempo reale con input diretto, e i canali non-CDP sincronizzano i frame con polling di 3 s."
+  }
+}

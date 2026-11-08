@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Agent 浏览器",
+    "description": "DSH 的可见 agent 浏览器：经 CDP 驱动内置 ego 兼容 Chromium，可挂接运行中的 Chrome/Edge/Brave，或走 egolite、Tabbit、Lightpanda 通道；34 个 bcdp_* 结构化工具，默认只有 bcdp_status 常驻；实时观察面板支持直接输入，非 CDP 通道按 3 秒轮询同步画面。"
+  }
+}

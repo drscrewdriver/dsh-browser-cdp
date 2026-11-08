@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Agent Browser",
+    "description": "A visible agent browser for DSH: drives the vendored ego-compatible Chromium over CDP, can attach to a running Chrome/Edge/Brave, and can route through egolite, Tabbit or Lightpanda; 34 structured bcdp_* tools, with only bcdp_status resident by default; realtime watch panel with direct input, and non-CDP channels sync frames by 3s polling."
+  }
+}

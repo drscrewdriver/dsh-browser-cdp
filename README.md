@@ -1,16 +1,18 @@
 # dsh-browser-cdp — 看得见的 Agent 浏览器（CDP 接入）
-<img src="https://camo.githubusercontent.com/4fe1ea473d5204131549e6b56e6cbcb0cbd22c56f60deedc4c074ca58ce01738/68747470733a2f2f64736866696e642e636f6d2f6170692f62616467652f466973667a792f65676f2d62726f777365723f6c616e673d7a68" alt="dshfind - dsh-browser-cdp" data-canonical-src="https://dshfind.com/zh/plugins/drscrewdriver/dsh-browser-cdp" style="max-width: 100%;">
+
+<p align="center">
+  <img src="https://camo.githubusercontent.com/4fe1ea473d5204131549e6b56e6cbcb0cbd22c56f60deedc4c074ca58ce01738/68747470733a2f2f64736866696e642e636f6d2f6170692f62616467652f466973667a792f65676f2d62726f777365723f6c616e673d7a68" alt="dshfind - dsh-browser-cdp" data-canonical-src="https://dshfind.com/zh/plugins/drscrewdriver/dsh-browser-cdp" style="max-width: 100%;">
+  <img src="https://img.shields.io/badge/DSH-0.1.7--rc.1~0.2.2--rc.1-blue" alt="DSH 0.1.7-rc.1 ~ 0.2.2-rc.1">
+  <img src="https://img.shields.io/badge/DSH--better--sidebar-%3E%3D0.12.2(optional)-red" alt="dsh-better-sidebar >= 0.12.2 (optional)">
+  <img src="https://img.shields.io/badge/Node-%3E%3D22-brightgreen?logo=node.js&logoColor=white" alt="Node >= 22">
+</p>
 > 看得见的 Agent 浏览器（CDP 接入），同时驱动 egolite / Tabbit / Chrome / Edge / Brave / Lightpanda。常驻只有 `bcdp_status`（401 字符），其余 33 个 `bcdp_*` 工具按活动批次解锁——不碰浏览器的会话不缴 schema token 税（实测 −91.9%）。实时观察窗支持直接点击/滚动/中文输入，点选元素以 `@"picks/*.json"` 引用投进输入框，人机验证提醒；非 CDP 通道（ego CLI / Tabbit CLI）以 3s 轮询同步画面。宿主 `>=0.1.7-rc.1 <0.3.0-0`（窗口 era）。
 >
 > Visible agent browser for DSH over CDP, also driving egolite / Tabbit / Chrome / Edge / Brave / Lightpanda. Only `bcdp_status` stays resident (401 chars); the other 33 context-optimized `bcdp_*` tools unlock per activity batch, so non-browser sessions pay no schema tax (−91.9% measured). Realtime watch panel with direct click/scroll/IME, element picks quoted into the composer as `@"picks/*.json"`, human-verification notices; non-CDP channels (ego CLI / Tabbit CLI) sync frames by 3s polling. Host `>=0.1.7-rc.1 <0.3.0-0` (window era).
 
 [简体中文](README.md) | [Français](README.fr.md) | [Deutsch](README.de.md) | [Italiano](README.it.md) | [Русский](README.ru.md) | [Español](README.es.md)
 
-<p align="center">
-  <img src="https://img.shields.io/badge/DSH-0.1.7--rc.1~0.2.2--rc.1-blue" alt="DSH 0.1.7-rc.1 ~ 0.2.2-rc.1">
-  <img src="https://img.shields.io/badge/DSH--better--sidebar-%3E%3D0.12.2(optional)-red" alt="dsh-better-sidebar >= 0.12.2 (optional)">
-  <img src="https://img.shields.io/badge/Node-%3E%3D22-brightgreen?logo=node.js&logoColor=white" alt="Node >= 22">
-</p>
+
 
 > **仓库**：`github.com/drscrewdriver/dsh-browser-cdp`｜版本历史见 [CHANGELOG.md](CHANGELOG.md)
 

@@ -2,6 +2,8 @@
 
 <p align="center">
   <img src="https://camo.githubusercontent.com/4fe1ea473d5204131549e6b56e6cbcb0cbd22c56f60deedc4c074ca58ce01738/68747470733a2f2f64736866696e642e636f6d2f6170692f62616467652f466973667a792f65676f2d62726f777365723f6c616e673d7a68" alt="dshfind - dsh-browser-cdp" data-canonical-src="https://dshfind.com/zh/plugins/drscrewdriver/dsh-browser-cdp" style="max-width: 100%;">
+  [![dshfind](https://dshfind.com/api/badge/drscrewdriver/dsh-browser-cdp?lang=zh)](https://dshfind.com/zh/plugins/drscrewdriver/dsh-browser-cdp?ref=badge) 
+
   <img src="https://img.shields.io/badge/DSH-0.1.7--rc.1~0.2.2--rc.1-blue" alt="DSH 0.1.7-rc.1 ~ 0.2.2-rc.1">
   <img src="https://img.shields.io/badge/DSH--better--sidebar-%3E%3D0.12.2(optional)-red" alt="dsh-better-sidebar >= 0.12.2 (optional)">
   <img src="https://img.shields.io/badge/Node-%3E%3D22-brightgreen?logo=node.js&logoColor=white" alt="Node >= 22">

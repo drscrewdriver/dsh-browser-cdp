@@ -1304,8 +1304,12 @@ const useSpace = (name: string | number): string =>
  */
 const ensureRealTab = (): string =>
   `const __tabs = await browser.listTabs()\n` +
-  `const __real = __tabs.find(t => !t.url.startsWith('about:') && !t.url.startsWith('chrome://')) ?? __tabs[0]\n` +
-  `if (__real) await browser.switchTab(__real.targetId)\n`
+  `const __blank = (u) => /^(about:|chrome:|chrome-extension:|edge:|devtools:|data:)/.test(String(u || ''))\n` +
+  `const __real = __tabs.find(t => t.active === true && !__blank(t.url))\n` +
+  `  ?? __tabs.find(t => !__blank(t.url))\n` +
+  `  ?? __tabs.find(t => t.active === true)\n` +
+  `  ?? __tabs[0]\n` +
+  `if (__real && __real.active !== true) await browser.switchTab(__real.targetId)\n`
 /**
  * G �?a raw heredoc (`bcdp_script` with verbatim:true) that touches `page.*` without
  * first selecting a task space dies with the runtime's "no active tab to attach

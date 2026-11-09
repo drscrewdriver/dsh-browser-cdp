@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="102" height="20" role="img" aria-label="dshfind: dsh-browser-cdp — ★ 29">
+<title>dshfind: dsh-browser-cdp — ★ 29</title>
+<linearGradient id="s" x2="0" y2="100%"><stop offset="0" stop-color="#bbb" stop-opacity=".1"/><stop offset="1" stop-opacity=".1"/></linearGradient>
+<clipPath id="r"><rect width="102" height="20" rx="3" fill="#fff"/></clipPath>
+<g clip-path="url(#r)">
+<rect width="61" height="20" fill="#3f3f46"/>
+<rect x="61" width="41" height="20" fill="#71717a"/>
+<rect width="102" height="20" fill="url(#s)"/>
+</g>
+<g fill="#fff" text-anchor="middle" font-family="Verdana,'PingFang SC','Hiragino Sans GB','Microsoft YaHei',DejaVu Sans,sans-serif" font-size="110" transform="scale(.1)">
+<text x="305" y="140" fill="#000" fill-opacity=".3">dshfind</text>
+<text x="305" y="130">dshfind</text>
+<text x="815" y="140" fill="#000" fill-opacity=".3">★ 29</text>
+<text x="815" y="130">★ 29</text>
+</g>
+</svg>

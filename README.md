@@ -1,8 +1,5 @@
 # dsh-browser-cdp — 看得见的 Agent 浏览器（CDP 接入）
-<p align="center" dir="auto">
-  <a href="https://dshfind.com/zh/plugins/drscrewdriver/dsh-browser-cdp?ref=badge" rel="nofollow"><img src="https://camo.githubusercontent.com/4fe1ea473d5204131549e6b56e6cbcb0cbd22c56f60deedc4c074ca58ce01738/68747470733a2f2f64736866696e642e636f6d2f6170692f62616467652f466973667a792f65676f2d62726f777365723f6c616e673d7a68" alt="dshfind - dsh-browser-cdp" data-canonical-src="https://dshfind.com/api/badge/drscrewdriver/dsh-browser-cdp" style="max-width: 100%;"></a>
-  <a href="https://dshfind.com/zh/plugins/drscrewdriver/dsh-browser-cdp" rel="nofollow"><img src="https://camo.githubusercontent.com/53391d02f0858fd8350b1016345c3d419ce814e84fea22f7cb5c93a6b16920db/68747470733a2f2f64736866696e642e636f6d2f6170692f636172642f466973667a792f65676f2d62726f777365723f6c616e673d7a68" alt="dsh-browser-cdp card" data-canonical-src="https://dshfind.com/api/card/drscrewdriver/dsh-browser-cdp?lang=zh" style="max-width: 100%;"></a>
-</p>
+
 <p align="center">
   <img src="https://camo.githubusercontent.com/4fe1ea473d5204131549e6b56e6cbcb0cbd22c56f60deedc4c074ca58ce01738/68747470733a2f2f64736866696e642e636f6d2f6170692f62616467652f466973667a792f65676f2d62726f777365723f6c616e673d7a68" alt="dshfind - dsh-browser-cdp" data-canonical-src="https://dshfind.com/zh/plugins/drscrewdriver/dsh-browser-cdp" style="max-width: 100%;">
   <img src="https://img.shields.io/badge/DSH-0.1.7--rc.1~0.2.2--rc.1-blue" alt="DSH 0.1.7-rc.1 ~ 0.2.2-rc.1">

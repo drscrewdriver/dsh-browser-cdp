@@ -316,6 +316,38 @@ async function recordElement(backendNodeId) {
   }
 }
 
+/**
+ * Does the target node contain (or equal) the node hit at the click point?
+ *
+ * `DOM.getNodeForLocation` returns the TOPMOST node, which for `<a><img></a>` is
+ * the IMG, not the anchor we targeted. Strict id equality then misreports a good
+ * click as `click-missed` (issue #9 #4). Accepting the target itself OR any of its
+ * descendants via `Node.contains` fixes that without weakening the overlay guard:
+ * a genuine overlay is neither the target nor its child, so it still fails.
+ * Best-effort: any resolution hiccup returns false and the caller keeps the strict result.
+ */
+async function nodeContains(targetBackendId, hitBackendId) {
+  if (!Number.isFinite(hitBackendId) || hitBackendId <= 0) return false
+  if (hitBackendId === targetBackendId) return true
+  try {
+    const pushed = await call('DOM.pushNodesByBackendIdsToFrontend', { backendNodeIds: [targetBackendId, hitBackendId] })
+    const [targetNodeId, hitNodeId] = pushed?.nodeIds ?? []
+    if (!targetNodeId || !hitNodeId) return false
+    const tObj = (await call('DOM.resolveNode', { nodeId: targetNodeId }))?.object?.objectId
+    const hObj = (await call('DOM.resolveNode', { nodeId: hitNodeId }))?.object?.objectId
+    if (!tObj || !hObj) return false
+    const fn = await call('Runtime.callFunctionOn', {
+      objectId: tObj,
+      functionDeclaration: 'function(h){ return this === h || this.contains(h) }',
+      arguments: [{ objectId: hObj }],
+      returnByValue: true,
+    })
+    return fn?.result?.value === true
+  } catch {
+    return false
+  }
+}
+
 async function actOnCandidate(params) {
   const backendNodeId = Number(params.backendNodeId)
   const action = String(params.action || 'click')
@@ -382,7 +414,7 @@ async function actOnCandidate(params) {
   const hit = await call('DOM.getNodeForLocation', {
     x: Math.round(measured.centre.x), y: Math.round(measured.centre.y), includeUserAgentShadowDOM: false,
   })
-  if (Number(hit?.backendNodeId) !== backendNodeId) {
+  if (Number(hit?.backendNodeId) !== backendNodeId && !(await nodeContains(backendNodeId, Number(hit?.backendNodeId)))) {
     const at = Math.round(measured.centre.x) + ',' + Math.round(measured.centre.y)
     return {
       ok: false,
@@ -391,6 +423,12 @@ async function actOnCandidate(params) {
         String(hit?.backendNodeId) + ' - something is on top of it or the page moved',
     }
   }
+
+  // Remember where we were so a navigation can be told apart from a re-layout
+  // (issue #9 #5): a link that navigates makes the point resolve to a different
+  // node afterwards, which the old post-check reported as a failed click even
+  // though the navigation succeeded and the caller then clicked twice.
+  const beforeHref = (await call('Runtime.evaluate', { expression: 'location.href', returnByValue: true }))?.result?.value
 
   for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased']) {
     await call('Input.dispatchMouseEvent', {
@@ -407,7 +445,15 @@ async function actOnCandidate(params) {
   const after = await call('DOM.getNodeForLocation', {
     x: Math.round(measured.centre.x), y: Math.round(measured.centre.y), includeUserAgentShadowDOM: false,
   })
-  if (Number(after?.backendNodeId) !== backendNodeId) {
+  if (Number(after?.backendNodeId) !== backendNodeId && !(await nodeContains(backendNodeId, Number(after?.backendNodeId)))) {
+    // The node changed. If the URL changed too, the click navigated — that is a
+    // success, not a miss. Only report click-missed when neither the node family
+    // nor the URL accounts for the change.
+    const afterHref = (await call('Runtime.evaluate', { expression: 'location.href', returnByValue: true }))?.result?.value
+    if (typeof afterHref === 'string' && typeof beforeHref === 'string' && afterHref !== beforeHref) {
+      const navRecorded = await recordElement(backendNodeId)
+      return { ok: true, code: 'ok', action: 'click', navigated: true, backendNodeId, point: measured.centre, measured: measured.rect, drift: measured.drift, ...(navRecorded === null ? {} : { recorded: navRecorded }) }
+    }
     return { ok: false, code: 'click-missed', message: 'the click dispatched but the point now resolves to a different node' }
   }
   const recorded = await recordElement(backendNodeId)
@@ -664,8 +710,15 @@ rl.on('line', (line) => {
   })
 })
 rl.on('close', () => {
-  if (state.ws) { try { state.ws.close() } catch { /* already gone */ } }
-  process.exit(0)
+  // Do NOT exit while a request is still in flight. stdin EOF arrives before the
+  // async `chain` finishes, and a hard process.exit() here truncates the not-yet-
+  // flushed stdout replies (issue #9 #2: "the worker returned no reply for capture").
+  // Drain the chain, close the socket, then let the event loop end naturally so
+  // stdout flushes; a truly stuck chain is bounded by the host's graceMs kill.
+  chain.finally(() => {
+    if (state.ws) { try { state.ws.close() } catch { /* already gone */ } }
+    process.exitCode = 0
+  })
 })
 
 log(`ready (pid ${process.pid}, node ${process.version})`)

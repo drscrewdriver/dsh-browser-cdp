@@ -147,7 +147,7 @@ export async function runRenderCall(
   const tuning = { ...DEFAULT_RENDER_TUNING, ...options.tuning }
   const spec: SpawnSpec = {
     argv: [options.nodePath ?? defaultNodePath(), options.workerPath],
-    ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
+    cwd: options.cwd ?? process.cwd(),
     ...(options.env === undefined ? {} : { env: options.env }),
     stdio: {
       stdin: { data: buildWorkerScript(options) },

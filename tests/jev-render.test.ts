@@ -165,10 +165,12 @@ describe('jev render · one call, connect + steps', () => {
     expect(DEFAULT_RENDER_TUNING.stdoutMaxBytes).toBeGreaterThan(1024 * 1024)
   })
 
-  it('passes cwd and env through only when supplied', async () => {
+  it('always passes a cwd (defaulting to process.cwd) but env only when supplied', async () => {
     const { service, specs } = fakeSpawn(reply(1, connectOk))
     await runRenderCall(service, { workerPath: 'w.mjs', wsUrl: 'ws://x', steps: [] })
-    expect(specs[0]?.cwd).toBeUndefined()
+    // #1: the host subprocess validates spec.cwd, so a missing cwd crashes every
+    // bcdp_jev_* call. cwd must always be present; env stays optional.
+    expect(specs[0]?.cwd).toBe(process.cwd())
     expect(specs[0]?.env).toBeUndefined()
 
     const second = fakeSpawn(reply(1, connectOk))

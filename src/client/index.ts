@@ -153,7 +153,7 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 			whereLocal: 'managed Chrome window',
 			whereGeneric: 'agent browser window',
 			loginHeadless: 'The active target is Lightpanda (headless) — there is no window to sign in or verify in. Switch to a headed target (CDP endpoint / local Chrome / ego CLI / Tabbit).',
-			loginSelfPersist: 'Saved by the browser profile itself.',
+			loginSelfPersist: 'This browser keeps the login in its own profile — nothing to save here.',
 			captchaDismiss: 'Dismiss',
 			hintReset: 'Reset · scroll to pan · Ctrl+scroll to zoom · double-click to reset',
 			hintPan: 'Ctrl+scroll to zoom · Ctrl+drag to pan · double-click to reset',
@@ -283,7 +283,7 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 			whereLocal: '本机 Chrome 窗口（受管启动）',
 			whereGeneric: 'agent 浏览器窗口',
 			loginHeadless: '当前激活的是 Lightpanda（无头引擎），没有可登录/验证的窗口；请切换到有头目标（CDP 端点 / 本机 Chrome / ego CLI / Tabbit）。',
-			loginSelfPersist: '登录态由该浏览器自身保存',
+			loginSelfPersist: '登录态保存在该浏览器自己的 profile 里，无需手动落盘。',
 			captchaDismiss: '关闭提示',
 			hintReset: '已复位 · 滚轮滚动页面 · Ctrl+滚轮缩放 · 双击复位',
 			hintPan: 'Ctrl+滚轮缩放 · Ctrl+拖动平移 · 双击复位',
@@ -714,15 +714,15 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
      the sentence into a one-character column. */
   flex-wrap: wrap; row-gap:6px; container-type: inline-size; }
 #dsh-ego-login.show { display:flex; }
-#dsh-ego-login .dsh-ego-login-txt { flex:1 1 12em; min-width:0; font-size:11px; line-height:1.45; color:#f5f5f7;
+#dsh-ego-login .dsh-ego-login-txt { flex:2 1 12em; min-width:0; font-size:11px; line-height:1.45; color:#f5f5f7;
   overflow-wrap: anywhere; }
 #dsh-ego-login .dsh-ego-login-txt b { color:#ffd60a; }
 #dsh-ego-login .dsh-ego-login-btn { flex:none; background:#0a84ff; color:#fff; border:none; border-radius:8px;
   font-size:11px; padding:4px 10px; cursor:pointer; white-space:nowrap; transition: background .15s ease; }
 #dsh-ego-login .dsh-ego-login-btn:hover { background:#338cff; }
 #dsh-ego-login .dsh-ego-login-btn.saving { opacity:.55; pointer-events:none; }
-#dsh-ego-login .dsh-ego-login-note { flex:0 1 auto; min-width:0; max-width:100%; font-size:10.5px; color:#6e6e73;
-  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+#dsh-ego-login .dsh-ego-login-note { flex:1 1 10em; min-width:0; max-width:100%; font-size:10.5px; color:#6e6e73;
+  white-space:normal; overflow-wrap:anywhere; }
 /* dismiss (×) on guide strips so the user can close them and reclaim the space */
 .dsh-ego-dismiss { flex:none; width:18px; height:18px; line-height:1; border-radius:50%; border:none;
   background: rgba(255,255,255,.12); color:inherit; font-size:13px; cursor:pointer; opacity:.75;
@@ -736,10 +736,12 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
   border-radius:9px; border:1px solid rgba(255,69,58,.4); background: rgba(255,69,58,.13); color:#ffe1de;
   flex-wrap: wrap; row-gap:6px; container-type: inline-size; }
 @container (max-width: 260px) {
-  #dsh-ego-login .dsh-ego-login-note, #dsh-ego-captcha .dsh-ego-captcha-kind { display:none; }
+  /* The kind pill is pure decoration — it is the only thing that steps aside.
+     Text never truncates or hides: both lines shrink proportionally and wrap. */
+  #dsh-ego-captcha .dsh-ego-captcha-kind { display:none; }
 }
 #dsh-ego-captcha.show { display:flex; }
-#dsh-ego-captcha .dsh-ego-captcha-txt { flex:1 1 12em; min-width:0; font-size:11.5px; line-height:1.5;
+#dsh-ego-captcha .dsh-ego-captcha-txt { flex:2 1 12em; min-width:0; font-size:11.5px; line-height:1.5;
   overflow-wrap: anywhere; }
 #dsh-ego-captcha .dsh-ego-captcha-txt b { color:#ff6961; }
 #dsh-ego-captcha .dsh-ego-captcha-kind { flex:none; font-size:10px; padding:2px 8px; border-radius:999px;
@@ -2980,7 +2982,9 @@ clearTimeout((panel as any)._dshHideT)
   container-type: inline-size;
 }
 @container (max-width: 260px) {
-  .dsh-ego-side-login-note, .dsh-ego-side-captcha-kind { display: none; }
+  /* Decoration only: the captcha kind pill steps aside. Every text line keeps
+     rendering — it just shrinks proportionally and wraps. */
+  .dsh-ego-side-captcha-kind { display: none; }
 }
 .dsh-ego-side-login {
   border: 1px solid rgba(255,214,10,.3); background: rgba(255,214,10,.1);
@@ -2988,7 +2992,7 @@ clearTimeout((panel as any)._dshHideT)
 .dsh-ego-side-captcha {
   border: 1px solid rgba(255,69,58,.4); background: rgba(255,69,58,.13);
 }
-.dsh-ego-side-login .dsh-ego-side-login-txt { flex: 1 1 11em; min-width: 0; overflow-wrap: anywhere; }
+.dsh-ego-side-login .dsh-ego-side-login-txt { flex: 2 1 11em; min-width: 0; overflow-wrap: anywhere; }
 .dsh-ego-side-login .dsh-ego-side-login-txt b { color: #ffd60a; }
 .dsh-ego-side-login-btn {
   flex: none; background: #0a84ff; color: #fff; border: none; border-radius: 7px;
@@ -2997,9 +3001,9 @@ clearTimeout((panel as any)._dshHideT)
 }
 .dsh-ego-side-login-btn:hover { background: #338cff; }
 .dsh-ego-side-login-btn.saving { opacity: .55; pointer-events: none; }
-.dsh-ego-side-login-note { flex: 0 1 auto; min-width: 0; max-width: 100%; font-size: 10px; opacity: .6;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.dsh-ego-side-captcha-txt { flex: 1 1 11em; min-width: 0; overflow-wrap: anywhere; }
+.dsh-ego-side-login-note { flex: 1 1 9em; min-width: 0; max-width: 100%; font-size: 10px; opacity: .6;
+  white-space: normal; overflow-wrap: anywhere; }
+.dsh-ego-side-captcha-txt { flex: 2 1 11em; min-width: 0; overflow-wrap: anywhere; }
 .dsh-ego-side-captcha-txt b { color: #ff6961; }
 .dsh-ego-side-captcha-kind {
   flex: none; font-size: 9.5px; padding: 2px 7px; border-radius: 999px;

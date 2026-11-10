@@ -213,6 +213,10 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 			pickCardRecapture: 'Recapture',
 			pickCardRecaptureHint: 'Re-read this tab and overwrite the quoted report (same @ token)',
 			pickCardLive: 'live',
+			trackAllOn: '全模式 · 全部 tab',
+			trackAllOff: '仅激活 tab',
+			trackAllHintOn: '全模式：space 内每个 tab 都单独报图，外框标出当前激活的那个。点一下回到仅激活。',
+			trackAllHintOff: '仅激活：只报激活 tab 的图。点一下切到全模式（track every tab）。',
 			pageRefresh: 'Reload page',
 			pageRefreshHint: 'Reload the agent page itself (Page.reload)',
 			openUrl: 'Open URL',
@@ -339,6 +343,10 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 			pickCardRecapture: '重抓快照',
 			pickCardRecaptureHint: '重新读取这个 tab 并覆盖引用的报告（@ token 不变）',
 			pickCardLive: '实时',
+			trackAllOn: '全模式 · 全部 tab',
+			trackAllOff: '仅激活 tab',
+			trackAllHintOn: '全模式：space 内每个 tab 都单独出图，外框标出当前激活的那个；再点一下回到仅激活。',
+			trackAllHintOff: '仅激活：只出激活 tab 的图；点一下切到全模式（所有 tab 都跟踪）。',
 			pageRefresh: '刷新页面',
 			pageRefreshHint: '重新加载 agent 当前页面（Page.reload）',
 			openUrl: '打开网址',
@@ -395,6 +403,8 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 		}
 
 		const SPACES_ROUTE = '/api/bcdp/spaces'
+		const TRACKING_ROUTE = '/api/bcdp/tracking'
+		const SWITCH_TAB_ROUTE = '/api/bcdp/switch-tab'
 		const EGO_CLOSE_ROUTE = '/api/bcdp/close'
 		const WATCH_START_ROUTE = '/api/bcdp/watch/start'
 		const WATCH_SWITCH_ROUTE = '/api/bcdp/watch/switch'
@@ -409,6 +419,16 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 
 		function postJson(path: any, body: any) {
 			return fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body || {}) }).then(function (res) { return res.json().catch(function () { return {} }) })
+		}
+
+		/** Make one tab the browser's active target (panel click = "show me that tab"). */
+		function switchTabRemote(targetId: any): Promise<any> {
+			if (targetId === undefined || targetId === null || targetId === '') return Promise.resolve(null)
+			return postJson(SWITCH_TAB_ROUTE, { targetId: String(targetId) }).catch(function (): any { return null })
+		}
+		/** 全模式 switch: GET returns the current value, POST flips it. */
+		function setTrackAllRemote(all: boolean): Promise<any> {
+			return postJson(TRACKING_ROUTE, { all: all }).catch(function (): any { return null })
 		}
 
 		function createKeyboardProxy(send: any) {
@@ -769,6 +789,12 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
   font-size:11px; padding:2px 7px; border-radius:5px;
 }
 .dsh-ego-preset-item:hover { background: rgba(255,255,255,.2); }
+/* live/active indication: the picture that belongs to the browser's ACTIVE tab
+   gets a green frame (全模式 makes this the only way to tell them apart). */
+.dsh-ego-liveview.is-live img, .dsh-ego-liveview.is-live video {
+  box-shadow: 0 0 0 2px #30d158, 0 0 14px rgba(48,209,88,.3);
+}
+.dsh-ego-tab.is-live .dsh-ego-tabdot { background:#30d158; box-shadow:0 0 6px #30d15888; }
 .dsh-ego-liveimg {
   width:100%; border-radius:11px; display:block;
   max-height:50vh; object-fit:contain;
@@ -832,6 +858,9 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 		const ICON_ASPECT = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2.2"/><path d="M3 10h18"/><path d="M8 5v5"/></svg>`;
 		const ICON_MAXIMIZE = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H3v5"/><path d="M16 3h5v5"/><path d="M8 21H3v-5"/><path d="M16 21h5v-5"/></svg>`;
 		const ICON_LINK = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M10 13.5a4 4 0 0 0 5.7 0l2.8-2.8a4 4 0 0 0-5.7-5.7L11.5 6.3"/><path d="M14 10.5a4 4 0 0 0-5.7 0l-2.8 2.8a4 4 0 0 0 5.7 5.7l1.3-1.3"/></svg>`;
+		// 全模式 (track every tab) vs 仅激活 (one tab).
+		const ICON_GRID = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><rect x="3.5" y="3.5" width="7" height="7" rx="1.6"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.6"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.6"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.6"/></svg>`;
+		const ICON_SQUARE = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><rect x="5" y="5" width="14" height="14" rx="2.4"/></svg>`;
 
 		// ── 设置卡双轨数据源的桥轨（session-guard BridgeDocHandle 同式收缩版）──
 		// ≤0.1.5 宿主无 configForms 服务（代际切分：configForms 属 rc.1+ 代），
@@ -1641,6 +1670,8 @@ h('button', { type: 'button', disabled: !writable || isFull(links) || hasCliLink
 				// Which connection target the panel is looking at ({kind,label,engine}),
 				// reported by /api/bcdp/spaces. Drives the login / captcha copy.
 				let panelLink: any = null
+				// 全模式 (every tab gets a picture) vs 仅激活 (one). Host-owned; mirrored here.
+				let trackAll = false
 
 				// Toggle the history drawer (side panel).
 				const setHistory = (open: any) => {
@@ -2014,9 +2045,13 @@ h('button', { type: 'button', disabled: !writable || isFull(links) || hasCliLink
 						})
 						tab.appendChild(closeBtn)
 						if (s.targetId === selectedTabId || (selectedTabId === null && s.targetId === currentActiveId)) tab.classList.add('active')
+						if (s.active === true) tab.classList.add('is-live')
 						tab.addEventListener('click', () => {
 							// Clicking the already-selected tab returns to live follow.
 							if (selectedTabId === s.targetId) { selectedTabId = null; pinned = null; renderSpaces(lastList); return }
+							// Otherwise: activate it in the browser (so the poller captures it),
+							// then pin the view on that tab.
+							if (s.targetId !== currentActiveId) void switchTabRemote(s.targetId).then(() => refresh())
 							selectedTabId = s.targetId
 							pinned = null
 							renderLiveMain(s, true)
@@ -2089,7 +2124,10 @@ h('button', { type: 'button', disabled: !writable || isFull(links) || hasCliLink
 
 				const renderSpaces = (spaces: any) => {
 					if (disposed) return
-					lastList = Array.isArray(spaces) ? spaces : []
+					// 全模式: keep the whole inventory. 仅激活: render one tab (the active one).
+					const incoming = Array.isArray(spaces) ? spaces : []
+					lastList = trackAll ? incoming : incoming.filter((s: any) => s && s.active === true).slice(0, 1)
+					if (lastList.length === 0 && incoming.length === 1) lastList = incoming.slice(0, 1)
 					// Keep pageMeta authoritative for the auto-follow AND for the
 					// viewport-based coordinate mapping. Merge (do not overwrite) so
 					// vw/vh learned from an SSE frame are not lost on the next poll;
@@ -2170,7 +2208,7 @@ h('button', { type: 'button', disabled: !writable || isFull(links) || hasCliLink
 				const renderLiveMain = (current: any, isPinned: any) => {
 					body.innerHTML = ''
 					const view = document.createElement('div')
-					view.className = 'dsh-ego-liveview'
+					view.className = 'dsh-ego-liveview' + (isPinned ? '' : ' is-live')
 					const badge = document.createElement('div')
 					badge.className = 'dsh-ego-livebadge'
 					badge.innerHTML = isPinned
@@ -2292,6 +2330,17 @@ h('button', { type: 'button', disabled: !writable || isFull(links) || hasCliLink
 					})
 					badge.appendChild(presetBtn)
 					badge.appendChild(presetRow)
+					// 全模式 / 仅激活: done through the host route so the poller behaves.
+					const trackBtn = document.createElement('button')
+					trackBtn.type = 'button'
+					trackBtn.className = 'dsh-ego-back' + (trackAll ? ' on' : '')
+					trackBtn.title = trackAll ? wt('trackAllHintOn') : wt('trackAllHintOff')
+					trackBtn.innerHTML = `${trackAll ? ICON_GRID : ICON_SQUARE}<span style="margin-left:4px">${trackAll ? wt('trackAllOn') : wt('trackAllOff')}</span>`
+					trackBtn.addEventListener('click', () => {
+						trackAll = !trackAll
+						void setTrackAllRemote(trackAll).then(() => refresh())
+					})
+					badge.appendChild(trackBtn)
 					const cached = frameCache.get(current.targetId)
 					if (captureBackend === 'ffmpeg' || cached) {
 						const img = makeZoomImage(u, captureBackend === 'ffmpeg' ? 'video' : 'img')
@@ -2617,6 +2666,10 @@ h('button', { type: 'button', disabled: !writable || isFull(links) || hasCliLink
 						void panel.offsetHeight
 						panel.classList.add('dsh-ego-panel-open')
 						fab.classList.add('on')
+						// Adopt the host's tracking mode (全模式 / 仅激活) before the first paint.
+						void fetch(TRACKING_ROUTE, { cache: 'no-store' }).then((r) => r.json().catch((): any => null)).then((data: any) => {
+							if (data && typeof data.all === 'boolean' && data.all !== trackAll) { trackAll = data.all; refresh() }
+						}).catch(() => {})
 						refresh()
 						openStream()
 						if (currentActiveId) syncWatch(selectedTabId || currentActiveId)
@@ -3011,6 +3064,11 @@ clearTimeout((panel as any)._dshHideT)
 .dsh-ego-size-unlocked .dsh-ego-side-resize-corner {
   background: rgba(217,119,87,.3); border-bottom-right-radius: 9px;
 }
+/* Green frame = this image belongs to the browser's ACTIVE tab. In 全模式 every
+   tab has its own picture, so the outline is what marks the live one. */
+.dsh-ego-side-stage.is-live { box-shadow: 0 0 0 2px #30d158, 0 0 12px rgba(48,209,88,.3); border-radius: 11px; }
+.dsh-ego-side-tab.is-live .dsh-ego-side-tabdot { background: #30d158; box-shadow: 0 0 6px #30d158; }
+.dsh-ego-side-tab.is-live .dsh-ego-side-tabtxt { font-weight: 600; }
 .dsh-ego-side-resize:hover { background: rgba(217,119,87,.5) !important; }
 .dsh-ego-side-liveimg {
   width: 100%; border-radius: 9px; display: block;
@@ -3702,6 +3760,10 @@ clearTimeout((panel as any)._dshHideT)
 			this._pointerState = null
 			// Backend identity from /api/bcdp/spaces ({kind,label,engine}).
 			this.link = null
+			// 全模式: track EVERY tab in the space (one image per tab). Off = only the
+			// active tab is captured/rendered. The value lives on the host (the CLI
+			// poller reads it each tick); this copy mirrors it for rendering.
+			this.trackAll = false
 			var self = this
 			this.keyboardProxy = createKeyboardProxy(function (targetId: any, type: any, params: any) { self.sendInput(targetId, type, params) })
 			this.dismissedGuides = { login: false, captcha: false }
@@ -3722,6 +3784,8 @@ clearTimeout((panel as any)._dshHideT)
 				showLoginGuide: false,
 				captchaKind: null,
 				link: null,
+				trackAll: false,
+				agentActiveId: null,
 				historyOpen: false,
 				zoomHint: null,
 				wiringStale: false,
@@ -3813,13 +3877,25 @@ clearTimeout((panel as any)._dshHideT)
 				s.pick = self._pick
 				s.pickMessage = self._pickMessage
 				s.link = self.link
+				s.trackAll = self.trackAll
+				s.agentActiveId = self.agentActiveId
 			})
 			this._syncWatch(currentTargetId)
 		}
 		LivePreviewController.prototype.start = function () {
 			document.addEventListener('visibilitychange', this.onDocumentVisibility)
+			var self = this
+			// Adopt the host's tracking mode (全模式 / 仅激活) before the first render.
+			fetch(TRACKING_ROUTE, { cache: 'no-store' }).then(function (res) { return res.json().catch(function (): any { return null }) }).then(function (data: any) {
+				if (data && typeof data.all === 'boolean') { self.trackAll = data.all; self._recompute() }
+			}).catch(function () {})
 			this._recompute()
 			if (this.visible) { this.refresh(); this.openStream() }
+		}
+		LivePreviewController.prototype.setTrackAll = function (all: any) {
+			this.trackAll = all === true
+			this._recompute()
+			void setTrackAllRemote(this.trackAll)
 		}
 		LivePreviewController.prototype.togglePick = function () {
 			var targetId = this.currentActiveId
@@ -3978,7 +4054,11 @@ clearTimeout((panel as any)._dshHideT)
 		}
 		LivePreviewController.prototype._processSpaces = function (spaces: any) {
 			if (this.disposed) return
-			this.lastList = Array.isArray(spaces) ? spaces : []
+			var incoming = Array.isArray(spaces) ? spaces : []
+			// 仅激活: the panel renders ONE tab (the browser-active one). 全模式 keeps
+			// the whole inventory so every tab has its own row and picture.
+			this.lastList = this.trackAll ? incoming : incoming.filter(function (s: any) { return s && s.active === true }).slice(0, 1)
+			if (this.lastList.length === 0 && incoming.length === 1) this.lastList = incoming.slice(0, 1)
 			var self = this
 			for (var i = 0; i < this.lastList.length; i++) {
 				var s = this.lastList[i]
@@ -4159,6 +4239,9 @@ clearTimeout((panel as any)._dshHideT)
 			this._recompute()
 		}
 		LivePreviewController.prototype.selectTab = function (targetId: any) {
+			// Clicking a tab means "show me that tab": activate it in the browser so
+			// the poller captures it, then pin the view locally (click again = live).
+			if (targetId !== this.currentActiveId) void switchTabRemote(targetId)
 			if (this.selectedTabId === targetId) {
 				this.selectedTabId = null
 				this.pinned = null
@@ -4655,7 +4738,7 @@ clearTimeout((panel as any)._dshHideT)
 						var isActive = s.targetId === state.selectedTabId || (state.selectedTabId === null && s.targetId === state.currentTargetId)
 						return h('div', {
 							key: s.targetId,
-							className: 'dsh-ego-side-tab' + (isActive ? ' active' : ''),
+							className: 'dsh-ego-side-tab' + (isActive ? ' active' : '') + (s.active === true ? ' is-live' : ''),
 							title: s.url || '',
 							onClick: function () { controller.selectTab(s.targetId) },
 						},
@@ -4753,6 +4836,13 @@ clearTimeout((panel as any)._dshHideT)
 								onClick: openUrlInPanel,
 							}, icon(ICON_LINK), wt('openUrl')),
 							// ── tasks 19–21: size sync / presets / maximize ──
+							// 全模式: every tab in the space is captured and rendered; the green
+							// frame marks the active one. Off = only the active tab is shown.
+							h('button', {
+								className: 'dsh-ego-side-back' + (state.trackAll ? ' on' : ''), type: 'button',
+								title: state.trackAll ? wt('trackAllHintOn') : wt('trackAllHintOff'),
+								onClick: function () { controller.setTrackAll(!state.trackAll) },
+							}, icon(state.trackAll ? ICON_GRID : ICON_SQUARE), state.trackAll ? wt('trackAllOn') : wt('trackAllOff')),
 							h('button', {
 								className: 'dsh-ego-side-back' + (sizeSyncOn ? ' on' : ''), type: 'button',
 								title: wt('sizeSyncHint'),
@@ -4784,7 +4874,7 @@ clearTimeout((panel as any)._dshHideT)
 								)
 								: null
 						),
-						h('div', { className: 'dsh-ego-side-stage' + (sizeSyncOn ? ' dsh-ego-size-unlocked' : ''), ref: stageRef },
+						h('div', { className: 'dsh-ego-side-stage' + (sizeSyncOn ? ' dsh-ego-size-unlocked' : '') + (state.currentTargetId != null && state.currentTargetId === state.agentActiveId ? ' is-live' : ''), ref: stageRef },
 							liveImg,
 							h('div', { className: 'dsh-ego-side-resize dsh-ego-side-resize-right', title: wt('resizeHint'), onPointerDown: beginResize('x') }),
 							h('div', { className: 'dsh-ego-side-resize dsh-ego-side-resize-bottom', title: wt('resizeHint'), onPointerDown: beginResize('y') }),

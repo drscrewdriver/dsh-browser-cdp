@@ -4,6 +4,7 @@ import {
   parsePanelResult,
   buildEgoWindowSizeScript,
   buildEgoNavigateScript,
+  buildEgoSwitchTabScript,
 } from '../src/cast/panel-actions.ts'
 import { MAX_VIEWPORT_WIDTH, MIN_VIEWPORT_HEIGHT, MIN_VIEWPORT_WIDTH } from '../src/worker/window-size.ts'
 
@@ -76,6 +77,27 @@ describe('buildEgoWindowSizeScript', () => {
   it('embeds U+2028 escaped (never a raw line separator in source)', () => {
     const withSep = buildEgoWindowSizeScript(JSON.stringify('s'), { url: 'a\u2028b' } as Record<string, unknown>)
     expect(withSep).not.toContain('\u2028')
+  })
+})
+
+describe('buildEgoSwitchTabScript', () => {
+  it('activates the clicked tab through browser.switchTab', () => {
+    const script = buildEgoSwitchTabScript(JSON.stringify('agent-space'), { targetId: 'T2' })
+    expect(script).toContain('taskSpaces.useOrCreate("agent-space")')
+    expect(script).toContain('browser.listTabs()')
+    expect(script).toContain('browser.switchTab({ targetId: __bcdpTarget })')
+    expect(script).toContain('"T2"')
+  })
+  it('does not re-activate an already active tab', () => {
+    expect(buildEgoSwitchTabScript(JSON.stringify('s'), { targetId: 'T1' })).toContain('if (__hit.active !== true)')
+  })
+  it('rejects a missing targetId through the sentinel', () => {
+    const script = buildEgoSwitchTabScript(JSON.stringify('s'), {})
+    expect(script).toContain('targetId required')
+    expect(script).toContain(PANEL_SENTINEL)
+  })
+  it('drops unknown fields', () => {
+    expect(buildEgoSwitchTabScript(JSON.stringify('s'), { targetId: 'T1', url: 'https://evil' })).not.toContain('evil')
   })
 })
 

@@ -38,6 +38,8 @@ export interface PanelActionOutcome {
 export interface PanelActionRunner {
   windowSize: (body: Record<string, unknown>) => Promise<PanelActionOutcome>
   navigate: (body: Record<string, unknown>) => Promise<PanelActionOutcome>
+  /** Make one tab the browser's active target (the user clicked it in the panel). */
+  switchTab: (body: Record<string, unknown>) => Promise<PanelActionOutcome>
 }
 
 /**
@@ -48,6 +50,11 @@ const js = (v: unknown): string =>
   JSON.stringify(v).replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029')
 
 /** Only well-typed, known fields reach the heredoc (a body is client input). */
+function pickTargetId(body: Record<string, unknown>): string {
+  return typeof body.targetId === 'string' ? body.targetId.trim().slice(0, 200) : ''
+}
+
+/** Field whitelist for the window-size contract. */
 function pickWindowRequest(body: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {}
   for (const key of ['width', 'height', 'delta', 'dy'] as const) {
@@ -142,6 +149,32 @@ export function buildEgoWindowSizeScript(spaceJson: string, body: Record<string,
     `    await cdp('Browser.setWindowBounds', { windowId: __windowId, bounds: __bounds })\n` +
     `    console.log(${js(PANEL_SENTINEL)} + JSON.stringify({ ok: true, windowId: __windowId, targetId: __tab.targetId, viewport: { width: __w, height: __h } }))\n` +
     `  }\n` +
+    `} catch (__bcdpErr) {\n` +
+    `  console.log(${js(PANEL_SENTINEL)} + JSON.stringify({ ok: false, error: String((__bcdpErr && __bcdpErr.message) || __bcdpErr) }))\n` +
+    `}\n`
+  )
+}
+
+/**
+ * switch-tab heredoc — the user clicked a tab in the panel.
+ *
+ * This is the ONE place a panel action deliberately mutates the browser: the
+ * click means "show me that tab", so activating it is the intent. `switchTab`
+ * also re-points the CLI session's preferred target, which keeps the agent and
+ * the panel looking at the same page instead of silently diverging.
+ */
+export function buildEgoSwitchTabScript(spaceJson: string, body: Record<string, unknown>): string {
+  const targetId = js(pickTargetId(body))
+  return (
+    `const __bcdpTarget = ${targetId}\n` +
+    `try {\n` +
+    `  if (__bcdpTarget === '') throw new Error('targetId required')\n` +
+    `  await taskSpaces.useOrCreate(${spaceJson})\n` +
+    `  const __tabs = await browser.listTabs()\n` +
+    `  const __hit = __tabs.find((t) => t.targetId === __bcdpTarget)\n` +
+    `  if (!__hit) throw new Error('tab not found: ' + __bcdpTarget)\n` +
+    `  if (__hit.active !== true) await browser.switchTab({ targetId: __bcdpTarget })\n` +
+    `  console.log(${js(PANEL_SENTINEL)} + JSON.stringify({ ok: true, targetId: __bcdpTarget, url: __hit.url || '', title: __hit.title || '' }))\n` +
     `} catch (__bcdpErr) {\n` +
     `  console.log(${js(PANEL_SENTINEL)} + JSON.stringify({ ok: false, error: String((__bcdpErr && __bcdpErr.message) || __bcdpErr) }))\n` +
     `}\n`

@@ -35,9 +35,9 @@ import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { importLoginCookies } from './login-import.ts'
-import { initCastServer, markEgoToolCall, getLastEgoActivity, onEgoActivity, setAttachEndpoint, recycleWorker, getCliPollStatus, getAttachEndpoint, broadcastCliFrame } from './cast-server.ts'
+import { initCastServer, markEgoToolCall, getLastEgoActivity, onEgoActivity, setAttachEndpoint, recycleWorker, getCliPollStatus, getAttachEndpoint, broadcastCliFrame, broadcastCliFrames, getCliTrackAll } from './cast-server.ts'
 import { CliFramePoller, buildFrameScript, FRAME_SENTINEL } from './cast/cli-frame-poller.ts'
-import { buildEgoNavigateScript, buildEgoWindowSizeScript, parsePanelResult, type PanelActionOutcome, type PanelActionRunner } from './cast/panel-actions.ts'
+import { buildEgoNavigateScript, buildEgoSwitchTabScript, buildEgoWindowSizeScript, parsePanelResult, type PanelActionOutcome, type PanelActionRunner } from './cast/panel-actions.ts'
 import { buildEgoAxScript, buildTabbitAxSnippet, composeFallbackReport, parseAxSentinel, type FallbackAxSnapshot } from './cast/fallback-tab-report.ts'
 import type { TabAnchorReport } from './tab-report.ts'
 import { registerEgoBrowserGateway } from './gateway.ts'
@@ -1431,6 +1431,7 @@ function makePanelActions(ctx: EgoContext, cfg: EgoRuntimeConfig): PanelActionRu
   return {
     windowSize: (body) => run((spaceJson) => buildEgoWindowSizeScript(spaceJson, body)),
     navigate: (body) => run((spaceJson) => buildEgoNavigateScript(spaceJson, body)),
+    switchTab: (body) => run((spaceJson) => buildEgoSwitchTabScript(spaceJson, body)),
   }
 }
 
@@ -1551,7 +1552,9 @@ async function spawnCliFrameCapture(
   space = resolveCliPanelSpace(cfg, space)
   if (space === null) return ''
   const { attach } = effectiveChannel(cfg)
-  const script = buildFrameScript(j(space))
+  // 全模式: capture every tab in the space (one heredoc, one image per tab) so
+  // the panel can show a live picture per tab. 仅激活: one image, as before.
+  const script = buildFrameScript(j(space), { all: getCliTrackAll() })
   try {
     const handle = subprocess.spawn({
       argv: buildEgoToolArgv(cfg.egoArgvPrefix, attach, cfg.runtimeArgs ?? ''),
@@ -2326,13 +2329,13 @@ bridge.onChange(() => tiers.reapply())
     intervalMs: 3000,
     capture: () => spawnCliFrameCapture(ctx.subprocess, cfg, cfg.spaceTracker.lastActiveSpace()),
     isBusy: egoLockBusy,
-    onFrame: (frame) => broadcastCliFrame(
-      { png: frame.png, url: frame.url, title: frame.title, seq: frame.seq, updatedAt: frame.updatedAt, fmt: frame.fmt },
-      // Real tab inventory → the panel lists EVERY tab (multi-tab strip) and the
-      // image binds to the browser's active tab, not a synthetic placeholder.
+    onFrame: (frame) => broadcastCliFrames(
+      frame.frames.map((f) => ({ targetId: f.targetId, png: f.png, fmt: f.fmt, url: f.url, title: f.title })),
+      // Real tab inventory → the panel lists EVERY tab (multi-tab strip).
       frame.tabs.length > 0
         ? frame.tabs.map((t) => ({ targetId: t.targetId, url: t.url, title: t.title, active: t.active, lastActive: frame.updatedAt }))
         : undefined,
+      frame.updatedAt,
     ),
   })
   ctx.effect?.(() => () => cliPoller.stop())

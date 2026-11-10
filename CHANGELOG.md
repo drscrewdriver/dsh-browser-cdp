@@ -1,3 +1,15 @@
+## 1.9.4 (2026-11-10)
+
+**全模式（space 内所有 tab 都抓）+ 点 tab 真切换 + 激活 tab 绿框。**
+
+- **两种跟踪模式（host 开关）**：`GET/POST /api/bcdp/tracking`。
+  - `全模式`：一轮 heredoc 里逐 tab `attach → Runtime.evaluate → captureScreenshot`，回 `frames[]`（每 tab 一张 JPEG，上限 6 张），面板每个 tab 都有自己的画面，绿框标激活。
+  - `仅激活`（默认）：只抓/只渲染激活那一个 tab。
+- **点 tab 真切换**：`POST /api/bcdp/switch-tab`（worker 走 `Target.activateTarget`，ego-cli 走 heredoc `browser.switchTab`）。面板点 tab = 让浏览器真切到它，轮询下一轮就拍到新图；已选中的再点一次回到“跟随实时”。
+- **绿框指示**：侧栏 stage / 浮窗图片在“当前展示的就是浏览器激活 tab”时上 `#30d158` 外框；tab 条上激活那一项的绿点加亮 + 加粗。
+- **帧协议升级**：`@@BCDP_FRAME@@` 新增 `frames[]`（`targetId + png + fmt + url + title`）；`broadcastCliFrames()` 一轮发多张 `frame` 事件（客户端按 `targetId` 分缓存），hold 定时器重播整轮。
+- **测试**：`cli-frame-poller` 新增多 tab/两模式用例，`panel-actions` 新增 switch-tab 4 条；全量 1021 passed / 13 skipped。
+
 ## 1.9.3 (2026-11-10)
 
 **多 tab 与 @ 对象同频：面板跟真实 tab 清单/当前激活 tab 走，tab 报告进同一个桶。**

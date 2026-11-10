@@ -7076,6 +7076,26 @@ async function main() {
 				await active.cdp.call("Target.closeTarget", { targetId });
 				return sendJson(res, 200, { ok: true });
 			}
+			if (req.method === "POST" && url.pathname === "/api/switch-tab") {
+				const body = await readJson(req);
+				const targetId = typeof body?.targetId === "string" ? body.targetId : "";
+				if (!active || targetId === "") return sendJson(res, 400, {
+					ok: false,
+					error: "targetId required"
+				});
+				try {
+					await active.cdp.call("Target.activateTarget", { targetId });
+					return sendJson(res, 200, {
+						ok: true,
+						targetId
+					});
+				} catch (error) {
+					return sendJson(res, 502, {
+						ok: false,
+						error: error.message || String(error)
+					});
+				}
+			}
 			if (req.method === "POST" && url.pathname === "/api/flush") {
 				if (!active) return sendJson(res, 409, {
 					ok: false,

@@ -213,54 +213,85 @@ export interface CliSpaceRow {
 }
 
 export function broadcastCliFrame(
-  frame: { png: Buffer; url: string; title: string; seq: number; updatedAt: number; fmt?: 'png' | 'jpeg' },
+  frame: { png: Buffer; url: string; title: string; seq: number; updatedAt: number; fmt?: 'png' | 'jpeg'; targetId?: string },
   spaces?: CliSpaceRow[],
 ): void {
-  // Remember the newest frame so the hold/heartbeat timer can re-emit it during
-  // the gap between 3s CLI captures (a screenshot can momentarily stall the
-  // page's rendering, and there is no screencast on the ego-cli route).
-  lastCliFrameBroadcast = frame
-  lastCliFrameAt = Date.now()
-  // A caller that KNOWS the real tab inventory (Tabbit's 3s poller) hands it in,
-  // so the panel's tab strip is driven by the same cadence as the picture
-  // instead of a synthetic single-space row. No override = ego-cli's synthetic
-  // row, and any previously supplied inventory is dropped (link kinds switch).
+  broadcastCliFrames([{ targetId: frame.targetId ?? '', png: frame.png, fmt: frame.fmt, url: frame.url, title: frame.title }], spaces, frame.updatedAt)
+}
+
+/** One captured image bound to the tab it came from. */
+export interface CliFrameImage {
+  targetId: string
+  png: Buffer
+  fmt?: 'png' | 'jpeg'
+  url?: string
+  title?: string
+}
+
+/**
+ * Push one capture CYCLE into the live stream: 全模式 sends one image per tab,
+ * 仅激活 sends exactly one. Every image is its own `frame` event keyed by
+ * `targetId`, so the client caches a picture per tab and the strip can show the
+ * right one when the user switches — the active tab's image is the one the
+ * panel outlines.
+ */
+export function broadcastCliFrames(images: CliFrameImage[], spaces?: CliSpaceRow[], at?: number): void {
+  if (images.length === 0) return
+  const stamp = at ?? Date.now()
+  // Remember the cycle so the hold/heartbeat timer can re-emit it during the gap
+  // between 3s CLI captures (a screenshot can momentarily stall rendering).
+  lastCliFrames = images
+  lastCliFrameAt = stamp
+  // A caller that KNOWS the real tab inventory hands it in, so the panel's tab
+  // strip is driven by the same cadence as the picture. No override = synthetic
+  // single row (ego-cli / Tabbit callers always provide one now).
   lastCliSpaces = spaces && spaces.length > 0 ? spaces : null
-  writeCliFrame(frame)
+  writeCliImages(images, stamp)
 }
 /** Tab inventory supplied by the newest frame broadcast (null = synthetic row). */
 let lastCliSpaces: CliSpaceRow[] | null = null
-/** Newest CLI frame seen, replayed by the 1s hold timer in initCastServer. */
-let lastCliFrameBroadcast: { png: Buffer; url: string; title: string; seq: number; updatedAt: number; fmt?: 'png' | 'jpeg' } | null = null
+/** Newest capture cycle, replayed by the 1s hold timer in initCastServer. */
+let lastCliFrames: CliFrameImage[] | null = null
 /** Wall-clock of the last broadcast/replay; the hold timer only fills >1s gaps. */
 let lastCliFrameAt = 0
-/** Push one CLI frame to every SSE client. `includeSpaces` also re-emits the
- * synthetic spaces list (real captures do; the 1s hold replay only refreshes
- * the image to avoid churning the client's store/render every second). */
-function writeCliFrame(frame: { png: Buffer; url: string; title: string; seq: number; updatedAt: number; fmt?: 'png' | 'jpeg' }, includeSpaces = true): void {
+/** Push one capture cycle to every SSE client. `includeSpaces` also re-emits the
+ * spaces list (real captures do; the 1s hold replay only refreshes the images
+ * to avoid churning the client's store/render every second). */
+function writeCliImages(images: CliFrameImage[], at: number, includeSpaces = true): void {
   if (sseClients.size === 0) return
-  const synthetic = lastCliSpaces ?? [{
+  const first = images[0]!
+  const rows: CliSpaceRow[] = lastCliSpaces ?? [{
     targetId: CLI_FRAME_TARGET_ID,
-    url: frame.url,
-    title: frame.title,
+    url: first.url ?? '',
+    title: first.title ?? '',
     active: true,
-    lastActive: frame.updatedAt,
+    lastActive: at,
   }]
-  const spacesFrame = `event: spaces\ndata: ${JSON.stringify(synthetic)}\n\n`
-  // Bind the image to the row the capture came from (the active tab), not to
-  // the ego-cli placeholder id — the client swaps `<img>` by targetId.
-  const frameTarget = (synthetic.find((row) => row.active) ?? synthetic[0])?.targetId ?? CLI_FRAME_TARGET_ID
-  const framePayload = { targetId: frameTarget, data: frame.png.toString('base64'), fmt: frame.fmt ?? 'png', ts: frame.updatedAt }
-  const frameEvent = `event: frame\ndata: ${JSON.stringify(framePayload)}\n\n`
+  const spacesFrame = `event: spaces\ndata: ${JSON.stringify(rows)}\n\n`
+  const activeRow = rows.find((row) => row.active) ?? rows[0]
+  const events: string[] = []
+  for (const image of images) {
+    // Bind each image to the tab it came from, falling back to the active row so
+    // a legacy caller without targetId still lands somewhere renderable.
+    const targetId = image.targetId || activeRow?.targetId || CLI_FRAME_TARGET_ID
+    events.push(`event: frame\ndata: ${JSON.stringify({ targetId, data: image.png.toString('base64'), fmt: image.fmt ?? 'png', ts: at })}\n\n`)
+  }
   for (const res of sseClients) {
     try {
       if (includeSpaces) res.write(spacesFrame)
-      res.write(frameEvent)
+      for (const event of events) res.write(event)
     } catch {
       sseClients.delete(res)
     }
   }
 }
+
+/** 全模式 (track every tab in the space) — host-side switch for the CLI poller. */
+let cliTrackAll = false
+/** @internal */
+export function getCliTrackAll(): boolean { return cliTrackAll }
+/** @internal */
+export function setCliTrackAll(next: boolean): void { cliTrackAll = next === true }
 
 function castStatePath(): string {
   // Mirror the ego-lite runtime state dir across platforms so we find the
@@ -1022,6 +1053,48 @@ export function initCastServer(
     },
   })
 
+  // GET/POST /api/bcdp/tracking — 全模式 (capture every tab) vs 仅激活 (one).
+  // Host-side switch: the CLI poller reads it each tick, so the panel can flip
+  // modes without a restart. GET reports the current value for first paint.
+  const disposeTracking = server.register({
+    kind: 'exact',
+    path: '/api/bcdp/tracking',
+    handler: async (reqRaw: unknown, resRaw: unknown) => {
+      const req = reqRaw as IncomingMessage
+      const res = resRaw as ServerResponse
+      if (req.method === 'POST') {
+        const body = await readJsonBody(req).catch(() => ({}) as Record<string, unknown>)
+        if (typeof body.all === 'boolean') setCliTrackAll(body.all)
+      }
+      return sendJson(res, 200, { ok: true, all: getCliTrackAll() })
+    },
+  })
+
+  // POST /api/bcdp/switch-tab — the user clicked a tab in the panel. Worker
+  // route: activate the target (the screencast follows it). ego-cli route: the
+  // injected panelActions runner switches through `browser.switchTab`.
+  const disposeSwitchTab = server.register({
+    kind: 'exact',
+    path: '/api/bcdp/switch-tab',
+    handler: async (reqRaw: unknown, resRaw: unknown) => {
+      const req = reqRaw as IncomingMessage
+      const res = resRaw as ServerResponse
+      const body = await readJsonBody(req).catch(() => ({}) as Record<string, unknown>)
+      if (typeof body.targetId !== 'string' || body.targetId === '') {
+        return sendJson(res, 400, { ok: false, error: 'targetId required' })
+      }
+      const port = await ensureWorker()
+      if (port === null) {
+        if (panelActions === null) return sendJson(res, 409, { ok: false, error: 'no live agent browser' })
+        const out = await panelActions.switchTab(body)
+        return sendJson(res, out.ok === true ? 200 : 502, out)
+      }
+      const result = await proxyPost(port, '/api/switch-tab', body)
+      if (!result) return sendJson(res, 502, { ok: false, error: 'switch-tab worker unavailable' })
+      return sendJson(res, result.status, result.body)
+    },
+  })
+
   // POST /api/bcdp/navigate — panel refresh / manual URL. Worker route proxies
   // (Page.reload / Page.navigate); ego-cli route runs page.reload / page.goto in
   // a heredoc via the injected panelActions runner.
@@ -1157,14 +1230,15 @@ export function initCastServer(
   const cliFrameHoldTimer = setInterval(() => {
     if (sseClients.size === 0) return
     if (getAttachEndpoint() !== null) return
-    if (lastCliFrameBroadcast === null) return
+    if (lastCliFrames === null) return
     if (Date.now() - lastCliFrameAt < 1000) return
-    lastCliFrameAt = Date.now()
+    const at = Date.now()
+    lastCliFrameAt = at
     // Re-emit spaces TOO: if the panel was emptied by a transient empty spaces
     // event, a frame-only replay cannot restore it (no live <img> to receive
-    // it). Re-asserting the synthetic space re-mounts the live view, then the
-    // frame paints the cached image — recovering within ≤1s.
-    writeCliFrame(lastCliFrameBroadcast)
+    // it). Re-asserting the spaces list re-mounts the live view, then the
+    // frames paint the cached images — recovering within ≤1s.
+    writeCliImages(lastCliFrames, at)
   }, 1000)
   try { (cliFrameHoldTimer as unknown as { unref?: () => void }).unref?.() } catch { /* ignore */ }
   ctx.effect?.(() => () => { clearInterval(cliFrameHoldTimer) })
@@ -1180,6 +1254,8 @@ export function initCastServer(
     try { disposePickClick() } catch { /* ignore */ }
     try { disposeFlush() } catch { /* ignore */ }
     try { disposeWindowSize() } catch { /* ignore */ }
+    try { disposeSwitchTab() } catch { /* ignore */ }
+    try { disposeTracking() } catch { /* ignore */ }
     try { disposePanelNavigate() } catch { /* ignore */ }
     try { disposeRaise() } catch { /* ignore */ }
     try { disposeLoginImport() } catch { /* ignore */ }

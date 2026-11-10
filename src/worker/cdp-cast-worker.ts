@@ -528,6 +528,21 @@ async function main(): Promise<void> {
         }
       }
       if (req.method === 'POST' && url.pathname === '/api/close') { const { targetId } = await readJson(req); if (!active || !targetId) return sendJson(res, 400, { ok: false, error: 'targetId required' }); await active.cdp.call('Target.closeTarget', { targetId }); return sendJson(res, 200, { ok: true }) }
+      // POST /api/switch-tab — make one tab the browser's active target. Unlike
+      // the passive frame capture, a user clicking a tab in the panel MEANS
+      // "show me that tab", so activating it is the intended side effect; the
+      // screencast follows the active target on its own.
+      if (req.method === 'POST' && url.pathname === '/api/switch-tab') {
+        const body = await readJson(req)
+        const targetId = typeof body?.targetId === 'string' ? body.targetId : ''
+        if (!active || targetId === '') return sendJson(res, 400, { ok: false, error: 'targetId required' })
+        try {
+          await active.cdp.call('Target.activateTarget', { targetId })
+          return sendJson(res, 200, { ok: true, targetId })
+        } catch (error) {
+          return sendJson(res, 502, { ok: false, error: (error as Error).message || String(error) })
+        }
+      }
       if (req.method === 'POST' && url.pathname === '/api/flush') { if (!active) return sendJson(res, 409, { ok: false, error: 'no live browser' }); let total = 0; try { const jar = await active.cdp.call('Storage.getCookies') as { cookies?: unknown[] }; total = Array.isArray(jar?.cookies) ? jar.cookies.length : 0 } catch { total = 0 } const flushed = await active.cdp.call('Storage.flushCookies').then(() => total).catch(() => 0); return sendJson(res, 200, { ok: true, total, flushed }) }
       // POST /api/window-size — panel size-sync drives the REAL Chrome window.
       // Body: { width?, height?, delta?, dy?, aspect?, maximize? }. The client's

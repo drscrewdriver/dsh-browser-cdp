@@ -45,6 +45,29 @@ describe("parseFrameSentinel", () => {
     expect(parseFrameSentinel(`${FRAME_SENTINEL}${JSON.stringify({ url: "u" })}`, 1, 0)).toBeNull()
   })
 
+  it("decodes a multi-tab capture into per-tab frames", () => {
+    const payload = JSON.stringify({
+      png: PNG_B64,
+      fmt: "jpeg",
+      url: "https://www.baidu.com/",
+      title: "百度一下",
+      targetId: "T2",
+      frames: [
+        { targetId: "T1", png: PNG_B64, fmt: "jpeg", url: "https://www.sina.com.cn/", title: "新浪网" },
+        { targetId: "T2", png: PNG_B64, fmt: "jpeg", url: "https://www.baidu.com/", title: "百度一下" },
+      ],
+      tabs: [
+        { targetId: "T1", url: "https://www.sina.com.cn/", title: "新浪网", active: false },
+        { targetId: "T2", url: "https://www.baidu.com/", title: "百度一下", active: true },
+      ],
+    })
+    const f = parseFrameSentinel(`${FRAME_SENTINEL}${payload}`, 5, 0)!
+    expect(f.frames).toHaveLength(2)
+    expect(f.frames[0]!.targetId).toBe("T1")
+    expect(f.frames[0]!.png.toString("base64")).toBe(PNG_B64)
+    expect(f.targetId).toBe("T2")
+  })
+
   it("tolerates missing url/title into empty strings", () => {
     const f = parseFrameSentinel(`${FRAME_SENTINEL}${JSON.stringify({ png: PNG_B64 })}`, 3, 0)
     expect(f!.url).toBe("")
@@ -99,7 +122,22 @@ describe("buildFrameScript", () => {
     expect(s).toContain("t.active === true")
     expect(s).toContain("cdp('Target.attachToTarget'")
     expect(s).toContain("cdp('Page.captureScreenshot'")
-    expect(s).toContain("targetId: __active.targetId")
+    expect(s).toContain("__actImg")
+  })
+
+  it("仅激活 by default: one planned capture, frames[] still emitted", () => {
+    const s = buildFrameScript('"space"')
+    expect(s).toContain("const __all = false")
+    expect(s).toContain("frames: __frames")
+    expect(s).toContain("__active ? [__active] : []")
+  })
+
+  it("全模式 plans one capture per tab, capped", () => {
+    const s = buildFrameScript('"space"', { all: true, maxTabs: 4 })
+    expect(s).toContain("const __all = true")
+    expect(s).toContain("__tabs.slice(0, 4)")
+    // a sane ceiling regardless of the caller
+    expect(buildFrameScript('"space"', { all: true, maxTabs: 99 })).toContain("__tabs.slice(0, 8)")
   })
 
   it("reports the whole tab inventory so the panel can render every tab", () => {

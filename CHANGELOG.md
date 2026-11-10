@@ -1,3 +1,10 @@
+## 1.8.2 (2026-11-10)
+
+**ego-cli 帧捕获诊断 + 放宽 exitCode 门槛（追 seq=0 根因）。**
+
+- **放宽**：`spawnCliFrameCapture` 不再因 `exitCode !== 0` 整帧丢弃——只要 merged 输出里含帧哨兵且 base64 合法就用（ego CLI 可能打印哨兵后因尾部清理/断言非 0 退出）。无哨兵/空=不产帧（poller 保留上帧）。
+- **诊断**：新增 `lastCliFrameDiag`（exitCode / stdoutLen / hasSentinel / stderr 尾 300B），`bcdp_doctor` 新增 `last frame try:` 行，直接告诉 seq=0 是截图失败、还是脚本抛错（附 stderr）。
+
 ## 1.8.1 (2026-11-10)
 
 **修 ego-cli 路线侧栏 3s 帧同步不启动（poller 不自愈）。**

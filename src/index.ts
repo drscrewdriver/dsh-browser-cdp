@@ -36,7 +36,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { importLoginCookies } from './login-import.ts'
 import { initCastServer, markEgoToolCall, getLastEgoActivity, onEgoActivity, setAttachEndpoint, recycleWorker, getCliPollStatus, getAttachEndpoint, broadcastCliFrame } from './cast-server.ts'
-import { CliFramePoller, buildFrameScript } from './cast/cli-frame-poller.ts'
+import { CliFramePoller, buildFrameScript, FRAME_SENTINEL } from './cast/cli-frame-poller.ts'
 import { registerEgoBrowserGateway } from './gateway.ts'
 import { EGO_HELP_INDEX } from './help.ts'
 import { HUMAN_CHECK_PROBE } from './captcha.ts'
@@ -1362,6 +1362,17 @@ async function runEgoScript(subprocess: SubprocessService, script: string, exec:
 // A viewport PNG at up to 1920w base64-encodes to ~1.4 MB per megabyte of raw;
 // allow generous headroom so the reader never truncates the frame payload.
 const CLI_FRAME_MAX_BYTES = 12 * 1024 * 1024
+/** Outcome of the most recent ego-cli frame capture, for bcdp_doctor diagnosis. */
+export interface CliFrameDiag {
+  at: number
+  exitCode: number | null
+  stdoutLen: number
+  hasSentinel: boolean
+  stderrTail: string
+}
+let lastCliFrameDiag: CliFrameDiag | null = null
+/** @internal last ego-cli frame capture diagnostic (null until one runs). */
+export function getCliFrameDiag(): CliFrameDiag | null { return lastCliFrameDiag }
 async function spawnCliFrameCapture(
   subprocess: SubprocessService,
   cfg: EgoRuntimeConfig,
@@ -1399,8 +1410,24 @@ async function spawnCliFrameCapture(
       graceMs: cfg.graceMs,
     })
     const outcome = await handle.done
-    if (outcome.exitCode !== 0) return ''
-    return mergeCliOutput({ stdout: readAll(handle.collected.stdout), stderr: readAll(handle.collected.stderr) })
+    const stdout = readAll(handle.collected.stdout)
+    const stderr = readAll(handle.collected.stderr)
+    const merged = mergeCliOutput({ stdout, stderr })
+    // Record WHY a capture produced (or did not produce) a frame, so bcdp_doctor
+    // can explain a poller stuck at seq 0 without a live debugger.
+    lastCliFrameDiag = {
+      at: Date.now(),
+      exitCode: typeof outcome.exitCode === 'number' ? outcome.exitCode : null,
+      stdoutLen: stdout.length,
+      hasSentinel: merged.includes(FRAME_SENTINEL),
+      stderrTail: stderr.slice(-300),
+    }
+    // Do NOT drop a usable frame on a non-zero exit code: the ego CLI can print
+    // the frame sentinel yet still exit non-zero (trailing cleanup/asserts), and
+    // the old `exitCode !== 0 -> ''` gate silently discarded every such frame.
+    // The poller's parseFrameSentinel already validates presence + base64, so
+    // returning the merged output is safe: absent/invalid payload = no frame.
+    return merged
   } catch {
     return ''
   }
@@ -4013,6 +4040,18 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
               ? 'none (cliFramePollEnabled off)'
               : 'none'
         lines.push(`frame source: ${frameSource}`)
+        // Capture-level diagnostic for the degraded poller: when frame source is
+        // cli-poll but seq stays 0, this line says WHY (exit code / whether a
+        // sentinel was printed / stderr tail).
+        {
+          const d = getCliFrameDiag()
+          if (d !== null) {
+            lines.push(
+              `last frame try: exit=${d.exitCode ?? 'n/a'} stdout=${d.stdoutLen}B sentinel=${d.hasSentinel}` +
+              `${d.stderrTail !== '' ? ` stderr=${JSON.stringify(d.stderrTail)}` : ''}`,
+            )
+          }
+        }
         // Session-scope diagnostic: the ego-cli poller observes
         // spaceTracker.lastActiveSpace(); a `default` there means the agent's
         // own bcdp_* calls are NOT carrying a session id (exec.agent.session.id

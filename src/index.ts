@@ -35,7 +35,7 @@ import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { importLoginCookies } from './login-import.ts'
-import { initCastServer, markEgoToolCall, getLastEgoActivity, onEgoActivity, setAttachEndpoint, recycleWorker, getCliPollStatus, getAttachEndpoint, broadcastCliFrame, broadcastCliFrames, getCliTrackAll } from './cast-server.ts'
+import { initCastServer, markEgoToolCall, getLastEgoActivity, onEgoActivity, setAttachEndpoint, recycleWorker, getCliPollStatus, getAttachEndpoint, broadcastCliFrames, getCliTrackAll } from './cast-server.ts'
 import { CliFramePoller, buildFrameScript, FRAME_SENTINEL } from './cast/cli-frame-poller.ts'
 import { buildEgoNavigateScript, buildEgoSwitchTabScript, buildEgoWindowSizeScript, parsePanelResult, type PanelActionOutcome, type PanelActionRunner } from './cast/panel-actions.ts'
 import { buildEgoAxScript, buildTabbitAxSnippet, composeFallbackReport, parseAxSentinel, type FallbackAxSnapshot } from './cast/fallback-tab-report.ts'
@@ -2369,10 +2369,13 @@ bridge.onChange(() => tiers.reapply())
   // Last skip reason logged, so a persistent skip (blank page / stuck capture)
   // prints once instead of every 3 s.
   let tabbitFrameSkipLogged = ''
-  // Scratch file the CLI writes each frame into. Host and CLI share one
-  // filesystem, so the receipt only carries this path — see
-  // buildFrameCaptureSnippet for why the bytes themselves cannot travel.
-  const tabbitFramePath = join(tmpdir(), `dsh-browser-cdp-frame-${process.pid}.jpg`)
+  // Scratch file the CLI writes each frame into. One path PER TAB: 全模式 captures
+  // several tabs in one tick, and a shared path would let the second capture
+  // overwrite the first before the host read it.
+  const tabbitFramePathFor = (tabId: number | string): string =>
+    join(tmpdir(), `dsh-browser-cdp-frame-${process.pid}-${String(tabId)}.jpg`)
+  /** Round-robin cursor: 3s ticks → active tab every tick, one background tab extra. */
+  let tabbitFrameRR = 0
   const tabbitFrameTimer = setInterval(async () => {
     const eff = resolveEffectiveLink(cfg.links, cfg.activeTargetId)
     if (eff?.link.kind !== TABBIT_CLI_KIND) return
@@ -2384,51 +2387,87 @@ bridge.onChange(() => tiers.reapply())
     if (tabbitFrameInFlight) return
     tabbitFrameInFlight = true
     try {
-      const reqId = `frame-${Date.now()}`
-      const js = buildFrameCaptureSnippet(tabbitFramePath)
       // `--tab` is REQUIRED. Without it the CLI runs the snippet against the
       // task's DEFAULT page, which is a fresh about:blank: the panel gets
       // nothing and the capture burns the full hard deadline. Target the tab a
       // tool actually drove, else whatever the inventory flags as active.
-      const target = _tabbitLastActiveTabId ?? _tabbitTabCache.tabs.find((t) => t.active === true)?.tabId
-      // NO `timeoutMs` here: the CLI rejects anything below 60000, and a 60 s
-      // poll window is meaningless for a 3 s cadence anyway. The short deadline
-      // lives inside the snippet (TABBIT_CAPTURE_DEADLINE_MS), so a stuck
-      // capture returns in ~8 s instead of holding the executor.
-      const { receipt } = await runTabbitSnippet(ctx.subprocess, js, {
-        cliPath: cli.cliPath,
-        taskName: _tabbitLastTaskName,
-        requestId: reqId,
-        ...(typeof target === 'number' ? { tabId: target } : {}),
-      })
-      const data = receipt.data as { path?: string; url?: string; title?: string; skipped?: string; error?: string } | undefined
+      const activeTab = _tabbitLastActiveTabId ?? _tabbitTabCache.tabs.find((t) => t.active === true)?.tabId
+      const rows = tabbitSpaceRows().tabs
+      const allMode = getCliTrackAll(cfg.tabTracking === 'all')
+      // Capture plan for this tick:
+      //  - 仅激活: the active tab only (1 CLI run).
+      //  - 全模式: the active tab EVERY tick (it is what the user watches) plus ONE
+      //    background tab by round-robin, so N tabs cost 2 runs per tick and each
+      //    background tab still refreshes every N×3s. Capturing all N in one tick
+      //    would mean N CLI processes on the same executor and would stall the
+      //    panel past its own cadence.
+      const plan: Array<number | undefined> = [typeof activeTab === 'number' ? activeTab : undefined]
+      if (allMode) {
+        const others = rows
+          .map((r) => Number(r.targetId))
+          .filter((id) => Number.isFinite(id) && id > 0 && id !== activeTab)
+        if (others.length > 0) {
+          plan.push(others[tabbitFrameRR % others.length])
+          tabbitFrameRR += 1
+        }
+      }
+      const images: Array<{ targetId: string; png: Buffer; fmt: 'jpeg'; url: string; title: string }> = []
+      let sawSkip = ''
+      let sawNoPath: unknown = null
+      for (const tabId of plan) {
+        const outPath = tabbitFramePathFor(tabId ?? 'active')
+        const js = buildFrameCaptureSnippet(outPath)
+        // NO `timeoutMs` here: the CLI rejects anything below 60000, and a 60 s
+        // poll window is meaningless for a 3 s cadence anyway. The short deadline
+        // lives inside the snippet (TABBIT_CAPTURE_DEADLINE_MS), so a stuck
+        // capture returns in ~8 s instead of holding the executor.
+        const { receipt } = await runTabbitSnippet(ctx.subprocess, js, {
+          cliPath: cli.cliPath,
+          taskName: _tabbitLastTaskName,
+          requestId: `frame-${Date.now()}-${tabId ?? 'active'}`,
+          ...(typeof tabId === 'number' ? { tabId } : {}),
+        })
+        const data = receipt.data as { path?: string; url?: string; title?: string; skipped?: string; error?: string } | undefined
+        if (receipt.ok && data?.skipped !== undefined) {
+          sawSkip = `${data.skipped}:${data.error ?? ''}`
+          continue
+        }
+        if (receipt.ok && typeof data?.path === 'string') {
+          images.push({
+            targetId: tabId === undefined ? '' : String(tabId),
+            png: readFileSync(data.path),
+            fmt: 'jpeg',
+            url: data.url ?? '',
+            title: data.title ?? '',
+          })
+          continue
+        }
+        if (receipt.ok) sawNoPath = data ?? null
+        else if (receipt.status !== 'queued' && receipt.status !== 'running') {
+          ctx.logger?.warn?.(`dsh-browser-cdp: tabbit frame capture failed: ${receipt.error?.message ?? receipt.status}`)
+        }
+      }
       // `skipped` covers both "page is blank" and "capture did not answer in
       // time". Both are expected, neither is an error worth warning about every
       // 3 s — log once per distinct reason so a genuinely stuck tab is visible
       // without flooding the log.
-      if (receipt.ok && data?.skipped !== undefined) {
-        const key = `${data.skipped}:${data.error ?? ''}`
-        if (tabbitFrameSkipLogged !== key) {
-          tabbitFrameSkipLogged = key
-          ctx.logger?.info?.(`dsh-browser-cdp: tabbit frame skipped (${key}) url=${data.url ?? '?'}`)
+      if (images.length === 0) {
+        if (sawSkip !== '' && tabbitFrameSkipLogged !== sawSkip) {
+          tabbitFrameSkipLogged = sawSkip
+          ctx.logger?.info?.(`dsh-browser-cdp: tabbit frame skipped (${sawSkip})`)
+        } else if (sawNoPath !== null) {
+          // `ok` without a path means the receipt value was demoted to a `resource`
+          // (no `value` field). That is the silent failure that kept the panel empty
+          // while every capture still reported success — never swallow it.
+          ctx.logger?.warn?.(`dsh-browser-cdp: tabbit frame receipt carried no path (data=${JSON.stringify(sawNoPath).slice(0, 120)})`)
         }
         return
       }
       tabbitFrameSkipLogged = ''
-      if (receipt.ok && typeof data?.path === 'string') {
-        const png = readFileSync(data.path)
-        tabbitFrameSeq++
-        broadcastCliFrame({ png, url: data.url ?? '', title: data.title ?? '', seq: tabbitFrameSeq, updatedAt: Date.now(), fmt: 'jpeg' }, tabbitSpaceRows().tabs)
-        return
-      }
-      // `ok` without a path means the receipt value was demoted to a `resource`
-      // (no `value` field). That is the silent failure that kept the panel empty
-      // while every capture still reported success — never swallow it.
-      if (receipt.ok) {
-        ctx.logger?.warn?.(`dsh-browser-cdp: tabbit frame receipt carried no path (status=${receipt.status}, data=${JSON.stringify(data ?? null).slice(0, 120)})`)
-      } else if (receipt.status !== 'queued' && receipt.status !== 'running') {
-        ctx.logger?.warn?.(`dsh-browser-cdp: tabbit frame capture failed: ${receipt.error?.message ?? receipt.status}`)
-      }
+      tabbitFrameSeq++
+      // One cycle → one `spaces` + one `frame` per captured tab. The rows are the
+      // real inventory, so the strip lists every tab and the images bind by id.
+      broadcastCliFrames(images, rows, Date.now())
     } catch (err) {
       ctx.logger?.warn?.(`dsh-browser-cdp: tabbit frame poller error: ${String((err as Error)?.message ?? err)}`)
     } finally {

@@ -1,3 +1,15 @@
+## 1.9.9 (2026-11-10)
+
+**Tabbit 路线补上全模式：后台 tab 也出图（轮转捕获）。**
+
+- **之前的状态**：`tabTracking: all` 只在 ego-cli 帧轮询里生效；Tabbit 虽已进同一个 tab bucket（列表 + @ 报告），但画面仍只拍激活那一个。
+- **现在的做法**：Tabbit 帧轮询按模式定计划：
+  - `仅激活`：1 次 CLI 运行（active tab）；
+  - `全模式`：active tab **每 tick 都拍**，另加 **1 个后台 tab 轮转**（`tabbitFrameRR`）——N 个 tab 每 tick 仍是 2 次运行，每个后台 tab 约 `N×3s` 刷新一次；没有拿 N 次运行去挤爆同一 executor、把面板拖过自己的节奏。
+- **临时文件按 tab 分路径**（`…-<pid>-<tabId>.jpg`），免得同一 tick 内后一张盖掉前一张。
+- **广播**：改用 `broadcastCliFrames(images, rows)`，一轮一个 `spaces` + 每个 tab 一个 `frame`（按 targetId 绑图）；面板早就按 `targetId` 分缓存，无需改客户端。
+- **测试**：1021 passed / 13 skipped。
+
 ## 1.9.8 (2026-11-10)
 
 **登录/验证横幅：说明文字按比例收缩，不截断、不隐藏。**

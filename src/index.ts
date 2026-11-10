@@ -1371,6 +1371,18 @@ async function spawnCliFrameCapture(
   // space (that is what previously registered/screenshotted the shared
   // `default`). The poller keeps the previous frame (none) and the panel shows
   // its placeholder until the agent actually opens a page in its own space.
+  if (space === null || space === undefined || space === '') {
+    // Fallback: if a tool already named this host's session but lastActiveSpace
+    // lagged, derive the per-session namespace (dsh-agent-<sid8>) directly from
+    // the persisted current session so the poller still targets the right space.
+    const sid = cfg.spaceTracker.currentSession()
+    if (sid !== undefined && sid !== '' && sid !== GLOBAL_SESSION_KEY) {
+      space = deriveSlotDefaultName(
+        { defaultSpace: cfg.defaultSpace, isolateSpaces: cfg.isolateSpaces },
+        sid,
+      )
+    }
+  }
   if (space === null || space === undefined || space === '') return ''
   const { attach } = effectiveChannel(cfg)
   const script = buildFrameScript(j(space))
@@ -2559,6 +2571,12 @@ function registerEgoStatus(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool: T
         // advance only this session's depth. Falls back to process-level when
         // sessionId is undefined (non-agent caller or feature off).
         tiers.pulse(callingSessionId(exec))
+        // Seed the session slot like every structured tool does: without this, a
+        // fresh host whose FIRST call is bcdp_status leaves the tracker on the
+        // global slot, so the ego-cli frame poller's lastActiveSpace() is null
+        // and it skips every tick (panel stays blank). Naming the session here
+        // makes pollerObserves resolve to dsh-agent-<sid8> immediately.
+        cfg.spaceTracker.setCurrentSession(callingSessionId(exec), resolveEffectiveLink(cfg.links, cfg.activeTargetId)?.link.id ?? '')
         return withEgoLock(async () => {
           try {
             const { attach } = effectiveChannel(cfg)
@@ -3936,6 +3954,9 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
       execute: async (_args: Record<string, unknown>, exec: ToolExec) => {
         // doctor 同样视为一次浏览器活动，推进批次深度。
         tiers.pulse(callingSessionId(exec))
+        // Same session seeding as bcdp_status: a diagnostics-first host must not
+        // leave the frame poller observing the global/null slot.
+        cfg.spaceTracker.setCurrentSession(callingSessionId(exec), resolveEffectiveLink(cfg.links, cfg.activeTargetId)?.link.id ?? '')
         const lines: string[] = []
         // 工具注入面：每个开关的当前状态与实际注册了多少工具，一行说完�?
         {

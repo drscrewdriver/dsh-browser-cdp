@@ -4,6 +4,7 @@
 
 - **根因**：降级帧源 `CliFramePoller` 只在 `triggerCdpRefresh()` 里启动，而它只在两个时机跑：挂载探（`cliProbeColdStart=false`，不会拉起 ego 浏览器）与工具失败命中 CDP 连接错误时的重探。于是**冷启动**场景（Desktop 启时浏览器未跑）下：挂载探拿不到 `ready` → poller 不启动；后续 `bcdp_*` 把浏览器拉起了，但成功路径从不重探 → `attach` 仍非 ready → poller 永不启动 → 侧栏空且不 3s 刷新。
 - **修复**：`runWithStaleSpaceRetry` 成功后若「无 screencast ws + poller 未运行 + 属降级 ego-cli 路线」，补一次重探（`maybeKickCliPoller`，5s 冷却、fire-and-forget），使 `attach` 翻 ready 并自动启动 3s poller。不改 client/worker，不引入新依赖。
+- **修复（会话播种，直击 `pollerObserves=null`）**：`bcdp_status` / `bcdp_doctor` 的 execute 之前只做 `tiers.pulse()`，**不调用 `setCurrentSession`**。于是“重启后先跑诊断工具”时 spaceTracker 停在 global 槽 → `lastActiveSpace()` 为 null → poller 每 tick 直接跳过，`seq` 恒 0、侧栏无帧。现在两者都补上 `setCurrentSession(callingSessionId, link)`；并给 `spawnCliFrameCapture` 加兑底：`space` 为空时从已持久化的 `currentSession()` 派生 `dsh-agent-<sid8>`。修后只跑一次 `bcdp_status`/`bcdp_doctor` 即可让 poller 立刻对上会话命名空间。
 
 ## 1.8.0 (2026-11-10)
 

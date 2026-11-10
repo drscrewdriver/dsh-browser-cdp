@@ -902,7 +902,35 @@ export async function runWithStaleSpaceRetry(  ctx: EgoContext,
       result = await withWarmupRetry(() => runEgoScript(ctx.subprocess, buildScript(), exec, cfg, graceOverrideMs))
     }
   }
+  // Degraded ego-cli frame source self-heal: on a fresh Desktop start the mount
+  // probe runs with cliProbeColdStart=false, so it does NOT launch the browser
+  // and attach stays not-ready → the 3s CLI frame poller never starts. A real
+  // tool call DOES launch the browser, but the success path never re-probes, so
+  // the panel stays blank until a settings change. Nudge one re-probe here (the
+  // same entry point that starts the poller), cooled down and only while the
+  // poller is still off and no screencast ws owns the panel.
+  if (result.ok) maybeKickCliPoller(cfg)
   return result
+}
+
+/** Last time we nudged a re-probe to start the degraded CLI frame poller. */
+let lastCliPollerKick = 0
+/**
+ * Start the ego-cli 3s frame poller after a successful tool call when it failed
+ * to start at mount (browser cold-started by the tool, not by the probe).
+ * No-op for the screencast route (a resolved CDP ws serves frames itself) and
+ * while the poller is already running. Coalesced to at most once per 5s so a
+ * burst of tool calls cannot re-probe repeatedly.
+ */
+function maybeKickCliPoller(cfg: EgoRuntimeConfig): void {
+  if (getAttachEndpoint() !== null) return
+  if (getCliPollStatus().running) return
+  const now = Date.now()
+  if (now - lastCliPollerKick < 5000) return
+  lastCliPollerKick = now
+  // Fire-and-forget: triggerCdpRefresh() re-evaluates cliFrameActive and starts
+  // the poller itself; the tool result must not wait on the probe.
+  void cfg.refreshAttach?.()
 }
 
 /**

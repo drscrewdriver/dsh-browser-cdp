@@ -1,3 +1,10 @@
+## 1.8.1 (2026-11-10)
+
+**修 ego-cli 路线侧栏 3s 帧同步不启动（poller 不自愈）。**
+
+- **根因**：降级帧源 `CliFramePoller` 只在 `triggerCdpRefresh()` 里启动，而它只在两个时机跑：挂载探（`cliProbeColdStart=false`，不会拉起 ego 浏览器）与工具失败命中 CDP 连接错误时的重探。于是**冷启动**场景（Desktop 启时浏览器未跑）下：挂载探拿不到 `ready` → poller 不启动；后续 `bcdp_*` 把浏览器拉起了，但成功路径从不重探 → `attach` 仍非 ready → poller 永不启动 → 侧栏空且不 3s 刷新。
+- **修复**：`runWithStaleSpaceRetry` 成功后若「无 screencast ws + poller 未运行 + 属降级 ego-cli 路线」，补一次重探（`maybeKickCliPoller`，5s 冷却、fire-and-forget），使 `attach` 翻 ready 并自动启动 3s poller。不改 client/worker，不引入新依赖。
+
 ## 1.8.0 (2026-11-10)
 
 **macOS 开箱可用 + bcdp_wait_for_human + hideCursor + 固定视口 + flush 真实计数（对齐 dsh-ego-browser 优势）。**

@@ -1,3 +1,14 @@
+## 1.9.1 (2026-11-10)
+
+**尺寸同步/预设/最大化/刷新/URL 两条路线打通 + 客户端 UI 落地（task 13/19/20/21）。**
+
+- **ego-cli 路线补 heredoc 版后端（`src/cast/panel-actions.ts` 新）**：`buildEgoWindowSizeScript` / `buildEgoNavigateScript` 生成短 heredoc，在 CLI 同通道内用 `cdp('Browser.getWindowForTarget'/'Browser.setWindowBounds')` 改真实窗口、`page.reload`/`page.goto` 导航；请求/响应形状与 worker 路由逐字段一致，客户端只认一套协议。
+- **host 路由降级**：`POST /api/bcdp/window-size`、`POST /api/bcdp/navigate` 在 worker 不可用时（ego-cli 无 CDP ws）改走注入的 `PanelActionRunner`（`makePanelActions`），不再返回 409；脚本串在 `withEgoLock` 里排队，不与工具调用竞争。
+- **空间解析统一**：抽出 `resolveCliPanelSpace`，帧轮询与面板动作共用同一会话空间规则（含 `dsh-agent-<sid8>` 兜底）。
+- **客户端（侧栏 Tab）**：🔒/🔓 尺寸同步 toggle（localStorage 持久化 + ResizeObserver + 指针拖拽判定，防自喂循环）、5 个比例预设、最大化、刷新页面、打开网址（prompt + 自动补 https）、右/下/角三个拖拽热区、结果提示与“接口未就绪”提示。
+- **客户端（浮窗）**：同样接入刷新页面 / 打开网址 / 最大化 / 比例预设（浮窗宽度固定，故不做面板宽度同步）。
+- **测试**：新增 `tests/panel-actions.test.ts`（19 条：sentinel 解析、脚本文本断言、字段白名单、U+2028 转义、URL 截断），全量 995 passed / 13 skipped。
+
 ## 1.9.0 (2026-11-10)
 
 **观察窗尺寸同步/预设/最大化 — 后端能力落地（纯函数 + worker/host 路由）。**
@@ -7,7 +18,7 @@
 - **worker `POST /api/navigate`**：面板刷新（`Page.reload`）/手动 URL（`Page.navigate`）。
 - **host 路由**：`POST /api/bcdp/window-size`、`POST /api/bcdp/navigate` 代理到 worker（ego-cli 无 CDP ws → 409）。
 - **边界**：尺寸同步/最大化/面板刷新仅 CDP worker 路线生效；ego-cli 降级路线无 CDP，返回 409 明确提示。
-- **待续**：客户端 UI（工具栏 URL/最大化/🖁 尺寸同步 toggle/预设/拖拽热区）将在随后版本接入 `EgoBrowserTab`(React) + 浮窗两处。
+- **待续**：客户端 UI（工具栏 URL/最大化/🖁 尺寸同步 toggle/预设/拖拽热区）已在 1.9.1 落地，且 ego-cli 路线不再 409。
 
 ## 1.8.3 (2026-11-10)
 

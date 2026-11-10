@@ -21,6 +21,7 @@ import type { LoginImportOptions, LoginImportReport } from './login-import.ts'
 import { EGO_LINUX_CDP_URL } from './cdp-targets.ts'
 import { BCDP_CDP_ENGINE } from './cdp/capabilities.ts'
 import type { CliFramePoller } from './cast/cli-frame-poller.ts'
+import type { PanelActionRunner } from './cast/panel-actions.ts'
 
 const WORKER_BIN = fileURLToPath(new URL('../bin/cdp-cast-worker.mjs', import.meta.url))
 
@@ -677,6 +678,7 @@ export function initCastServer(
   openAgentWindow: () => Promise<{ ok: boolean; error?: string }> = async () => ({ ok: false, error: 'raise not supported by this host build' }),
   loginImport: (opts: LoginImportOptions) => Promise<LoginImportReport> = async () => ({ ok: false, error: 'login import not supported by this host build' }),
   cliPoller: CliFramePoller | null = null,
+  panelActions: PanelActionRunner | null = null,
 ): void {
   const ensureWorker = makeEnsureWorker(ctx, cfg, ffmpegManager)
   const pushConfig = makePushConfig(ensureWorker, ffmpegManager)
@@ -928,35 +930,46 @@ export function initCastServer(
     },
   })
 
-  // POST /api/bcdp/window-size — panel size-sync / presets / maximize. Proxies
-  // to the worker, which drives Browser.setWindowBounds on the real Chrome
-  // window (CDP worker route; the ego-cli route has no CDP ws → 409).
+  // POST /api/bcdp/window-size — panel size-sync / presets / maximize.
+  // CDP-worker route: proxy to the worker (Browser.setWindowBounds on the real
+  // Chrome window). ego-cli route: no CDP ws reaches the host, so the injected
+  // panelActions runner performs the same operation as a short heredoc through
+  // the CLI channel (identical request/response shape).
   const disposeWindowSize = server.register({
     kind: 'exact',
     path: '/api/bcdp/window-size',
     handler: async (reqRaw: unknown, resRaw: unknown) => {
       const req = reqRaw as IncomingMessage
       const res = resRaw as ServerResponse
-      const port = await ensureWorker()
-      if (port === null) return sendJson(res, 409, { ok: false, error: 'no live agent browser (size-sync needs the CDP worker; the ego-cli route has no CDP ws)' })
       const body = await readJsonBody(req).catch(() => ({}) as Record<string, unknown>)
+      const port = await ensureWorker()
+      if (port === null) {
+        if (panelActions === null) return sendJson(res, 409, { ok: false, error: 'no live agent browser (size-sync needs the CDP worker or the ego-cli route)' })
+        const out = await panelActions.windowSize(body)
+        return sendJson(res, out.ok === true ? 200 : 502, out)
+      }
       const result = await proxyPost(port, '/api/window-size', body)
       if (!result) return sendJson(res, 502, { ok: false, error: 'window-size worker unavailable' })
       return sendJson(res, result.status, result.body)
     },
   })
 
-  // POST /api/bcdp/navigate — panel refresh / manual URL. Proxies to the worker
-  // (Page.reload / Page.navigate on the active page target).
+  // POST /api/bcdp/navigate — panel refresh / manual URL. Worker route proxies
+  // (Page.reload / Page.navigate); ego-cli route runs page.reload / page.goto in
+  // a heredoc via the injected panelActions runner.
   const disposePanelNavigate = server.register({
     kind: 'exact',
     path: '/api/bcdp/navigate',
     handler: async (reqRaw: unknown, resRaw: unknown) => {
       const req = reqRaw as IncomingMessage
       const res = resRaw as ServerResponse
-      const port = await ensureWorker()
-      if (port === null) return sendJson(res, 409, { ok: false, error: 'no live agent browser' })
       const body = await readJsonBody(req).catch(() => ({}) as Record<string, unknown>)
+      const port = await ensureWorker()
+      if (port === null) {
+        if (panelActions === null) return sendJson(res, 409, { ok: false, error: 'no live agent browser' })
+        const out = await panelActions.navigate(body)
+        return sendJson(res, out.ok === true ? 200 : 502, out)
+      }
       const result = await proxyPost(port, '/api/navigate', body)
       if (!result) return sendJson(res, 502, { ok: false, error: 'navigate worker unavailable' })
       return sendJson(res, result.status, result.body)

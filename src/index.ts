@@ -37,6 +37,7 @@ import { fileURLToPath } from 'node:url'
 import { importLoginCookies } from './login-import.ts'
 import { initCastServer, markEgoToolCall, getLastEgoActivity, onEgoActivity, setAttachEndpoint, recycleWorker, getCliPollStatus, getAttachEndpoint, broadcastCliFrame } from './cast-server.ts'
 import { CliFramePoller, buildFrameScript, FRAME_SENTINEL } from './cast/cli-frame-poller.ts'
+import { buildEgoNavigateScript, buildEgoWindowSizeScript, parsePanelResult, type PanelActionOutcome, type PanelActionRunner } from './cast/panel-actions.ts'
 import { registerEgoBrowserGateway } from './gateway.ts'
 import { EGO_HELP_INDEX } from './help.ts'
 import { HUMAN_CHECK_PROBE } from './captcha.ts'
@@ -1373,6 +1374,63 @@ export interface CliFrameDiag {
 let lastCliFrameDiag: CliFrameDiag | null = null
 /** @internal last ego-cli frame capture diagnostic (null until one runs). */
 export function getCliFrameDiag(): CliFrameDiag | null { return lastCliFrameDiag }
+/**
+ * Which task space a host-initiated ego-cli script should drive.
+ *
+ * Both the passive frame poller and the panel actions (size sync / navigate)
+ * must observe the SAME space the calling session's tools act on, so the rule
+ * lives in one place: use the tracker's last active space, and when it lagged
+ * (no tool has run yet in this session) derive the per-session namespace
+ * `dsh-agent-<sid8>` from the persisted current session. A global/unknown
+ * session yields null: the caller then skips rather than binding the shared
+ * `default` slot.
+ * @internal exported for tests
+ */
+export function resolveCliPanelSpace(
+  cfg: EgoRuntimeConfig,
+  space?: string | number | null,
+): string | number | null {
+  let next = space ?? cfg.spaceTracker.lastActiveSpace()
+  if (next === null || next === undefined || next === '') {
+    const sid = cfg.spaceTracker.currentSession()
+    if (sid !== undefined && sid !== '' && sid !== GLOBAL_SESSION_KEY) {
+      next = deriveSlotDefaultName(
+        { defaultSpace: cfg.defaultSpace, isolateSpaces: cfg.isolateSpaces },
+        sid,
+      )
+    }
+  }
+  return next === null || next === undefined || next === '' ? null : next
+}
+
+/**
+ * ego-cli panel actions (size sync / presets / maximize / refresh / URL).
+ *
+ * The CDP-worker route answers /api/window-size + /api/navigate natively; an
+ * `ego-cli` link injects no websocket, so the same two operations run as short
+ * heredocs on the exact channel real tools use (see cast/panel-actions.ts).
+ * Serialized behind the plugin lock so a drag never races a tool call, and the
+ * poller (which skips while busy) cannot screenshot a half-resized window.
+ */
+function makePanelActions(ctx: EgoContext, cfg: EgoRuntimeConfig): PanelActionRunner {
+  const run = (build: (spaceJson: string) => string): Promise<PanelActionOutcome> => {
+    const space = resolveCliPanelSpace(cfg)
+    if (space === null) {
+      return Promise.resolve({ ok: false, error: 'no agent browser page yet — run a bcdp_* tool to open one first' })
+    }
+    const script = build(j(space))
+    return withEgoLock(async () => {
+      const result = await runEgoScript(ctx.subprocess, script, {}, cfg)
+      const parsed = parsePanelResult(mergeCliOutput({ stdout: result.stdout ?? '', stderr: result.stderr ?? '' }))
+      if (parsed !== null) return parsed
+      return { ok: false, error: result.error ?? 'panel action produced no result (ego-cli sentinel missing)' }
+    })
+  }
+  return {
+    windowSize: (body) => run((spaceJson) => buildEgoWindowSizeScript(spaceJson, body)),
+    navigate: (body) => run((spaceJson) => buildEgoNavigateScript(spaceJson, body)),
+  }
+}
 async function spawnCliFrameCapture(
   subprocess: SubprocessService,
   cfg: EgoRuntimeConfig,
@@ -1382,19 +1440,8 @@ async function spawnCliFrameCapture(
   // space (that is what previously registered/screenshotted the shared
   // `default`). The poller keeps the previous frame (none) and the panel shows
   // its placeholder until the agent actually opens a page in its own space.
-  if (space === null || space === undefined || space === '') {
-    // Fallback: if a tool already named this host's session but lastActiveSpace
-    // lagged, derive the per-session namespace (dsh-agent-<sid8>) directly from
-    // the persisted current session so the poller still targets the right space.
-    const sid = cfg.spaceTracker.currentSession()
-    if (sid !== undefined && sid !== '' && sid !== GLOBAL_SESSION_KEY) {
-      space = deriveSlotDefaultName(
-        { defaultSpace: cfg.defaultSpace, isolateSpaces: cfg.isolateSpaces },
-        sid,
-      )
-    }
-  }
-  if (space === null || space === undefined || space === '') return ''
+  space = resolveCliPanelSpace(cfg, space)
+  if (space === null) return ''
   const { attach } = effectiveChannel(cfg)
   const script = buildFrameScript(j(space))
   try {
@@ -2393,6 +2440,7 @@ bridge.onChange(() => tiers.reapply())
         () => openAgentWindow(ctx, cfg),
         (opts) => importLoginCookies(opts, { subprocess: ctx.subprocess }),
         cliPoller,
+        makePanelActions(ctx, cfg),
       )
     } catch (err) {
       ctx.logger?.warn?.(

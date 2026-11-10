@@ -202,6 +202,21 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 			pickCardTitle: 'Browser picks',
 			pickCardElements: '{n} element(s) picked',
 			pickCardRemove: 'Remove these picks',
+			pageRefresh: 'Reload page',
+			pageRefreshHint: 'Reload the agent page itself (Page.reload)',
+			openUrl: 'Open URL',
+			openUrlHint: 'Navigate the agent page to a URL',
+			openUrlPrompt: 'URL to open in the agent browser',
+			sizeSyncOff: '🔒 Size lock',
+			sizeSyncOn: '🔓 Size sync',
+			sizeSyncHint: 'Unlocked: dragging this panel resizes the REAL agent browser window. Click again to lock.',
+			sizePresets: 'Presets',
+			sizePresetsHint: 'Resize the agent browser window to a fixed aspect ratio',
+			maximizeWindow: 'Maximize',
+			maximizeHint: 'Maximize the real agent browser window',
+			resizeHint: 'Drag to resize the real agent browser window',
+			sizeApiOutdated: 'Size API not ready — restart DSH to load the new host build',
+			actionFailed: 'Action failed',
 		}
 		var watchZh = {
 			title: 'CDP 浏览器',
@@ -302,6 +317,21 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 			pickCardTitle: '浏览器点选内容',
 			pickCardElements: '已选 {n} 个元素',
 			pickCardRemove: '移除这段点选',
+			pageRefresh: '刷新页面',
+			pageRefreshHint: '重新加载 agent 当前页面（Page.reload）',
+			openUrl: '打开网址',
+			openUrlHint: '让 agent 页面跳转到指定网址',
+			openUrlPrompt: '要在 agent 浏览器里打开的网址',
+			sizeSyncOff: '🔒 锁定尺寸',
+			sizeSyncOn: '🔓 尺寸同步',
+			sizeSyncHint: '解锁后拖动面板会直接改变 agent 浏览器真实窗口大小；再点一下锁定。',
+			sizePresets: '尺寸预设',
+			sizePresetsHint: '按固定比例设置 agent 浏览器窗口',
+			maximizeWindow: '最大化',
+			maximizeHint: '最大化真实 agent 浏览器窗口',
+			resizeHint: '拖动调整 agent 浏览器窗口大小',
+			sizeApiOutdated: '尺寸接口未就绪：请重启 DSH 以加载最新 host 构建',
+			actionFailed: '操作失败',
 		}
 		var watchDict: Record<string, any> = { en: watchEn, zh: watchZh }
 		function wt(key: any, params: any = undefined) {
@@ -676,6 +706,16 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 }
 .dsh-ego-back:hover { background: rgba(255,255,255,.2); }
 .dsh-ego-back.dsh-ego-pick-on { background: rgba(56,189,248,.3); color: #7dd3fc; }
+.dsh-ego-back.on { background: rgba(217,119,87,.45); border-color: rgba(217,119,87,.7); }
+.dsh-ego-presets {
+  display:inline-flex; gap:3px; padding:3px; border-radius:7px;
+  background: rgba(255,255,255,.1); border:1px solid rgba(255,255,255,.12);
+}
+.dsh-ego-preset-item {
+  background:transparent; border:none; color:#f5f5f7; cursor:pointer;
+  font-size:11px; padding:2px 7px; border-radius:5px;
+}
+.dsh-ego-preset-item:hover { background: rgba(255,255,255,.2); }
 .dsh-ego-liveimg {
   width:100%; border-radius:11px; display:block;
   max-height:50vh; object-fit:contain;
@@ -733,6 +773,12 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 		const ICON_CLOSE = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>`;
 		// 6-dot drag grip for the panel's title bar.
 		const ICON_GRIP = `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="8" cy="6" r="1.8"/><circle cx="16" cy="6" r="1.8"/><circle cx="8" cy="12" r="1.8"/><circle cx="16" cy="12" r="1.8"/><circle cx="8" cy="18" r="1.8"/><circle cx="16" cy="18" r="1.8"/></svg>`;
+		// ── panel action icons (size sync / presets / maximize / page actions) ──
+		const ICON_LOCK = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="4.5" y="10.5" width="15" height="10" rx="2"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/></svg>`;
+		const ICON_UNLOCK = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="4.5" y="10.5" width="15" height="10" rx="2"/><path d="M8 10.5V7.5a4 4 0 0 1 7.2-2.4"/></svg>`;
+		const ICON_ASPECT = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2.2"/><path d="M3 10h18"/><path d="M8 5v5"/></svg>`;
+		const ICON_MAXIMIZE = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H3v5"/><path d="M16 3h5v5"/><path d="M8 21H3v-5"/><path d="M16 21h5v-5"/></svg>`;
+		const ICON_LINK = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M10 13.5a4 4 0 0 0 5.7 0l2.8-2.8a4 4 0 0 0-5.7-5.7L11.5 6.3"/><path d="M14 10.5a4 4 0 0 0-5.7 0l-2.8 2.8a4 4 0 0 0 5.7 5.7l1.3-1.3"/></svg>`;
 
 		// ── 设置卡双轨数据源的桥轨（session-guard BridgeDocHandle 同式收缩版）──
 		// ≤0.1.5 宿主无 configForms 服务（代际切分：configForms 属 rc.1+ 代），
@@ -2114,6 +2160,80 @@ h('button', { type: 'button', disabled: !writable || isFull(links) || hasCliLink
 							.catch((): any => null)
 					})
 					badge.appendChild(raiseBtn)
+					// ── Page-level actions (task 13/19/20/21) ────────────────────────
+					// These drive the SAME host routes as the sidebar tab, so the
+					// floating panel and the tab share one protocol: CDP-worker
+					// route → worker; ego-cli route → heredoc (both injected host-side).
+					const liveNotice = (text: any) => {
+						if (!text) return
+						u.textContent = String(text)
+						u.classList.add('dsh-ego-hint')
+					}
+					const runPanelAction = (btn: any, promise: Promise<any>, onOk: any) => {
+						btn.disabled = true
+						promise.then((res: any) => {
+							if (res && res.ok === true) { if (onOk) onOk(res) }
+							else liveNotice((res && res.error) || wt('actionFailed'))
+						}).catch(() => { liveNotice(wt('actionFailed')) })
+							.then(() => { btn.disabled = false })
+					}
+					const pageRefreshBtn = document.createElement('button')
+					pageRefreshBtn.type = 'button'
+					pageRefreshBtn.className = 'dsh-ego-back'
+					pageRefreshBtn.title = wt('pageRefreshHint')
+					pageRefreshBtn.textContent = wt('pageRefresh')
+					pageRefreshBtn.addEventListener('click', () => {
+						runPanelAction(pageRefreshBtn, panelNavigate('', true), () => refresh())
+					})
+					badge.appendChild(pageRefreshBtn)
+					const openUrlBtn = document.createElement('button')
+					openUrlBtn.type = 'button'
+					openUrlBtn.className = 'dsh-ego-back'
+					openUrlBtn.title = wt('openUrlHint')
+					openUrlBtn.textContent = wt('openUrl')
+					openUrlBtn.addEventListener('click', () => {
+						const entered = window.prompt(wt('openUrlPrompt'), current.url || 'https://')
+						if (entered === null) return
+						const url = normalizeUrlInput(entered)
+						if (url === '') return
+						runPanelAction(openUrlBtn, panelNavigate(url, false), () => refresh())
+					})
+					badge.appendChild(openUrlBtn)
+					const maximizeBtn = document.createElement('button')
+					maximizeBtn.type = 'button'
+					maximizeBtn.className = 'dsh-ego-back'
+					maximizeBtn.title = wt('maximizeHint')
+					maximizeBtn.innerHTML = `${ICON_MAXIMIZE}<span style="margin-left:4px">${wt('maximizeWindow')}</span>`
+					maximizeBtn.addEventListener('click', () => {
+						runPanelAction(maximizeBtn, panelWindowSize({ maximize: true }), () => refresh())
+					})
+					badge.appendChild(maximizeBtn)
+					const presetBtn = document.createElement('button')
+					presetBtn.type = 'button'
+					presetBtn.className = 'dsh-ego-back'
+					presetBtn.title = wt('sizePresetsHint')
+					presetBtn.innerHTML = `${ICON_ASPECT}<span style="margin-left:4px">${wt('sizePresets')}</span>`
+					const presetRow = document.createElement('div')
+					presetRow.className = 'dsh-ego-presets'
+					presetRow.hidden = true
+					for (const preset of (SIZE_PRESETS || [])) {
+						const item = document.createElement('button')
+						item.type = 'button'
+						item.className = 'dsh-ego-preset-item'
+						item.textContent = preset.label
+						item.addEventListener('click', () => {
+							presetRow.hidden = true
+							presetBtn.classList.remove('on')
+							runPanelAction(presetBtn, panelWindowSize({ aspect: preset.ratio }), () => refresh())
+						})
+						presetRow.appendChild(item)
+					}
+					presetBtn.addEventListener('click', () => {
+						presetRow.hidden = !presetRow.hidden
+						presetBtn.classList.toggle('on', !presetRow.hidden)
+					})
+					badge.appendChild(presetBtn)
+					badge.appendChild(presetRow)
 					const cached = frameCache.get(current.targetId)
 					if (captureBackend === 'ffmpeg' || cached) {
 						const img = makeZoomImage(u, captureBackend === 'ffmpeg' ? 'video' : 'img')
@@ -2548,7 +2668,135 @@ clearTimeout((panel as any)._dshHideT)
 		// sidebar's tab content area instead of a fixed-position overlay.
 		var INPUT_ROUTE = '/api/bcdp/input'
 		var FLUSH_ROUTE = '/api/bcdp/flush'
+		var WINDOW_SIZE_ROUTE = '/api/bcdp/window-size'
+		var PANEL_NAVIGATE_ROUTE = '/api/bcdp/navigate'
 		var FRAME_FOLLOW_MIN_MS = 350
+
+		// ── Panel size → real browser window (size sync) ────────────────────────
+		// With the toggle unlocked, resizing the live stage resizes the REAL agent
+		// browser window (Browser.setWindowBounds host-side), so the page reflows
+		// at the size the user is drawing. Sends are debounced (a drag emits per
+		// pixel), skipped when the stage did not actually change, and blocked
+		// unless the change came from the user's OWN pointer drag — otherwise a
+		// window resize that follows our own request would chase the sidebar
+		// width and shrink the browser to nothing.
+		var SIZE_SYNC_KEY = 'dsh-browser-cdp:size-sync'
+		function sizeSyncStored(): boolean {
+			try { return window.localStorage.getItem(SIZE_SYNC_KEY) === '1' } catch (e) { return false }
+		}
+		function sizeSyncStore(enabled: boolean) {
+			try { window.localStorage.setItem(SIZE_SYNC_KEY, enabled ? '1' : '0') } catch (e) { /* ignore */ }
+		}
+		function createWindowSizeSync() {
+			var enabled = false
+			var element: any = null
+			var observer: any = null
+			var timer: any = null
+			var inFlight = false
+			var baseWidth = 0
+			var pointerDown = false
+			var dragUntil = 0
+			var lastAt = 0
+			function onPointerDown() { pointerDown = true }
+			function onPointerUp() {
+				if (!pointerDown) return
+				pointerDown = false
+				dragUntil = Date.now() + 350
+				if (enabled) schedule()
+			}
+			function stageWidth() { return Math.round((element && element.clientWidth) || 0) }
+			function schedule() {
+				if (timer !== null) return
+				timer = setTimeout(send, 180)
+			}
+			function send() {
+				timer = null
+				if (!enabled || !element) return
+				var w = stageWidth()
+				if (w < 120) return
+				var now = Date.now()
+				if (!pointerDown && now > dragUntil) { baseWidth = w; return }
+				var delta = w - baseWidth
+				if (Math.abs(delta) < 12) return
+				if (now - lastAt < 200) { schedule(); return }
+				if (inFlight) { schedule(); return }
+				inFlight = true
+				lastAt = now
+				var sentBase = w
+				postJson(WINDOW_SIZE_ROUTE, { delta: delta }).then(function (parsed: any) {
+					if (parsed && parsed.ok === true) baseWidth = sentBase
+				}).catch(function (): any { return null }).then(function () { inFlight = false })
+			}
+			function attach(el: any) {
+				element = el || null
+				if (!enabled) return
+				if (observer !== null) { observer.disconnect(); observer = null }
+				if (element && typeof ResizeObserver !== 'undefined') {
+					try {
+						observer = new ResizeObserver(function () { if (enabled) schedule() })
+						observer.observe(element)
+					} catch (e) { observer = null }
+				}
+				if (baseWidth === 0) baseWidth = stageWidth()
+			}
+			function setEnabled(next: any) {
+				enabled = next === true
+				sizeSyncStore(enabled)
+				if (!enabled) {
+					if (timer !== null) { clearTimeout(timer); timer = null }
+					if (observer !== null) { observer.disconnect(); observer = null }
+					document.removeEventListener('pointerdown', onPointerDown, true)
+					document.removeEventListener('pointerup', onPointerUp, true)
+					return
+				}
+				// Unlocking arms the drag mapping only: the browser window keeps its
+				// current size until the user actually drags.
+				baseWidth = stageWidth()
+				lastAt = 0
+				document.addEventListener('pointerdown', onPointerDown, true)
+				document.addEventListener('pointerup', onPointerUp, true)
+				if (element) attach(element)
+			}
+			function dispose() {
+				if (timer !== null) { timer = null }
+				if (observer !== null) { observer.disconnect(); observer = null }
+				document.removeEventListener('pointerdown', onPointerDown, true)
+				document.removeEventListener('pointerup', onPointerUp, true)
+				element = null
+			}
+			return {
+				isEnabled: function () { return enabled },
+				setEnabled: setEnabled,
+				attach: attach,
+				dispose: dispose,
+			}
+		}
+
+		// Aspect-ratio presets shared by both surfaces (label → height/width).
+		var SIZE_PRESETS = [
+			{ label: '16:9', ratio: '16:9' },
+			{ label: '4:3', ratio: '4:3' },
+			{ label: '21:9', ratio: '21:9' },
+			{ label: '1:1', ratio: '1:1' },
+			{ label: '9:16', ratio: '9:16' },
+		]
+
+		/** Panel refresh / URL: ONE body shape for both host routes. */
+		function panelNavigate(url: any, reload: any): Promise<any> {
+			var body = reload ? { reload: true } : { url: String(url || '') }
+			return postJson(PANEL_NAVIGATE_ROUTE, body)
+		}
+		/** Size sync / presets / maximize. */
+		function panelWindowSize(body: any): Promise<any> {
+			return postJson(WINDOW_SIZE_ROUTE, body || {})
+		}
+		/** Normalize whatever the user typed into an absolute URL. */
+		function normalizeUrlInput(entered: any): string {
+			var url = String(entered || '').trim()
+			if (url === '') return ''
+			if (!/^[a-z][a-z0-9+.-]*:/i.test(url)) url = 'https://' + url
+			return url
+		}
 
 		// ── Tab CSS (scoped under .dsh-ego-side-root) ──────────────────────────
 		// Separate from PANEL_CSS (the floating panel's styles): the Tab lives
@@ -2669,6 +2917,29 @@ clearTimeout((panel as any)._dshHideT)
 }
 .dsh-ego-side-back:hover { background: rgba(128,128,128,.3); }
 .dsh-ego-side-back.dsh-ego-pick-on { background: rgba(56,189,248,.28); color: #0ea5e9; }
+.dsh-ego-side-back.on { background: rgba(217,119,87,.35); border-color: rgba(217,119,87,.6); }
+.dsh-ego-side-presets {
+  display: inline-flex; gap: 3px; padding: 3px; border-radius: 7px;
+  background: rgba(128,128,128,.12); border: 1px solid rgba(128,128,128,.18);
+}
+.dsh-ego-side-preset-item {
+  background: transparent; border: none; color: inherit; cursor: pointer;
+  font-size: 10.5px; padding: 2px 7px; border-radius: 5px; opacity: .8;
+}
+.dsh-ego-side-preset-item:hover { background: rgba(128,128,128,.24); opacity: 1; }
+/* size-sync stage: the live image sits in a positioned box so the edge/
+   corner handles can overlay it. */
+.dsh-ego-side-stage { position: relative; display: flex; min-width: 0; }
+.dsh-ego-side-resize { position: absolute; z-index: 6; background: transparent; }
+.dsh-ego-side-resize-right { top: 0; bottom: 0; right: 0; width: 10px; cursor: col-resize; }
+.dsh-ego-side-resize-bottom { left: 0; right: 0; bottom: 0; height: 10px; cursor: row-resize; }
+.dsh-ego-side-resize-corner { right: 0; bottom: 0; width: 18px; height: 18px; cursor: nwse-resize; }
+.dsh-ego-size-unlocked .dsh-ego-side-resize-right,
+.dsh-ego-size-unlocked .dsh-ego-side-resize-bottom { background: rgba(217,119,87,.14); }
+.dsh-ego-size-unlocked .dsh-ego-side-resize-corner {
+  background: rgba(217,119,87,.3); border-bottom-right-radius: 9px;
+}
+.dsh-ego-side-resize:hover { background: rgba(217,119,87,.5) !important; }
 .dsh-ego-side-liveimg {
   width: 100%; border-radius: 9px; display: block;
   max-height: 50vh; object-fit: contain;
@@ -3827,6 +4098,18 @@ clearTimeout((panel as any)._dshHideT)
 				if (!self.disposed) self._recompute()
 			})
 		}
+		// Record the page viewport a resize preset/drag just produced, so the
+		// panel's pointer→browser coordinate mapping stays accurate before the
+		// next spaces/frame event arrives.
+		LivePreviewController.prototype.noteViewport = function (targetId: any, width: any, height: any) {
+			if (targetId == null) return
+			if (!Number.isFinite(width) || !Number.isFinite(height)) return
+			if (width <= 0 || height <= 0) return
+			var meta = this.pageMeta.get(targetId) || {}
+			meta.vw = width
+			meta.vh = height
+			this.pageMeta.set(targetId, meta)
+		}
 		// Fail visible, never silent: a pointer/wheel intent that cannot be mapped
 		// (browserXY → null because the live view was never wired) used to vanish
 		// without a trace. Warn once per 5s and show a hint; _showHint triggers a
@@ -3976,6 +4259,127 @@ clearTimeout((panel as any)._dshHideT)
 
 			var imgRef = React.useRef(null)
 			var videoRef = React.useRef(null)
+			var stageRef = React.useRef(null)
+
+			// ── size sync / presets / maximize (tasks 19–21) ──────────────────
+			var sizeSyncRef = React.useRef(null)
+			if (sizeSyncRef.current === null) {
+				sizeSyncRef.current = createWindowSizeSync()
+				sizeSyncRef.current.setEnabled(sizeSyncStored())
+			}
+			var sizeSync = sizeSyncRef.current
+			var sizeSyncState = React.useState(sizeSync.isEnabled())
+			var sizeSyncOn = sizeSyncState[0]
+			var setSizeSyncOn = sizeSyncState[1]
+			var presetState = React.useState(false)
+			var presetOpen = presetState[0]
+			var setPresetOpen = presetState[1]
+			var noticeState = React.useState('')
+			var sizeNotice = noticeState[0]
+			var setSizeNotice = noticeState[1]
+
+			// Surface a host/client version mismatch instead of failing silently:
+			// the client bundle can be newer than the running host process.
+			var noteSizeResult = function (status: any, parsed: any) {
+				if (status === 400 || status === 404) setSizeNotice(wt('sizeApiOutdated'))
+				else if (parsed && parsed.ok === true) setSizeNotice('')
+			}
+			var noteViewport = function (targetId: any, parsed: any) {
+				if (parsed && parsed.ok === true && parsed.viewport) {
+					controller.noteViewport(targetId, parsed.viewport.width, parsed.viewport.height)
+				}
+			}
+			var applyPreset = function (ratio: any) {
+				setPresetOpen(false)
+				var targetId = state.currentTargetId
+				panelWindowSize({ aspect: ratio }).then(function (parsed: any) {
+					noteSizeResult(200, parsed)
+					noteViewport(targetId, parsed)
+					if (parsed && parsed.ok === true) controller.refresh()
+				}).catch(function () { setSizeNotice(wt('actionFailed')) })
+			}
+			var openUrlInPanel = function () {
+				var current = state.currentSpace
+				var entered = window.prompt(wt('openUrlPrompt'), (current && current.url) || 'https://')
+				if (entered === null) return
+				var url = normalizeUrlInput(entered)
+				if (url === '') return
+				var targetId = state.currentTargetId
+				setSizeNotice('')
+				panelNavigate(url, false).then(function (parsed: any) {
+					if (parsed && parsed.ok === true) { setSizeNotice(''); noteViewport(targetId, parsed); controller.refresh() }
+					else setSizeNotice((parsed && parsed.error) || wt('actionFailed'))
+				}).catch(function () { setSizeNotice(wt('actionFailed')) })
+			}
+			var reloadPage = function () {
+				setSizeNotice('')
+				panelNavigate('', true).then(function (parsed: any) {
+					if (parsed && parsed.ok === true) { setSizeNotice(''); controller.refresh() }
+					else setSizeNotice((parsed && parsed.error) || wt('actionFailed'))
+				}).catch(function () { setSizeNotice(wt('actionFailed')) })
+			}
+			var maximizeWindow = function () {
+				var targetId = state.currentTargetId
+				setSizeNotice('')
+				panelWindowSize({ maximize: true }).then(function (parsed: any) {
+					noteSizeResult(200, parsed)
+					noteViewport(targetId, parsed)
+					if (parsed && parsed.ok === true) controller.refresh()
+					else setSizeNotice((parsed && parsed.error) || wt('actionFailed'))
+				}).catch(function () { setSizeNotice(wt('actionFailed')) })
+			}
+			React.useEffect(function () {
+				if (!presetOpen) return
+				return function () { /* menu closes on selection / toggle */ }
+			}, [presetOpen])
+			// Resize handles over the live stage: dragging the right/bottom edge or
+			// the corner resizes the REAL browser window, independent of the lock
+			// (the lock only governs whether sidebar-width changes follow).
+			var beginResize = function (axis: any) {
+				return function (event: any) {
+					event.preventDefault()
+					event.stopPropagation()
+					var startX = event.clientX
+					var startY = event.clientY
+					var sentX = 0
+					var sentY = 0
+					var lastAt = 0
+					var inFlight = false
+					var targetId = state.currentTargetId
+					var sendStep = function (stepX: number, stepY: number) {
+						var payload: any = {}
+						if (Math.abs(stepX) >= 1) payload.delta = Math.round(stepX)
+						if (Math.abs(stepY) >= 1) payload.dy = Math.round(stepY)
+						if (payload.delta === undefined && payload.dy === undefined) return
+						panelWindowSize(payload).then(function (parsed: any) {
+							noteSizeResult(200, parsed)
+							noteViewport(targetId, parsed)
+						}).catch(function (): any { return null }).then(function () { inFlight = false })
+					}
+					var onMove = function (ev: any) {
+						var dxTotal = axis === 'y' ? 0 : ev.clientX - startX
+						var dyTotal = axis === 'x' ? 0 : ev.clientY - startY
+						var stepX = dxTotal - sentX
+						var stepY = dyTotal - sentY
+						if (Math.abs(stepX) < 3 && Math.abs(stepY) < 3) return
+						var now = Date.now()
+						if (inFlight || now - lastAt < 120) return
+						inFlight = true
+						lastAt = now
+						sentX = dxTotal
+						sentY = dyTotal
+						sendStep(stepX, stepY)
+					}
+					var onUp = function () {
+						document.removeEventListener('pointermove', onMove)
+						document.removeEventListener('pointerup', onUp)
+						document.removeEventListener('pointercancel', onUp)
+					}
+					document.addEventListener('pointermove', onMove)
+					document.addEventListener('pointerup', onUp)
+					document.addEventListener('pointercancel', onUp)
+				}
+			}
 
 			// Bind the live <img>/<video> to the controller the moment the element
 			// attaches. The deps-based effect below only fires when target/backend/
@@ -3991,6 +4395,7 @@ clearTimeout((panel as any)._dshHideT)
 					controller.setLiveImg(el, state.currentTargetId)
 					controller.noteWired()
 				}
+				if (sizeSyncOn) sizeSync.attach(stageRef.current || el)
 			}
 			var bindLiveVideo = function (el: any) {
 				videoRef.current = el
@@ -3999,6 +4404,7 @@ clearTimeout((panel as any)._dshHideT)
 					controller.setLiveVideo(el, state.currentTargetId)
 					controller.noteWired()
 				}
+				if (sizeSyncOn) sizeSync.attach(stageRef.current || el)
 			}
 
 			React.useEffect(function () {
@@ -4009,6 +4415,17 @@ clearTimeout((panel as any)._dshHideT)
 			React.useEffect(function () {
 				controller.setVisible(visible)
 			}, [visible, controller])
+
+			// Size sync follows visibility: a hidden tab must stop observing the
+			// stage, and unhiding re-arms it without changing any window size.
+			React.useEffect(function () {
+				if (!visible) sizeSync.attach(null)
+				else if (sizeSyncOn) sizeSync.attach(stageRef.current || imgRef.current || videoRef.current)
+			}, [visible, sizeSyncOn, sizeSync, state.currentTargetId, state.backend])
+
+			React.useEffect(function () {
+				return function () { sizeSync.dispose() }
+			}, [sizeSync])
 
 			// Attach the live <img> to the controller whenever the target changes
 			React.useEffect(function () {
@@ -4028,6 +4445,9 @@ clearTimeout((panel as any)._dshHideT)
 			}, [controller, state.currentTargetId, state.backend, state.streamGeneration])
 
 			var h = React.createElement
+			var icon = function (svg: any) {
+				return h('span', { style: { display: 'inline-flex', alignItems: 'center' }, dangerouslySetInnerHTML: { __html: svg } })
+			}
 
 			// Header
 			var header = h('div', { className: 'dsh-ego-side-head' },
@@ -4199,11 +4619,58 @@ clearTimeout((panel as any)._dshHideT)
 										.then(function (r) { return r.json().catch(function (): any { return null }) })
 										.catch(function (): any { return null })
 								},
-							}, wt('raiseWindow'))
+							}, wt('raiseWindow')),
+							// ── task 13: page reload / manual URL ──
+							h('button', {
+								className: 'dsh-ego-side-back', type: 'button',
+								title: wt('pageRefreshHint'),
+								onClick: reloadPage,
+							}, icon(ICON_REFRESH), wt('pageRefresh')),
+							h('button', {
+								className: 'dsh-ego-side-back', type: 'button',
+								title: wt('openUrlHint'),
+								onClick: openUrlInPanel,
+							}, icon(ICON_LINK), wt('openUrl')),
+							// ── tasks 19–21: size sync / presets / maximize ──
+							h('button', {
+								className: 'dsh-ego-side-back' + (sizeSyncOn ? ' on' : ''), type: 'button',
+								title: wt('sizeSyncHint'),
+								onClick: function () {
+									var next = !sizeSyncOn
+									setSizeSyncOn(next)
+									sizeSync.setEnabled(next)
+									if (next) sizeSync.attach(stageRef.current || imgRef.current || videoRef.current)
+								},
+							}, icon(sizeSyncOn ? ICON_LOCK : ICON_UNLOCK), sizeSyncOn ? wt('sizeSyncOn') : wt('sizeSyncOff')),
+							h('button', {
+								className: 'dsh-ego-side-back' + (presetOpen ? ' on' : ''), type: 'button',
+								title: wt('sizePresetsHint'),
+								onClick: function () { setPresetOpen(!presetOpen) },
+							}, icon(ICON_ASPECT), wt('sizePresets')),
+							h('button', {
+								className: 'dsh-ego-side-back', type: 'button',
+								title: wt('maximizeHint'),
+								onClick: maximizeWindow,
+							}, icon(ICON_MAXIMIZE), wt('maximizeWindow')),
+							presetOpen
+								? h('div', { className: 'dsh-ego-side-presets' },
+									SIZE_PRESETS.map(function (preset: any) {
+										return h('button', {
+											key: preset.label, type: 'button', className: 'dsh-ego-side-preset-item',
+											onClick: function () { applyPreset(preset.ratio) },
+										}, preset.label)
+									})
+								)
+								: null
 						),
-						liveImg,
+						h('div', { className: 'dsh-ego-side-stage' + (sizeSyncOn ? ' dsh-ego-size-unlocked' : ''), ref: stageRef },
+							liveImg,
+							h('div', { className: 'dsh-ego-side-resize dsh-ego-side-resize-right', title: wt('resizeHint'), onPointerDown: beginResize('x') }),
+							h('div', { className: 'dsh-ego-side-resize dsh-ego-side-resize-bottom', title: wt('resizeHint'), onPointerDown: beginResize('y') }),
+							h('div', { className: 'dsh-ego-side-resize dsh-ego-side-resize-corner', title: wt('resizeHint'), onPointerDown: beginResize('xy') })
+						),
 						h('div', { className: 'dsh-ego-side-livetitle' }, currentSpace.title || currentSpace.url || wt('newTab')),
-						h('div', { className: 'dsh-ego-side-liveurl' + (state.zoomHint ? ' dsh-ego-side-hint' : '') }, state.zoomHint || currentSpace.url || '')
+						h('div', { className: 'dsh-ego-side-liveurl' + ((state.zoomHint || sizeNotice) ? ' dsh-ego-side-hint' : '') }, sizeNotice || state.zoomHint || currentSpace.url || '')
 					)
 				)
 			}

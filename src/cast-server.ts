@@ -203,14 +203,33 @@ export function markEgoToolCall(sessionId?: string): void {
  * so a JPEG frame MUST say `jpeg` or the panel renders garbage. Default `png`
  * keeps the ego-cli poller (which captures PNG) unchanged.
  */
-export function broadcastCliFrame(frame: { png: Buffer; url: string; title: string; seq: number; updatedAt: number; fmt?: 'png' | 'jpeg' }): void {
+/** One row of the panel's shared tab bucket (worker spaces / CLI frame / Tabbit). */
+export interface CliSpaceRow {
+  targetId: string
+  url: string
+  title: string
+  active: boolean
+  lastActive: number
+}
+
+export function broadcastCliFrame(
+  frame: { png: Buffer; url: string; title: string; seq: number; updatedAt: number; fmt?: 'png' | 'jpeg' },
+  spaces?: CliSpaceRow[],
+): void {
   // Remember the newest frame so the hold/heartbeat timer can re-emit it during
   // the gap between 3s CLI captures (a screenshot can momentarily stall the
   // page's rendering, and there is no screencast on the ego-cli route).
   lastCliFrameBroadcast = frame
   lastCliFrameAt = Date.now()
+  // A caller that KNOWS the real tab inventory (Tabbit's 3s poller) hands it in,
+  // so the panel's tab strip is driven by the same cadence as the picture
+  // instead of a synthetic single-space row. No override = ego-cli's synthetic
+  // row, and any previously supplied inventory is dropped (link kinds switch).
+  lastCliSpaces = spaces && spaces.length > 0 ? spaces : null
   writeCliFrame(frame)
 }
+/** Tab inventory supplied by the newest frame broadcast (null = synthetic row). */
+let lastCliSpaces: CliSpaceRow[] | null = null
 /** Newest CLI frame seen, replayed by the 1s hold timer in initCastServer. */
 let lastCliFrameBroadcast: { png: Buffer; url: string; title: string; seq: number; updatedAt: number; fmt?: 'png' | 'jpeg' } | null = null
 /** Wall-clock of the last broadcast/replay; the hold timer only fills >1s gaps. */
@@ -220,7 +239,7 @@ let lastCliFrameAt = 0
  * the image to avoid churning the client's store/render every second). */
 function writeCliFrame(frame: { png: Buffer; url: string; title: string; seq: number; updatedAt: number; fmt?: 'png' | 'jpeg' }, includeSpaces = true): void {
   if (sseClients.size === 0) return
-  const synthetic = [{
+  const synthetic = lastCliSpaces ?? [{
     targetId: CLI_FRAME_TARGET_ID,
     url: frame.url,
     title: frame.title,
@@ -228,7 +247,10 @@ function writeCliFrame(frame: { png: Buffer; url: string; title: string; seq: nu
     lastActive: frame.updatedAt,
   }]
   const spacesFrame = `event: spaces\ndata: ${JSON.stringify(synthetic)}\n\n`
-  const framePayload = { targetId: CLI_FRAME_TARGET_ID, data: frame.png.toString('base64'), fmt: frame.fmt ?? 'png', ts: frame.updatedAt }
+  // Bind the image to the row the capture came from (the active tab), not to
+  // the ego-cli placeholder id — the client swaps `<img>` by targetId.
+  const frameTarget = (synthetic.find((row) => row.active) ?? synthetic[0])?.targetId ?? CLI_FRAME_TARGET_ID
+  const framePayload = { targetId: frameTarget, data: frame.png.toString('base64'), fmt: frame.fmt ?? 'png', ts: frame.updatedAt }
   const frameEvent = `event: frame\ndata: ${JSON.stringify(framePayload)}\n\n`
   for (const res of sseClients) {
     try {
@@ -679,6 +701,7 @@ export function initCastServer(
   loginImport: (opts: LoginImportOptions) => Promise<LoginImportReport> = async () => ({ ok: false, error: 'login import not supported by this host build' }),
   cliPoller: CliFramePoller | null = null,
   panelActions: PanelActionRunner | null = null,
+  tabbitSpaces: (() => { tabs: Array<{ targetId: string; url: string; title: string; active: boolean; lastActive: number }>; updatedAt: number; complete: boolean }) | null = null,
 ): void {
   const ensureWorker = makeEnsureWorker(ctx, cfg, ffmpegManager)
   const pushConfig = makePushConfig(ensureWorker, ffmpegManager)
@@ -766,19 +789,48 @@ export function initCastServer(
         // fallback frame instead of the "no live browser" empty state.
         const cliFrame = cliPoller && cliPoller.isRunning() ? cliPoller.getFrame() : null
         if (cliFrame) {
+          // Serve the REAL tab inventory when the capture reported one (the
+          // panel then renders a multi-tab strip); the synthetic single row is
+          // only for an older capture path that had no inventory.
+          const frameTabs = Array.isArray(cliFrame.tabs) ? cliFrame.tabs : []
+          const rows = frameTabs.length > 0
+            ? frameTabs.map((t) => ({
+                targetId: t.targetId,
+                url: t.url,
+                title: t.title,
+                active: t.active,
+                lastActive: cliFrame.updatedAt,
+              }))
+            : [{
+                targetId: CLI_FRAME_TARGET_ID,
+                url: cliFrame.url,
+                title: cliFrame.title,
+                active: true,
+                lastActive: cliFrame.updatedAt,
+              }]
           return sendJson(res, 200, {
             ok: true,
             toolCallCount,
             cliFrameMode: true,
             cliFrameIntervalMs: 3000,
+            cliFrameTargetId: cliFrame.targetId || CLI_FRAME_TARGET_ID,
             link: activeLinkInfo(),
-            spaces: [{
-              targetId: CLI_FRAME_TARGET_ID,
-              url: cliFrame.url,
-              title: cliFrame.title,
-              active: true,
-              lastActive: cliFrame.updatedAt,
-            }],
+            spaces: rows,
+          })
+        }
+        // Tabbit's available tabs live in the host's inventory cache (3s poller).
+        // Serving them here puts them in the SAME tab bucket the CDP/ego routes
+        // feed, so the strip, history drawer and @-quotable tabs all work on a
+        // Tabbit session too. Stale beyond 20s = not served (the cache is empty
+        // until the first poll lands, and a dead CLI must not look alive).
+        const tb = tabbitSpaces?.()
+        if (tb && tb.tabs.length > 0 && Date.now() - tb.updatedAt < 20_000) {
+          return sendJson(res, 200, {
+            ok: true,
+            backend: 'tabbit-cli',
+            toolCallCount,
+            link: activeLinkInfo(),
+            spaces: tb.tabs,
           })
         }
         return sendJson(res, 200, { ok: false, spaces: [], toolCallCount, link: activeLinkInfo(), reason: 'no live agent browser' })

@@ -30,11 +30,16 @@ import {
 } from './cdp-targets.ts'
 import { createSubprocessCliIo } from './cdp/cli-link.ts'
 import { setAttachEndpoint, recycleWorker } from './cast-server.ts'
-import { captureTabReport, TAB_REPORT_FILE_PREFIX } from './tab-report.ts'
+import { captureTabReport, TAB_REPORT_FILE_PREFIX, type TabAnchorReport } from './tab-report.ts'
 
 export interface PicksStoreDeps {
   /** Workspace picks dir for one session (undefined = none registered). */
   resolveDir(sessionId: string | undefined): string | undefined
+  /**
+   * Routes with no CDP websocket (ego CLI / Tabbit) build the same report from
+   * an in-page DOM scan instead. Absent = those routes keep answering 409.
+   */
+  fallbackTabReport?(input: { targetId: string; urlHint: string; titleHint: string }): Promise<TabAnchorReport>
 }
 
 export interface SettingsBridge {
@@ -287,18 +292,26 @@ export function registerEgoBrowserGateway(
               return
             }
             const attach = defaultAttachCache.get()
-            if (attach.status !== 'ready' || attach.wsUrl === '') {
-              writeJson(res, 409, envelopeError('attach-not-ready', 'no live CDP attach; activate a target and let the probe finish first'))
-              return
-            }
             const urlHint = typeof (body as { url?: unknown }).url === 'string' ? (body as { url: string }).url : ''
             const titleHint = typeof (body as { title?: unknown }).title === 'string' ? (body as { title: string }).title : ''
-            let report: Awaited<ReturnType<typeof captureTabReport>>
+            // CDP routes read the Accessibility tree over a websocket. ego-cli and
+            // Tabbit have no websocket in the host, so they answer through the
+            // injected fallback (in-page DOM scan) — same report shape, same
+            // numbering/anchors. Neither available = the honest 409.
+            let report: TabAnchorReport | null = null
             try {
-              report = await captureTabReport({ wsUrl: attach.wsUrl, targetId: repTargetId, engine: attach.engine, urlHint, titleHint })
+              if (attach.status === 'ready' && attach.wsUrl !== '') {
+                report = await captureTabReport({ wsUrl: attach.wsUrl, targetId: repTargetId, engine: attach.engine, urlHint, titleHint })
+              } else if (picks?.fallbackTabReport) {
+                report = await picks.fallbackTabReport({ targetId: repTargetId, urlHint, titleHint })
+              }
             } catch (error) {
               const code = (error as { code?: string })?.code || 'capture-failed'
               writeJson(res, code === 'invalid-target' ? 409 : 502, envelopeError(code, error instanceof Error ? error.message : String(error)))
+              return
+            }
+            if (report === null) {
+              writeJson(res, 409, envelopeError('attach-not-ready', 'no live CDP attach and no CLI fallback; activate a target and let the probe finish first'))
               return
             }
             // A client-supplied file name is honored ONLY when it passes the
@@ -306,7 +319,7 @@ export function registerEgoBrowserGateway(
             // fresh `tab-…` name. Prefix never collides with `picks-…`.
             const repFile = typeof (body as { file?: unknown }).file === 'string' && /^[A-Za-z0-9._-]+\.json$/.test((body as { file: string }).file)
               ? (body as { file: string }).file
-              : `${TAB_REPORT_FILE_PREFIX}${repTargetId.slice(0, 8)}-${Date.now()}.json`
+              : `${TAB_REPORT_FILE_PREFIX}${(report.targetId || repTargetId).slice(0, 8)}-${Date.now()}.json`
             await mkdir(repDir, { recursive: true })
             const repTargetPath = resolve(repDir, repFile)
             if (!repTargetPath.startsWith(resolve(repDir))) {

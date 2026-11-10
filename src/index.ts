@@ -38,6 +38,8 @@ import { importLoginCookies } from './login-import.ts'
 import { initCastServer, markEgoToolCall, getLastEgoActivity, onEgoActivity, setAttachEndpoint, recycleWorker, getCliPollStatus, getAttachEndpoint, broadcastCliFrame } from './cast-server.ts'
 import { CliFramePoller, buildFrameScript, FRAME_SENTINEL } from './cast/cli-frame-poller.ts'
 import { buildEgoNavigateScript, buildEgoWindowSizeScript, parsePanelResult, type PanelActionOutcome, type PanelActionRunner } from './cast/panel-actions.ts'
+import { buildEgoAxScript, buildTabbitAxSnippet, composeFallbackReport, parseAxSentinel, type FallbackAxSnapshot } from './cast/fallback-tab-report.ts'
+import type { TabAnchorReport } from './tab-report.ts'
 import { registerEgoBrowserGateway } from './gateway.ts'
 import { EGO_HELP_INDEX } from './help.ts'
 import { HUMAN_CHECK_PROBE } from './captcha.ts'
@@ -1431,6 +1433,112 @@ function makePanelActions(ctx: EgoContext, cfg: EgoRuntimeConfig): PanelActionRu
     navigate: (body) => run((spaceJson) => buildEgoNavigateScript(spaceJson, body)),
   }
 }
+
+/** Shape the panel needs for one Tabbit tab (same contract as an ego/CDP space). */
+export interface TabbitSpaceRow {
+  targetId: string
+  url: string
+  title: string
+  active: boolean
+  lastActive: number
+}
+
+/**
+ * Tabbit's available tabs, for the panel's shared tab bucket.
+ *
+ * The 3s inventory poller already caches them (`_tabbitTabCache`); the watch
+ * panel had no idea they existed, so a Tabbit session showed an empty strip and
+ * nothing to @-quote. Rows use the CLI's `tabId` as targetId so a quote can be
+ * traced back to the exact tab.
+ */
+export function tabbitSpaceRows(): { tabs: TabbitSpaceRow[]; updatedAt: number; complete: boolean } {
+  const updatedAt = _tabbitTabCache.updatedAt
+  return {
+    tabs: _tabbitTabCache.tabs.map((t) => ({
+      targetId: String(t.tabId),
+      url: t.url || '',
+      title: t.title || '',
+      active: t.active === true,
+      lastActive: updatedAt,
+    })),
+    updatedAt,
+    complete: _tabbitTabCache.complete,
+  }
+}
+
+/** Error carrying the envelope code the gateway maps to a status. */
+function codedError(code: string, message: string): Error {
+  return Object.assign(new Error(message), { code })
+}
+
+/**
+ * Tab-anchor report for the routes that own no CDP websocket.
+ *
+ * The CDP route reads the Accessibility tree over a socket; ego-cli and Tabbit
+ * cannot, so both collect interactive candidates with the SAME in-page DOM scan
+ * (`cast/fallback-tab-report.ts`) and hand them to the CDP path's own numbering
+ * + anchor helpers. A route that cannot read the page at all still returns a
+ * URL+title report marked degraded — an @ object with no elements beats a 409.
+ */
+function makeFallbackTabReport(ctx: EgoContext, cfg: EgoRuntimeConfig): (input: { targetId: string; urlHint: string; titleHint: string }) => Promise<TabAnchorReport> {
+  return async (input) => {
+    const { effective } = effectiveChannel(cfg)
+    const kind = effective?.link.kind
+    if (kind === TABBIT_CLI_KIND) {
+      const cli = resolveTabbitCli((effective?.link as { cliPath?: string } | undefined)?.cliPath)
+      if (!cli.found) throw codedError('cli-not-found', `tabbit-cli not found: ${cli.error}`)
+      const tabId = Number(input.targetId)
+      const { receipt } = await runTabbitSnippet(ctx.subprocess, buildTabbitAxSnippet(), {
+        cliPath: cli.cliPath,
+        taskName: _tabbitLastTaskName || 'dsh-browser-cdp',
+        requestId: `anchor-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        timeoutMs: 120000,
+        ...(Number.isFinite(tabId) && tabId > 0 ? { tabId } : {}),
+      })
+      if (!receipt.ok) {
+        return composeFallbackReport({
+          route: 'tabbit-cli',
+          targetId: input.targetId,
+          degraded: 'tabbit-cli',
+          snapshot: { url: input.urlHint, title: input.titleHint, targetId: input.targetId, nodes: [] },
+        }) as TabAnchorReport
+      }
+      const data = (receipt.data || {}) as { url?: unknown; title?: unknown; nodes?: unknown }
+      const snapshot: FallbackAxSnapshot = {
+        url: str(data.url, input.urlHint),
+        title: str(data.title, input.titleHint),
+        targetId: input.targetId,
+        nodes: Array.isArray(data.nodes) ? (data.nodes as { role: string; name: string }[]) : [],
+      }
+      return composeFallbackReport({ route: 'tabbit-cli', targetId: input.targetId, snapshot }) as TabAnchorReport
+    }
+    if (kind === EGO_CLI_KIND) {
+      const space = resolveCliPanelSpace(cfg)
+      if (space === null) throw codedError('attach-not-ready', 'no agent browser space yet — open a page with a bcdp_* tool first')
+      const result = await withEgoLock(() => runEgoScript(ctx.subprocess, buildEgoAxScript(j(space)), {}, cfg))
+      const parsed = parseAxSentinel(mergeCliOutput({ stdout: result.stdout ?? '', stderr: result.stderr ?? '' }))
+      if (parsed === null || parsed.ok !== true) {
+        return composeFallbackReport({
+          route: 'ego-cli',
+          targetId: input.targetId,
+          degraded: 'ego-cli',
+          snapshot: { url: input.urlHint, title: input.titleHint, targetId: input.targetId, nodes: [] },
+        }) as TabAnchorReport
+      }
+      return composeFallbackReport({
+        route: 'ego-cli',
+        targetId: input.targetId,
+        snapshot: {
+          url: parsed.url ?? input.urlHint,
+          title: parsed.title ?? input.titleHint,
+          targetId: parsed.targetId || input.targetId,
+          nodes: parsed.nodes ?? [],
+        },
+      }) as TabAnchorReport
+    }
+    throw codedError('attach-not-ready', 'no live CDP attach and no CLI fallback for this link kind')
+  }
+}
 async function spawnCliFrameCapture(
   subprocess: SubprocessService,
   cfg: EgoRuntimeConfig,
@@ -2218,7 +2326,14 @@ bridge.onChange(() => tiers.reapply())
     intervalMs: 3000,
     capture: () => spawnCliFrameCapture(ctx.subprocess, cfg, cfg.spaceTracker.lastActiveSpace()),
     isBusy: egoLockBusy,
-    onFrame: (frame) => broadcastCliFrame(frame),
+    onFrame: (frame) => broadcastCliFrame(
+      { png: frame.png, url: frame.url, title: frame.title, seq: frame.seq, updatedAt: frame.updatedAt, fmt: frame.fmt },
+      // Real tab inventory → the panel lists EVERY tab (multi-tab strip) and the
+      // image binds to the browser's active tab, not a synthetic placeholder.
+      frame.tabs.length > 0
+        ? frame.tabs.map((t) => ({ targetId: t.targetId, url: t.url, title: t.title, active: t.active, lastActive: frame.updatedAt }))
+        : undefined,
+    ),
   })
   ctx.effect?.(() => () => cliPoller.stop())
 
@@ -2295,7 +2410,7 @@ bridge.onChange(() => tiers.reapply())
       if (receipt.ok && typeof data?.path === 'string') {
         const png = readFileSync(data.path)
         tabbitFrameSeq++
-        broadcastCliFrame({ png, url: data.url ?? '', title: data.title ?? '', seq: tabbitFrameSeq, updatedAt: Date.now(), fmt: 'jpeg' })
+        broadcastCliFrame({ png, url: data.url ?? '', title: data.title ?? '', seq: tabbitFrameSeq, updatedAt: Date.now(), fmt: 'jpeg' }, tabbitSpaceRows().tabs)
         return
       }
       // `ok` without a path means the receipt value was demoted to a `resource`
@@ -2441,6 +2556,7 @@ bridge.onChange(() => tiers.reapply())
         (opts) => importLoginCookies(opts, { subprocess: ctx.subprocess }),
         cliPoller,
         makePanelActions(ctx, cfg),
+        () => tabbitSpaceRows(),
       )
     } catch (err) {
       ctx.logger?.warn?.(
@@ -2473,6 +2589,10 @@ bridge.onChange(() => tiers.reapply())
             return undefined
           }
         },
+        // Tab-anchor reports on the routes that own no CDP websocket (ego CLI /
+        // Tabbit): the gateway calls this instead of 409ing, so @-quoting a tab
+        // works on every link kind and lands in the SAME picks bucket.
+        fallbackTabReport: makeFallbackTabReport(ctx, cfg),
       })
     } catch (err) {
       ctx.logger?.warn?.(

@@ -1,3 +1,15 @@
+## 1.9.3 (2026-11-10)
+
+**多 tab 与 @ 对象同频：面板跟真实 tab 清单/当前激活 tab 走，tab 报告进同一个桶。**
+
+- **多 tab（ego-cli 路线）**：`buildFrameScript` 改为「`browser.listTabs()` 拿全量 tab → 选浏览器激活的那个（`active===true`）→ `Target.attachToTarget` 自开 sessionId → `Runtime.evaluate` 取 url/title + `Page.captureScreenshot`（JPEG，无临时文件）」。不再用会话语义页，所以不再「永远只跟踪第 1 个 tab」，也不 `switchTab` 抢会话目标；`cdp(sessionId)` 不可用时仍回退到旧的 `page.screenshot` 路径。
+- **帧带清单**：`@@BCDP_FRAME@@` 携带 `targetId` + `tabs[]` + `fmt`；`broadcastCliFrame(frame, spaces)` 把真实 tab 行随帧推给面板，帧绑定到活动 tab 的 `targetId`；`/api/bcdp/spaces` 的 cliFrame 分支同样返回全部 tab（另带 `cliFrameTargetId`），客户端按它绑图（不再用 `__cli_frame__`）。
+- **@ 卡片元信息同频**：dock 卡新增 `targetId` 解析 + 每 3s 拉一次 `/api/bcdp/spaces`，卡片标题/URL/● 实时标记跟随真实页面；元素列表明标「点击时快照」，另加 `⟳ 重抓快照`（同名覆盖，token 不变）。
+- **ego-cli 路线 tab 报告降级（`src/cast/fallback-tab-report.ts` 新）**：heredoc 内 `page.evaluate` 跑与 Tabbit 共用的 DOM 收集器（交互标签+ARIA role，上限 400），交回 CDP 路径的 `reportScope` + `numberReportNodes` 编锚点；失败也给 URL+title 的 degraded 报告，不再 409。
+- **Tabbit tab 进同一个桶**：`/api/bcdp/spaces` 新增 Tabbit 分支（3s 库存缓存，>20s 不服务），tab 条/历史/@ 都能用；帧轮播时带真实 tab 行，活动 tab 绑图。
+- **gateway**：`tab-anchor-report` 在无 CDP ws 时走注入的 `fallbackTabReport`（ego heredoc / Tabbit Playwright 自动分流），文件名用报告里的真实 targetId。
+- **测试**：新增 `tests/fallback-tab-report.test.ts`（14 条）+ `cli-frame-poller` 多 tab 用例（17 条）；全量 1012 passed / 13 skipped。
+
 ## 1.9.2 (2026-11-10)
 
 **登录/人机验证提示按实际后端命名（CDP 端点 / ego 浏览器 / Tabbit / Lightpanda）。**

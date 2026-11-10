@@ -25,13 +25,26 @@
 /** Sentinel the frame heredoc prints; carries base64 PNG + url + title. */
 export const FRAME_SENTINEL = '@@BCDP_FRAME@@'
 
+export interface CliFrameTab {
+  targetId: string
+  url: string
+  title: string
+  active: boolean
+}
+
 export interface CliFrame {
-  /** Raw PNG bytes of the newest captured viewport. */
+  /** Raw image bytes of the newest captured viewport. */
   png: Buffer
-  /** Page URL at capture time ('' when page.info() did not report one). */
+  /** Image encoding of `png` (the name predates JPEG captures). */
+  fmt: 'png' | 'jpeg'
+  /** Page URL at capture time ('' when unavailable). */
   url: string
   /** Page title at capture time ('' when unavailable). */
   title: string
+  /** The tab the image was captured from — the browser's ACTIVE tab. */
+  targetId: string
+  /** Full tab inventory at capture time, so the panel can list every tab. */
+  tabs: CliFrameTab[]
   /** Monotonic sequence counter — the frontend cache-busts `?t=seq` with it. */
   seq: number
   /** Wall-clock of the successful capture (ms since epoch). */
@@ -78,7 +91,7 @@ export function parseFrameSentinel(stdout: string, seq: number, at: number): Cli
     if (idx === -1) continue
     const payload = line.slice(idx + FRAME_SENTINEL.length).trim()
     if (payload === '') continue
-    let parsed: { png?: unknown; url?: unknown; title?: unknown }
+    let parsed: { png?: unknown; url?: unknown; title?: unknown; targetId?: unknown; tabs?: unknown; fmt?: unknown }
     try {
       parsed = JSON.parse(payload) as typeof parsed
     } catch {
@@ -92,10 +105,28 @@ export function parseFrameSentinel(stdout: string, seq: number, at: number): Cli
       return null
     }
     if (png.length === 0) return null
+    // The inventory is what makes the panel multi-tab: without it the host would
+    // fall back to one synthetic row and the strip would show a single tab.
+    const tabs: CliFrameTab[] = Array.isArray(parsed.tabs)
+      ? (parsed.tabs as unknown[])
+          .map((row) => {
+            const rec = (row ?? {}) as { targetId?: unknown; url?: unknown; title?: unknown; active?: unknown }
+            return {
+              targetId: typeof rec.targetId === 'string' ? rec.targetId : '',
+              url: typeof rec.url === 'string' ? rec.url : '',
+              title: typeof rec.title === 'string' ? rec.title : '',
+              active: rec.active === true,
+            }
+          })
+          .filter((row) => row.targetId !== '')
+      : []
     return {
       png,
+      fmt: parsed.fmt === 'jpeg' ? 'jpeg' : 'png',
       url: typeof parsed.url === 'string' ? parsed.url : '',
       title: typeof parsed.title === 'string' ? parsed.title : '',
+      targetId: typeof parsed.targetId === 'string' ? parsed.targetId : '',
+      tabs,
       seq,
       updatedAt: at,
     }
@@ -168,21 +199,67 @@ export class CliFramePoller {
 }
 
 /**
- * The capture heredoc. Uses the runtime's own facades (taskSpaces + page) so it
- * rides the exact channel real tools use; deliberately does NOT call
- * ensureRealTab / switchTab — a passive observer must not move the active tab.
- * `page.screenshot()` in this runtime returns a saved PNG path, so we read the
- * file back into base64 and clean it up.
+ * The capture heredoc.
+ *
+ * Two fixes over the old `page.screenshot()` script:
+ *  1. It captures the browser's ACTIVE tab, not the ego SESSION's preferred
+ *     target. `bcdp_tab op=new` makes the new tab active in Chrome while the
+ *     session target can stay on the previous page — which is why the panel
+ *     used to track tab #1 forever while the inventory said #2 was active.
+ *     Capturing by an explicit `Target.attachToTarget` session also avoids
+ *     switching tabs (a passive observer must not steal the agent's target).
+ *  2. It returns the FULL tab inventory, so the panel lists every tab instead
+ *     of one synthetic row.
+ *
+ * The old facade path stays as a fallback: a runtime whose `cdp()` rejects a
+ * sessionId still yields a frame (bound to the session page), just without
+ * per-tab targeting. The image is taken as JPEG over CDP (one round-trip, no
+ * temp file); the fallback keeps `page.screenshot()`'s PNG file.
  */
 export function buildFrameScript(spaceJson: string): string {
   return (
-    `const task = await taskSpaces.useOrCreate(${spaceJson})\n` +
-    `let __info = {}\n` +
-    `try { __info = await page.info() } catch { __info = {} }\n` +
-    `const __p = await page.screenshot({ fullPage: false })\n` +
-    `const __fs = await import('node:fs/promises')\n` +
-    `const __png = (await __fs.readFile(__p)).toString('base64')\n` +
-    `try { await __fs.unlink(__p) } catch {}\n` +
-    `console.log(${JSON.stringify(FRAME_SENTINEL)} + JSON.stringify({ png: __png, url: __info.url || '', title: __info.title || '' }))\n`
+    `const __task = await taskSpaces.useOrCreate(${spaceJson})\n` +
+    `let __tabs = []\n` +
+    `try { __tabs = await browser.listTabs() } catch { __tabs = [] }\n` +
+    `const __blank = (u) => /^(about:|chrome:|chrome-extension:|edge:|devtools:|data:)/.test(String(u || ''))\n` +
+    `const __active = __tabs.find((t) => t.active === true) || __tabs.find((t) => !__blank(t.url)) || __tabs[0] || null\n` +
+    `let __png = ''\n` +
+    `let __fmt = 'jpeg'\n` +
+    `let __url = ''\n` +
+    `let __title = ''\n` +
+    `let __targetId = ''\n` +
+    `if (__active && __active.targetId) {\n` +
+    `  try {\n` +
+    `    const __att = await cdp('Target.attachToTarget', { targetId: __active.targetId, flatten: true })\n` +
+    `    const __sid = __att && __att.sessionId\n` +
+    `    if (!__sid) throw new Error('no sessionId')\n` +
+    `    try {\n` +
+    `      const __meta = await cdp('Runtime.evaluate', { expression: '({url: location.href, title: document.title})', returnByValue: true }, __sid)\n` +
+    `      const __v = (__meta && __meta.result && __meta.result.value) || {}\n` +
+    `      __url = __v.url || __active.url || ''\n` +
+    `      __title = __v.title || __active.title || ''\n` +
+    `    } catch { __url = __active.url || ''; __title = __active.title || '' }\n` +
+    `    const __shot = await cdp('Page.captureScreenshot', { format: 'jpeg', quality: 70, fromSurface: true }, __sid)\n` +
+    `    __png = (__shot && __shot.data) || ''\n` +
+    `    __targetId = __active.targetId\n` +
+    `    try { await cdp('Target.detachFromTarget', { sessionId: __sid }) } catch {}\n` +
+    `  } catch { __png = '' }\n` +
+    `}\n` +
+    `if (__png === '') {\n` +
+    `  let __info = {}\n` +
+    `  try { __info = await page.info() } catch { __info = {} }\n` +
+    `  const __p = await page.screenshot({ fullPage: false })\n` +
+    `  const __fs = await import('node:fs/promises')\n` +
+    `  __png = (await __fs.readFile(__p)).toString('base64')\n` +
+    `  try { await __fs.unlink(__p) } catch {}\n` +
+    `  __fmt = 'png'\n` +
+    `  __url = __url || __info.url || ''\n` +
+    `  __title = __title || __info.title || ''\n` +
+    `  if (__targetId === '') {\n` +
+    `    const __match = __tabs.find((t) => (__info.url || '') !== '' && t.url === __info.url)\n` +
+    `    __targetId = (__match && __match.targetId) || ''\n` +
+    `  }\n` +
+    `}\n` +
+    `console.log(${JSON.stringify(FRAME_SENTINEL)} + JSON.stringify({ png: __png, fmt: __fmt, url: __url, title: __title, targetId: __targetId, tabs: __tabs.map((t) => ({ targetId: t.targetId, url: t.url || '', title: t.title || '', active: t.active === true })) }))\n`
   )
 }

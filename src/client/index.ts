@@ -209,6 +209,10 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 			pickCardTitle: 'Browser picks',
 			pickCardElements: '{n} element(s) picked',
 			pickCardRemove: 'Remove these picks',
+			pickCardSnapshotTag: '(capture-time snapshot)',
+			pickCardRecapture: 'Recapture',
+			pickCardRecaptureHint: 'Re-read this tab and overwrite the quoted report (same @ token)',
+			pickCardLive: 'live',
 			pageRefresh: 'Reload page',
 			pageRefreshHint: 'Reload the agent page itself (Page.reload)',
 			openUrl: 'Open URL',
@@ -331,6 +335,10 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 			pickCardTitle: '浏览器点选内容',
 			pickCardElements: '已选 {n} 个元素',
 			pickCardRemove: '移除这段点选',
+			pickCardSnapshotTag: '（点击时快照）',
+			pickCardRecapture: '重抓快照',
+			pickCardRecaptureHint: '重新读取这个 tab 并覆盖引用的报告（@ token 不变）',
+			pickCardLive: '实时',
 			pageRefresh: '刷新页面',
 			pageRefreshHint: '重新加载 agent 当前页面（Page.reload）',
 			openUrl: '打开网址',
@@ -2334,8 +2342,11 @@ h('button', { type: 'button', disabled: !writable || isFull(links) || hasCliLink
 							if (data.cliFrameMode === true && Array.isArray(data.spaces)) {
 								// Seed an instant image from the route; ongoing updates arrive
 								// via the host's SSE `frame`/`spaces` push (no client poll needed).
-								const cli = data.spaces.find((s: any) => s && s.targetId === CLI_FRAME_TARGET_ID)
-								if (cli) frameCache.set(CLI_FRAME_TARGET_ID, `${CLI_FRAME_ROUTE}?t=${cli.lastActive || Date.now()}`)
+								// The route serves the newest capture, which belongs to the tab the
+								// capture reported (`cliFrameTargetId`) — bind it to that row so a
+								// multi-tab strip shows the picture under the right tab.
+								const cliActive = data.spaces.find((s: any) => s && (s.targetId === data.cliFrameTargetId || s.active === true)) || data.spaces[0]
+								if (cliActive) frameCache.set(cliActive.targetId || CLI_FRAME_TARGET_ID, `${CLI_FRAME_ROUTE}?t=${cliActive.lastActive || Date.now()}`)
 								renderSpaces(data.spaces)
 								return
 							}
@@ -3116,6 +3127,29 @@ clearTimeout((panel as any)._dshHideT)
 			var errState = React.useState({})
 			var errs = errState[0], setErrs = errState[1]
 			var filesKey = refs.map(function (r: any) { return r.file }).join('|')
+			var reloadState = React.useState(0)
+			var reloadKey = reloadState[0]
+			var setReloadKey = reloadState[1]
+			// Live tab metadata for the quoted targets. The @ bucket and the panel
+			// read the SAME /api/bcdp/spaces list, so a quoted tab's title/url track
+			// the real page at ~3s (the element list below stays the capture-time
+			// snapshot it was when the user clicked @).
+			var liveState = React.useState({})
+			var liveMeta = liveState[0]
+			var setLiveMeta = liveState[1]
+			React.useEffect(function () {
+				var cancelled = false
+				fetch(SPACES_ROUTE, { cache: 'no-store' }).then(function (res) { return res.json().catch(function (): any { return null }) }).then(function (data: any) {
+					if (cancelled || !data || !Array.isArray(data.spaces)) return
+					var map: any = {}
+					for (var i = 0; i < data.spaces.length; i++) {
+						var s = data.spaces[i]
+						if (s && s.targetId != null) map[String(s.targetId)] = { url: s.url || '', title: s.title || '', active: s.active === true }
+					}
+					setLiveMeta(map)
+				}).catch(function () {})
+				return function () { cancelled = true }
+			}, [Math.floor(tick[0] / 3)])
 			// 归档文件可能被同页合并改写（deliver 原文件重写），快照里看不出——
 			// 每 5s 重读一次引用的归档（本地文件读，开销可忽略），token→归档名
 			// 去掉 picks/ 前缀（网关文件名校验只收 basename）。失败显码不吞：
@@ -3141,7 +3175,7 @@ clearTimeout((panel as any)._dshHideT)
 					})
 				})
 				return function () { cancelled = true }
-			}, [filesKey, Math.floor(tick[0] / 5)])
+			}, [filesKey, reloadKey, Math.floor(tick[0] / 5)])
 			if (refs.length === 0) return null
 			function removeRef(line: any) {
 				var cur = readDraftText(input)
@@ -3151,6 +3185,18 @@ clearTimeout((panel as any)._dshHideT)
 				next = next.replace(/^\s*\n+/, '').replace(/\n+\s*$/, '')
 				input.setDraft(next)
 			}
+			function recapture(r: any, targetId: string, live: any) {
+				if (targetId === '') return
+				postJson('/bcdp/api/tab-anchor-report', {
+					targetId: targetId,
+					session: sid,
+					file: r.file.slice('picks/'.length),
+					...(live && live.url ? { url: live.url } : {}),
+					...(live && live.title ? { title: live.title } : {}),
+				}).then(function (res: any) {
+					if (res && res.ok !== false) setReloadKey(function (n: number) { return n + 1 })
+				}).catch(function () {})
+			}
 			return h('div', { style: { display: 'grid', gap: '6px' } }, refs.map(function (r: any) {
 				var content = contents[r.file]
 				var elements: any[] = []
@@ -3159,6 +3205,8 @@ clearTimeout((panel as any)._dshHideT)
 				var isTabReport = false
 				var truncated = false
 				var degraded = ''
+				var targetId = ''
+				var reportSource = ''
 				if (typeof content === 'string' && content !== '') {
 					try {
 						var obj = JSON.parse(content)
@@ -3168,19 +3216,26 @@ clearTimeout((panel as any)._dshHideT)
 						isTabReport = !!(obj && obj.type === 'tab-anchor-report')
 						truncated = !!(obj && obj.truncated)
 						degraded = (obj && obj.degraded) || ''
+						targetId = (obj && obj.targetId) ? String(obj.targetId) : ''
+						reportSource = (obj && obj.source) ? String(obj.source) : ''
 					} catch (e) { pageTitle = '' }
 				}
+				var live = targetId !== '' ? (liveMeta as any)[targetId] : null
+				var liveTitle = (live && live.title) || ''
+				var liveUrl = (live && live.url) || ''
 				// 计数三态：空内容不给 0——要么加载中（…），要么亮错误码（⚠ no-workspace
 				// / not-found / load-failed），用户看得见故障不再瞎猜。
 				var countText: any
 				if (typeof content !== 'string' || content === '') countText = errs[r.file] ? '⚠ ' + errs[r.file] : '…'
 				else if (degraded) countText = wt('pickCardElements', { n: 0 }) + ' · ⚠ ' + degraded
-				else countText = wt('pickCardElements', { n: elements.length }) + (truncated ? '+' : '')
+				else countText = wt('pickCardElements', { n: elements.length }) + (truncated ? '+' : '') + (isTabReport ? ' ' + wt('pickCardSnapshotTag') : '')
 				var head = h('div', { className: 'dsh-cdp-picks-head' },
-					h('span', { style: { fontWeight: 700 } }, isTabReport ? '🌐 ' + (pageTitle || wt('pickCardTitle')) : '🌐 ' + wt('pickCardTitle')),
+					h('span', { style: { fontWeight: 700 } }, isTabReport ? '🌐 ' + (liveTitle || pageTitle || wt('pickCardTitle')) : '🌐 ' + wt('pickCardTitle')),
 					h('span', { className: 'dsh-cdp-picks-sub' }, '@' + r.file),
-					isTabReport && pageUrl ? h('span', { className: 'dsh-cdp-picks-sub' }, pageUrl) : h('span', { className: 'dsh-cdp-picks-sub' }, pageTitle),
+					h('span', { className: 'dsh-cdp-picks-sub' }, liveUrl || pageUrl || pageTitle),
+					isTabReport && live ? h('span', { className: 'dsh-cdp-picks-sub', title: reportSource || 'live' }, '● ' + wt('pickCardLive')) : null,
 					h('span', { className: 'dsh-cdp-picks-sub' }, countText),
+					isTabReport && targetId !== '' ? h('button', { type: 'button', title: wt('pickCardRecaptureHint'), className: 'dsh-cdp-picks-close', onClick: function () { recapture(r, targetId, live) } }, '⟳') : null,
 					h('button', { type: 'button', title: wt('pickCardRemove'), className: 'dsh-cdp-picks-close', onClick: function () { removeRef(r.line) } }, '✕'))
 				var chips: any = []
 				if (typeof content !== 'string') chips.push(h('div', { key: 'loading', className: 'dsh-cdp-picks-sub' }, '…'))
@@ -3907,8 +3962,8 @@ clearTimeout((panel as any)._dshHideT)
 					// seed frameCache with the cli-frame route URL (same trick as the FAB
 					// controller) so the existing cached-branch renders a refreshing <img>.
 					if (data.cliFrameMode === true && Array.isArray(data.spaces)) {
-						var cli = data.spaces.find(function (s: any) { return s && s.targetId === CLI_FRAME_TARGET_ID })
-						if (cli) self.frameCache.set(CLI_FRAME_TARGET_ID, CLI_FRAME_ROUTE + '?t=' + (cli.lastActive || Date.now()))
+						var cliActive = data.spaces.find(function (s: any) { return s && (s.targetId === data.cliFrameTargetId || s.active === true) }) || data.spaces[0]
+						if (cliActive) self.frameCache.set(cliActive.targetId || CLI_FRAME_TARGET_ID, CLI_FRAME_ROUTE + '?t=' + (cliActive.lastActive || Date.now()))
 						self._processSpaces(data.spaces)
 						return
 					}

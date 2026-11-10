@@ -49,6 +49,36 @@ describe("parseFrameSentinel", () => {
     const f = parseFrameSentinel(`${FRAME_SENTINEL}${JSON.stringify({ png: PNG_B64 })}`, 3, 0)
     expect(f!.url).toBe("")
     expect(f!.title).toBe("")
+    expect(f!.targetId).toBe("")
+    expect(f!.tabs).toEqual([])
+    expect(f!.fmt).toBe("png")
+  })
+
+  it("decodes the tab inventory + active target of a multi-tab capture", () => {
+    const payload = JSON.stringify({
+      png: PNG_B64,
+      fmt: "jpeg",
+      url: "https://www.baidu.com/",
+      title: "百度一下",
+      targetId: "T2",
+      tabs: [
+        { targetId: "T0", url: "chrome://newtab/", title: "新标签页", active: false },
+        { targetId: "T1", url: "https://www.sina.com.cn/", title: "新浪网", active: false },
+        { targetId: "T2", url: "https://www.baidu.com/", title: "百度一下", active: true },
+      ],
+    })
+    const f = parseFrameSentinel(`${FRAME_SENTINEL}${payload}`, 4, 0)!
+    expect(f.fmt).toBe("jpeg")
+    expect(f.targetId).toBe("T2")
+    expect(f.tabs).toHaveLength(3)
+    expect(f.tabs[2]).toEqual({ targetId: "T2", url: "https://www.baidu.com/", title: "百度一下", active: true })
+  })
+
+  it("drops inventory rows without a targetId and coerces a bad fmt", () => {
+    const payload = JSON.stringify({ png: PNG_B64, fmt: "gif", targetId: "T1", tabs: [{ url: "u" }, { targetId: "T1", url: "u", title: "t", active: true }] })
+    const f = parseFrameSentinel(`${FRAME_SENTINEL}${payload}`, 1, 0)!
+    expect(f.fmt).toBe("png")
+    expect(f.tabs).toEqual([{ targetId: "T1", url: "u", title: "t", active: true }])
   })
 })
 
@@ -61,6 +91,27 @@ describe("buildFrameScript", () => {
     // must not mutate the active tab
     expect(s).not.toContain("switchTab")
     expect(s).not.toContain("ensureRealTab")
+  })
+
+  it("captures the browser-active tab through its own CDP session", () => {
+    const s = buildFrameScript('"space"')
+    expect(s).toContain("browser.listTabs()")
+    expect(s).toContain("t.active === true")
+    expect(s).toContain("cdp('Target.attachToTarget'")
+    expect(s).toContain("cdp('Page.captureScreenshot'")
+    expect(s).toContain("targetId: __active.targetId")
+  })
+
+  it("reports the whole tab inventory so the panel can render every tab", () => {
+    const s = buildFrameScript('"space"')
+    expect(s).toContain("tabs: __tabs.map")
+    expect(s).toContain("active: t.active === true")
+  })
+
+  it("falls back to the facade capture when the sessionId path fails", () => {
+    const s = buildFrameScript('"space"')
+    expect(s).toContain("if (__png === '')")
+    expect(s).toContain("__fmt = 'png'")
   })
 })
 

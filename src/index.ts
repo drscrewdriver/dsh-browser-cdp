@@ -1160,6 +1160,8 @@ interface EgoRuntimeConfig {
   readonly cdpQuality: number
   readonly cdpMaxWidth: number
   readonly cdpBackstopIntervalMs: number
+  /** Watch-panel tab tracking: 'active' (default) or 'all' (全模式). */
+  readonly tabTracking: 'active' | 'all'
   readonly viewportWidth: number
   readonly viewportHeight: number
   readonly deviceScaleFactor: number
@@ -1554,7 +1556,9 @@ async function spawnCliFrameCapture(
   const { attach } = effectiveChannel(cfg)
   // 全模式: capture every tab in the space (one heredoc, one image per tab) so
   // the panel can show a live picture per tab. 仅激活: one image, as before.
-  const script = buildFrameScript(j(space), { all: getCliTrackAll() })
+  // The persisted setting is the default; a panel toggle overrides it for this
+  // host session (see getCliTrackAll).
+  const script = buildFrameScript(j(space), { all: getCliTrackAll(cfg.tabTracking === 'all') })
   try {
     const handle = subprocess.spawn({
       argv: buildEgoToolArgv(cfg.egoArgvPrefix, attach, cfg.runtimeArgs ?? ''),
@@ -2073,6 +2077,7 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
     get cdpQuality() { return resolveConfig(bridge.source() as RawConfig).cdpQuality },
     get cdpMaxWidth() { return resolveConfig(bridge.source() as RawConfig).cdpMaxWidth },
     get cdpBackstopIntervalMs() { return resolveConfig(bridge.source() as RawConfig).cdpBackstopIntervalMs },
+    get tabTracking() { return resolveConfig(bridge.source() as RawConfig).tabTracking },
         get viewportWidth() { return resolveConfig(bridge.source() as RawConfig).viewportWidth },
         get viewportHeight() { return resolveConfig(bridge.source() as RawConfig).viewportHeight },
         get deviceScaleFactor() { return resolveConfig(bridge.source() as RawConfig).deviceScaleFactor },

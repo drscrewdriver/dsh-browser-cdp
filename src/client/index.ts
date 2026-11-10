@@ -1078,6 +1078,7 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 				{ k: 'runtimeArgs', kind: 'str', en: ['Extra runtime args', 'Appended to the vendored runtime argv; next bcdp_* call'], zh: ['运行时附加参数', '追加到托管运行时 argv；下次 bcdp_* 调用生效'] },
 				{ k: 'chromeArgs', kind: 'str', en: ['Extra Chrome args', 'Appended to the Chrome launch argv; next cold start'], zh: ['Chrome 附加启动参数', '追加到 Chrome 启动 argv；下次冷启动生效'] },
 				{ k: 'cliFramePollEnabled', kind: 'bool', en: ['ego-cli fallback frames (5s)', 'With no CDP screencast (local ego-cli link active), capture one screenshot every 5s through the CLI so the watch panel still fills. Off = panel shows a placeholder and no screenshot subprocess is spawned'], zh: ['ego-cli 降级帧（5s 一刷）', '无 CDP screencast（本机 ego-cli 激活）时，每 5s 走一次 CLI 截图填充观察窗画面区。关 = 面板显示占位提示、不拉截图子进程'] },
+				{ k: 'tabTracking', kind: 'sel', options: ['active', 'all'], en: ['Tab tracking (CLI routes)', 'active = capture only the browser-active tab; all = capture every tab in the space (one picture each), the active one outlined green'], zh: ['tab 跟踪模式（CLI 路线）', '仅激活 = 只抓浏览器激活的那个 tab；全模式 = space 内每个 tab 各出一张图，激活那个用绿框标出'] },
 			] },
 			{ gk: 'gJudge', en: 'Judgement (JEV / Laya)', zh: '评审（JEV / Laya）', fields: [
 				{ k: 'judgePrefer', kind: 'str', en: ['Judge hop order', 'Comma separated; defaults to "laya,rule"'], zh: ['评审跳序', '逗号分隔；默认 "laya,rule"'] },

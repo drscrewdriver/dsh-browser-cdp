@@ -1,3 +1,12 @@
+## 1.9.5 (2026-11-10)
+
+**「tab 跟踪模式」接进设置卡（截图与推流组），与面板快捷开关双轨。**
+
+- **Config 字段**：`tabTracking: 'active' | 'all'`（`z.union` + `.volatile()`），`resolveConfig` 默认 `active`；`ResolvedConfig` / `EgoRuntimeConfig` 同步，`cfg.tabTracking` 是实时 getter（改设置即生效，不用重启）。
+- **设置卡选项**：放在「截图与推流」组内（`ego-cli 降级帧` 之后），下拉 `仅激活 / 全模式`，带中英文说明。
+- **优先级**：保存的设置是默认值；面板上的「全模式/仅激活」按钮是本次会话的 override（`/api/bcdp/tracking` POST），一旦在设置卡保存任何字段，override 自动清除、回到设置值（两边不会对不上）。
+- **测试**：`config.test.ts` canonical defaults 补 `tabTracking: 'active'`；全量 1021 passed / 13 skipped。
+
 ## 1.9.4 (2026-11-10)
 
 **全模式（space 内所有 tab 都抓）+ 点 tab 真切换 + 激活 tab 绿框。**

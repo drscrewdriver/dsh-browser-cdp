@@ -5,7 +5,7 @@ describe("dual capture config", () => {
   it("returns canonical defaults", () => {
     expect(resolveConfig({})).toEqual({
       chromePath: "", captureBackend: "auto", streamProfile: "balanced",
-      cdpFps: 20, cdpQuality: 55, cdpMaxWidth: 960, cdpBackstopIntervalMs: 3000,
+      cdpFps: 20, cdpQuality: 55, cdpMaxWidth: 960, cdpBackstopIntervalMs: 3000, tabTracking: "active",
       viewportWidth: 0, viewportHeight: 0, deviceScaleFactor: 0,
       ffmpegFps: 20, ffmpegMaxWidth: 1280, ffmpegBitrateKbps: 4000, ffmpegEncoder: "auto", ffmpegPath: "", githubMirror: "",
       runtimeArgs: "", chromeArgs: "", isolateSpaces: false, idleTimeoutMin: 0, defaultSpace: ":auto",
@@ -31,7 +31,7 @@ describe("dual capture config", () => {
   it("migrates legacy CDP fields and lets canonical fields win", () => {
     expect(resolveConfig({ castFpsCap: 60, screencastQuality: 70, screencastMaxWidth: 1200, backstopIntervalMs: 5000 })).toEqual({
       chromePath: "", captureBackend: "auto", streamProfile: "balanced",
-      cdpFps: 30, cdpQuality: 70, cdpMaxWidth: 1200, cdpBackstopIntervalMs: 5000,
+      cdpFps: 30, cdpQuality: 70, cdpMaxWidth: 1200, cdpBackstopIntervalMs: 5000, tabTracking: "active",
       viewportWidth: 0, viewportHeight: 0, deviceScaleFactor: 0,
       ffmpegFps: 20, ffmpegMaxWidth: 1280, ffmpegBitrateKbps: 4000, ffmpegEncoder: "auto", ffmpegPath: "", githubMirror: "",
       runtimeArgs: "", chromeArgs: "", isolateSpaces: false, idleTimeoutMin: 0, defaultSpace: ":auto",

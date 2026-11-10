@@ -286,12 +286,20 @@ function writeCliImages(images: CliFrameImage[], at: number, includeSpaces = tru
   }
 }
 
-/** 全模式 (track every tab in the space) — host-side switch for the CLI poller. */
-let cliTrackAll = false
+/** 全模式 session override: null = follow the persisted `tabTracking` setting. */
+let cliTrackOverride: boolean | null = null
+/** @internal effective tracking mode (panel toggle first, then the setting). */
+export function getCliTrackAll(fallback: boolean): boolean {
+  return cliTrackOverride === null ? fallback === true : cliTrackOverride
+}
 /** @internal */
-export function getCliTrackAll(): boolean { return cliTrackAll }
-/** @internal */
-export function setCliTrackAll(next: boolean): void { cliTrackAll = next === true }
+export function setCliTrackAll(next: boolean | null): void {
+  cliTrackOverride = typeof next === 'boolean' ? next : null
+}
+/** @internal drop the session override so the saved setting wins again. */
+export function clearCliTrackOverride(): void {
+  cliTrackOverride = null
+}
 
 function castStatePath(): string {
   // Mirror the ego-lite runtime state dir across platforms so we find the
@@ -795,6 +803,9 @@ export function initCastServer(
   // screencastMaxWidth in the settings card.
   if (typeof bridge?.onChange === 'function') {
     const off = bridge.onChange(() => {
+      // A saved setting wins over the panel's session override, so the card and
+      // the panel can never disagree after a save.
+      clearCliTrackOverride()
       pushConfig(cfg)
     })
     if (typeof off === 'function') {
@@ -1066,7 +1077,9 @@ export function initCastServer(
         const body = await readJsonBody(req).catch(() => ({}) as Record<string, unknown>)
         if (typeof body.all === 'boolean') setCliTrackAll(body.all)
       }
-      return sendJson(res, 200, { ok: true, all: getCliTrackAll() })
+      // The persisted setting is the source of truth; the panel toggle is a
+      // session override on top of it (a settings save clears it).
+      return sendJson(res, 200, { ok: true, all: getCliTrackAll(cfg.tabTracking === 'all'), setting: cfg.tabTracking })
     },
   })
 

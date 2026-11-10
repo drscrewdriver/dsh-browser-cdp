@@ -22,6 +22,9 @@ const backend = z.union(['auto', 'cdp', 'ffmpeg'])
 const profile = z.union(['low', 'balanced', 'high'])
 const cdpMode = z.union(['auto', 'local', 'remote'])
 const toolInjection = z.union(['lazy', 'always'])
+// 仅激活 = capture/render only the browser-active tab; 全模式 = every tab in the
+// space (one image each, active one outlined). CLI routes only.
+const tabTracking = z.union(['active', 'all'])
 
 // A/C — the single named default space. Aligning the code constant with the
 // docs ("ALWAYS use the single 'default' space") closes the old `default` (docs)
@@ -64,6 +67,10 @@ export const Config = z.object({
   cdpQuality: z.number().min(1).max(100).step(1).description('CDP JPEG quality.').volatile(),
   cdpMaxWidth: z.number().min(320).max(1920).step(40).description('CDP frame max width.').volatile(),
   cdpBackstopIntervalMs: z.number().min(1000).max(10000).step(100).description('CDP recovery screenshot interval.').volatile(),
+  // 观察窗跟踪模式（仅 ego-cli / Tabbit 这类 3s 轮询路线生效；CDP screencast 本身
+  // 就按激活 target 推帧）。`active` = 只抓激活 tab；`all` = space 内每个 tab 各
+  // 一张图（上限 6），面板用绿框标出激活那个。
+  tabTracking: tabTracking.description('Watch-panel tab tracking: active = capture only the browser-active tab; all = capture every tab in the space (each gets its own picture, the active one is outlined green). CLI/Tabbit routes only.').volatile(),
   // Fixed CSS viewport (issue: HiDPI hosts shrink the CSS viewport, so sites
   // serve their collapsed mobile layout). Applied via CDP emulation on every
   // call because a one-shot heredoc process cannot keep the override alive.
@@ -425,6 +432,7 @@ export function resolveConfig(config: RawConfig = {}): ResolvedConfig {
     cdpQuality: finiteIn(config.cdpQuality, 1, 100) ? config.cdpQuality : (finiteIn(config.screencastQuality, 1, 100) ? config.screencastQuality : 55),
     cdpMaxWidth: finiteIn(config.cdpMaxWidth, 320, 1920) ? config.cdpMaxWidth : (finiteIn(config.screencastMaxWidth, 320, 1920) ? config.screencastMaxWidth : 960),
     cdpBackstopIntervalMs: finiteIn(config.cdpBackstopIntervalMs, 1000, 10000) ? config.cdpBackstopIntervalMs : (finiteIn(config.backstopIntervalMs, 200, 10000) ? Math.max(1000, config.backstopIntervalMs) : 3000),
+    tabTracking: config.tabTracking === 'all' ? 'all' : 'active',
     // 0 = leave the browser's own viewport untouched (previous behavior). Both
     // dimensions must be non-zero before the emulation prelude is emitted.
     viewportWidth: finiteIn(config.viewportWidth, 0, 3840) ? config.viewportWidth : 0,

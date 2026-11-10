@@ -6,6 +6,7 @@ describe("dual capture config", () => {
     expect(resolveConfig({})).toEqual({
       chromePath: "", captureBackend: "auto", streamProfile: "balanced",
       cdpFps: 20, cdpQuality: 55, cdpMaxWidth: 960, cdpBackstopIntervalMs: 3000,
+      viewportWidth: 0, viewportHeight: 0, deviceScaleFactor: 0,
       ffmpegFps: 20, ffmpegMaxWidth: 1280, ffmpegBitrateKbps: 4000, ffmpegEncoder: "auto", ffmpegPath: "", githubMirror: "",
       runtimeArgs: "", chromeArgs: "", isolateSpaces: false, idleTimeoutMin: 0, defaultSpace: ":auto",
       links: [], activeTargetId: "", cdpMode: "auto", cdpProbeTimeoutMs: 3000,
@@ -31,6 +32,7 @@ describe("dual capture config", () => {
     expect(resolveConfig({ castFpsCap: 60, screencastQuality: 70, screencastMaxWidth: 1200, backstopIntervalMs: 5000 })).toEqual({
       chromePath: "", captureBackend: "auto", streamProfile: "balanced",
       cdpFps: 30, cdpQuality: 70, cdpMaxWidth: 1200, cdpBackstopIntervalMs: 5000,
+      viewportWidth: 0, viewportHeight: 0, deviceScaleFactor: 0,
       ffmpegFps: 20, ffmpegMaxWidth: 1280, ffmpegBitrateKbps: 4000, ffmpegEncoder: "auto", ffmpegPath: "", githubMirror: "",
       runtimeArgs: "", chromeArgs: "", isolateSpaces: false, idleTimeoutMin: 0, defaultSpace: ":auto",
       links: [], activeTargetId: "", cdpMode: "auto", cdpProbeTimeoutMs: 3000,

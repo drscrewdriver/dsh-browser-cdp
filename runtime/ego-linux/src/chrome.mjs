@@ -68,6 +68,14 @@ const LAUNCH_FLAGS = [
   // without first going through useSpace+ensureRealTab; the structured tools
   // all do, so it no longer applies.
   "--no-startup-window",
+  // macOS Chrome 156 has been observed keeping the cookie jar in memory while
+  // leaving Default/Cookies empty (#93). `--use-mock-keychain` lets Chrome use
+  // its test keychain instead of the login keychain; opt-in only, because it
+  // weakens at-rest protection. The plugin's `chromeArgs` setting can pass this
+  // too; the env var keeps the diagnostic reproducible without editing config.
+  ...(process.platform === "darwin" && process.env.EGO_LINUX_USE_MOCK_KEYCHAIN === "1"
+    ? ["--use-mock-keychain"]
+    : []),
 ];
 
 // ── user-defined extra Chrome args (mirrors lib/config.js) ──────────────────
@@ -158,6 +166,45 @@ async function exists(path) {
   }
 }
 
+/**
+ * Platform installation paths that PATH lookup cannot find (#95).
+ *
+ * macOS browsers live inside `.app` bundles; Windows installs under Program
+ * Files/LocalAppData. These paths are only checked after `which`/`where`
+ * misses, so a PATH-provided binary still wins.
+ */
+function installPathCandidates() {
+  const out = [];
+  const home = process.env.HOME || process.env.USERPROFILE || "";
+  if (process.platform === "darwin") {
+    const bundles = [
+      ["Google Chrome", "Google Chrome"],
+      ["Chromium", "Chromium"],
+      ["Microsoft Edge", "Microsoft Edge"],
+      ["Brave Browser", "Brave Browser"],
+      ["Tungsten Edge", "Tungsten Edge"],
+    ];
+    for (const base of ["/Applications", ...(home ? [join(home, "Applications")] : [])]) {
+      for (const [bundle, binary] of bundles) {
+        out.push(join(base, `${bundle}.app`, "Contents", "MacOS", binary));
+      }
+    }
+  } else if (process.platform === "win32") {
+    const roots = [
+      process.env.PROGRAMFILES,
+      process.env["PROGRAMFILES(X86)"],
+      process.env.LOCALAPPDATA,
+    ].filter(Boolean);
+    const relatives = [
+      ["Google", "Chrome", "Application", "chrome.exe"],
+      ["Microsoft", "Edge", "Application", "msedge.exe"],
+      ["BraveSoftware", "Brave-Browser", "Application", "brave.exe"],
+    ];
+    for (const root of roots) for (const rel of relatives) out.push(join(root, ...rel));
+  }
+  return out;
+}
+
 async function resolveBinary() {
   for (const candidate of BINARY_CANDIDATES) {
     if (isAbsolute(candidate)) {
@@ -166,6 +213,12 @@ async function resolveBinary() {
     }
     const found = await which(candidate);
     if (found) return found;
+  }
+  // PATH lookup missed everywhere (macOS Chrome is never on PATH; Windows
+  // installs may not be either). Fall back to well-known install locations
+  // before giving up (#95).
+  for (const candidate of installPathCandidates()) {
+    if (await exists(candidate)) return candidate;
   }
   throw new Error(
     `no Chrome/Chromium binary found (tried: ${BINARY_CANDIDATES.join(", ")}). ` +
@@ -577,12 +630,19 @@ async function spawnXvfb(num) {
  *   displays are ours to terminate.
  */
 export async function ensureXDisplay({ ignoreEnvDisplay = false } = {}) {
-  // Windows has a desktop session and no X server: Chrome opens a real window
-  // directly (the v0.4.0 Windows adaptation). Returning a pseudo display keeps
-  // the headed path alive without ever touching Xvfb (issue: post-merge cold
-  // start failed with "no X display ... no Xvfb binary on PATH").
-  if (process.platform === "win32") {
-    return { display: process.env.DISPLAY || "win32-desktop", pid: null, launched: false };
+  // Windows and macOS have a desktop session and no X server: Chrome opens a
+  // real window directly (the v0.4.0 Windows adaptation, and the same shape on
+  // macOS). Returning a pseudo display keeps the headed path alive without ever
+  // touching Xvfb (issue: post-merge cold start failed with "no X display ...
+  // no Xvfb binary on PATH").
+  //
+  // macOS is the same shape as Windows here: the GUI is Aqua/Quartz, $DISPLAY is
+  // never exported, Xvfb does not exist in that ecosystem, and Chrome draws
+  // through Cocoa/WindowServer rather than X11 (#65). The pseudo value is
+  // harmless — DISPLAY is only handed to the child inside spawnAndAwait(), and
+  // Chrome never reads it on darwin.
+  if (process.platform === "win32" || process.platform === "darwin") {
+    return { display: process.env.DISPLAY || `${process.platform}-desktop`, pid: null, launched: false };
   }
   if (!ignoreEnvDisplay && (await displayUsable(process.env.DISPLAY))) {
     return { display: process.env.DISPLAY, pid: null, launched: false };

@@ -3,6 +3,7 @@ import { join } from "node:path";
 
 const HOME = homedir();
 const IS_WIN = process.platform === "win32";
+const IS_MAC = process.platform === "darwin";
 
 /** Persistent browser profile — the Linux stand-in for the ego lite app's profile. */
 export const DATA_DIR = IS_WIN
@@ -27,9 +28,16 @@ export const CHROME_CONFIG_CANDIDATES = IS_WIN
       join(process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)", "Google", "Chrome", "User Data"),
       join(process.env.LOCALAPPDATA || join(HOME, "AppData", "Local"), "Microsoft", "Edge", "User Data"),
     ]
-  : [
-      join(HOME, ".config", "google-chrome"),
-      join(HOME, ".config", "chromium"),
-      join(HOME, ".config", "microsoft-edge"),
-      join(HOME, ".config", "BraveSoftware", "Brave-Browser"),
-    ];
+  : IS_MAC
+    ? [
+        join(HOME, "Library", "Application Support", "Google", "Chrome"),
+        join(HOME, "Library", "Application Support", "Chromium"),
+        join(HOME, "Library", "Application Support", "Microsoft Edge"),
+        join(HOME, "Library", "Application Support", "BraveSoftware", "Brave-Browser"),
+      ]
+    : [
+        join(HOME, ".config", "google-chrome"),
+        join(HOME, ".config", "chromium"),
+        join(HOME, ".config", "microsoft-edge"),
+        join(HOME, ".config", "BraveSoftware", "Brave-Browser"),
+      ];

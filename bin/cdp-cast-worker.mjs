@@ -7015,8 +7015,19 @@ async function main() {
 					ok: false,
 					error: "no live browser"
 				});
-				await active.cdp.call("Storage.flushCookies").catch(() => {});
-				return sendJson(res, 200, { ok: true });
+				let total = 0;
+				try {
+					const jar = await active.cdp.call("Storage.getCookies");
+					total = Array.isArray(jar?.cookies) ? jar.cookies.length : 0;
+				} catch {
+					total = 0;
+				}
+				const flushed = await active.cdp.call("Storage.flushCookies").then(() => total).catch(() => 0);
+				return sendJson(res, 200, {
+					ok: true,
+					total,
+					flushed
+				});
 			}
 			if (req.method === "GET" && url.pathname === "/api/stream") {
 				res.writeHead(200, {

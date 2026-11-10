@@ -146,6 +146,46 @@ function humanCheckScript(space: string | number): string {
   )
 }
 
+/**
+ * Script that blocks until the human clears a challenge.
+ *
+ * Polls the page (rather than sleeping once) so it returns as soon as the user
+ * solves the CAPTCHA or completes the login. When `selector` is given, that
+ * element must also exist — the usual "logged in now" signal. Returns a
+ * structured payload, never an error: `resolved:false` is the honest answer
+ * when the deadline passes.
+ */
+export function waitForHumanScript(
+  space: string | number,
+  opts: { timeoutMs: number; pollMs?: number; selector?: string },
+): string {
+  const pollMs = opts.pollMs ?? 2000
+  const selector = opts.selector ?? ''
+  const selectorCheck =
+    selector === ''
+      ? '  const __selOk = true\n'
+      : `  let __selOk = false\n  try { __selOk = !!(await page.evaluate(${j(
+          `document.querySelector(${JSON.stringify(selector)}) != null`,
+        )})) } catch { __selOk = false }\n`
+  return (
+    `${useSpace(space)}${ensureRealTab()}` +
+    `const __wb = Date.now()\n` +
+    `let __saw = false, __resolved = false, __polls = 0, __last = null\n` +
+    `for (;;) {\n` +
+    `  let __hc = null\n` +
+    `  try { __hc = await page.evaluate(${j(HUMAN_CHECK_PROBE)}) } catch { __hc = null }\n` +
+    `  if (__hc && __hc.detected) __saw = true\n` +
+    `  __last = __hc\n` +
+    selectorCheck +
+    `  if (!(__hc && __hc.detected) && __selOk) { __resolved = true; break }\n` +
+    `  if (Date.now() - __wb >= ${opts.timeoutMs}) break\n` +
+    `  __polls++\n` +
+    `  await page.waitForTimeout(${pollMs})\n` +
+    `}\n` +
+    `console.log('${SENTINEL}' + JSON.stringify({ ok: true, needed: __saw, resolved: __resolved, waitedMs: Date.now() - __wb, polls: __polls, detected: !!(__last && __last.detected), kind: (__last && __last.kind) || null, url: await page.url().catch(() => null) }))\n`
+  )
+}
+
 export function createActiveSpaceTracker(defaultSpace: string | number = DEFAULT_SPACE): ActiveSpaceTracker {
   let activeSpace: string | number = defaultSpace
   let activeName: string | null = typeof defaultSpace === 'string' ? defaultSpace : null
@@ -419,6 +459,7 @@ const BUNDLED_WRAPPER = fileURLToPath(
   new URL('../bin/cdp-chrome-wrapper.sh', import.meta.url),
 )
 const IS_WIN = process.platform === 'win32'
+const IS_DARWIN = process.platform === 'darwin'
 const AUTO_ADAPT_OFF = /^(0|false|no)$/i.test(
   process.env.EGO_BROWSER_AUTO_ADAPT ?? '',
 )
@@ -453,6 +494,34 @@ function windowsChromeCandidates(): string[] {
     b(local) + '\\BraveSoftware\\Brave-Browser\\Application\\brave.exe',
   ]
   return out.filter(Boolean) as string[]
+}
+/**
+ * macOS registry-free probe of the usual `.app` bundles (no subprocess).
+ *
+ * Chrome on macOS is never on PATH: the launcher lives inside the bundle at
+ * `<App>.app/Contents/MacOS/<binary>`. Both the system-wide and per-user
+ * `/Applications` locations are probed, Chrome first so that a machine with
+ * several browsers picks the same one the README documents.
+ */
+function darwinChromeCandidates(): string[] {
+  const roots = ['/Applications']
+  if (process.env.HOME) {
+    roots.push(`${process.env.HOME}/Applications`)
+  }
+  const bundles = [
+    'Google Chrome.app/Contents/MacOS/Google Chrome',
+    'Chromium.app/Contents/MacOS/Chromium',
+    'Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
+    'Brave Browser.app/Contents/MacOS/Brave Browser',
+    'Tungsten Edge.app/Contents/MacOS/Tungsten Edge',
+  ]
+  const out: string[] = []
+  for (const root of roots) {
+    for (const bundle of bundles) {
+      out.push(`${root}/${bundle}`)
+    }
+  }
+  return out
 }
 /** Find a usable Chrome binary by scanning PATH + common fixed locations. */
 export function findChromeBinary(): string | undefined {
@@ -492,6 +561,21 @@ export function findChromeBinary(): string | undefined {
             // fall through
           }
         }
+      }
+    }
+    return undefined
+  }
+  // macOS: Chrome lives inside a `.app` bundle, never on PATH. Probe the bundle
+  // locations and stop there — the POSIX PATH walk below cannot find it (there
+  // is no `google-chrome` shim on macOS), so falling through only wastes time.
+  if (IS_DARWIN) {
+    for (const p of darwinChromeCandidates()) {
+      try {
+        if (existsSync(p)) {
+          return p
+        }
+      } catch {
+        // fall through
       }
     }
     return undefined
@@ -574,7 +658,13 @@ export function resolveEgoEnv(cfg: Partial<ResolvedConfig>, { platform = process
   // the bundled wrapper is a POSIX shell script that cannot run here. Pass the
   // binary path directly so the vendored runtime (which uses POSIX `which`)
   // doesn't have to resolve it itself.
-  if (env.EGO_LINUX_CHROME === undefined && platform === 'win32' && chrome) {
+  //
+  // macOS shares both properties: no sandbox gate (the wrapper exists only to
+  // add --no-sandbox for root/Docker on Linux), and the vendored runtime's
+  // name-based lookup would never find a path inside a `.app` bundle. Without
+  // this branch EGO_LINUX_CHROME is never injected on darwin and the first
+  // cold start fails with "no Chrome/Chromium binary found" (issue #68).
+  if (env.EGO_LINUX_CHROME === undefined && (platform === 'win32' || platform === 'darwin') && chrome) {
     env.EGO_LINUX_CHROME = chrome
   }
   // Headless servers (no DISPLAY) must run the backing browser headless.
@@ -1039,6 +1129,9 @@ interface EgoRuntimeConfig {
   readonly cdpQuality: number
   readonly cdpMaxWidth: number
   readonly cdpBackstopIntervalMs: number
+  readonly viewportWidth: number
+  readonly viewportHeight: number
+  readonly deviceScaleFactor: number
   readonly ffmpegFps: number
   readonly ffmpegMaxWidth: number
   readonly ffmpegBitrateKbps: number
@@ -1301,7 +1394,30 @@ const useSpace = (name: string | number): string =>
  * across CLI invocations: a fresh process sometimes resolves page actions
  * against a blank/stale tab. Selecting the first non-blank tab in the space
  * before acting makes cross-process tool calls deterministic.
+ *
+ * #96: never re-activate a tab that is already active — Target.activateTarget
+ * restores a minimized Chrome window on Windows, so every tool call would pop
+ * the browser back up. Only a pinned/background target needs the switch.
+ *
+ * A fixed viewport (viewportWidth/Height/deviceScaleFactor) is applied AFTER the
+ * tab is selected, because cdp() needs an attached session and there is no tab
+ * to attach to before the first one exists. The override is emitted on every
+ * call because a one-shot heredoc process dies with the call.
  */
+export interface ViewportSpec {
+  viewportWidth?: number
+  viewportHeight?: number
+  deviceScaleFactor?: number
+}
+/** Viewport applied by `ensureRealTab()` for the current buildScript call. */
+let pendingViewport: ViewportSpec | undefined
+const viewportPrelude = (spec: ViewportSpec): string => {
+  const width = Math.round(spec.viewportWidth ?? 0)
+  const height = Math.round(spec.viewportHeight ?? 0)
+  if (!(width > 0) || !(height > 0)) return ''
+  const scale = spec.deviceScaleFactor !== undefined && spec.deviceScaleFactor > 0 ? spec.deviceScaleFactor : 1
+  return `if (__real) { try { await cdp('Emulation.setDeviceMetricsOverride', { width: ${width}, height: ${height}, deviceScaleFactor: ${scale}, mobile: false }) } catch {} }\n`
+}
 const ensureRealTab = (): string =>
   `const __tabs = await browser.listTabs()\n` +
   `const __blank = (u) => /^(about:|chrome:|chrome-extension:|edge:|devtools:|data:)/.test(String(u || ''))\n` +
@@ -1309,7 +1425,8 @@ const ensureRealTab = (): string =>
   `  ?? __tabs.find(t => !__blank(t.url))\n` +
   `  ?? __tabs.find(t => t.active === true)\n` +
   `  ?? __tabs[0]\n` +
-  `if (__real && __real.active !== true) await browser.switchTab(__real.targetId)\n`
+  `if (__real && __real.active !== true) await browser.switchTab(__real.targetId)\n` +
+  (pendingViewport !== undefined ? viewportPrelude(pendingViewport) : '')
 /**
  * G �?a raw heredoc (`bcdp_script` with verbatim:true) that touches `page.*` without
  * first selecting a task space dies with the runtime's "no active tab to attach
@@ -1561,6 +1678,7 @@ function defineEgoTool(ctx: EgoContext, cfg: EgoRuntimeConfig, opts: EgoToolOpti
         // calls betterSidebar.openTab(). Idempotent: the client's transition
         // guard means only the first call per session opens the Tab.
         cfg.spaceTracker.setCurrentSession(callingSessionId(exec), resolveEffectiveLink(cfg.links, cfg.activeTargetId)?.link.id ?? ''); markEgoToolCall(callingSessionId(exec))
+          pendingViewport = cfg
         // Capability gate: a tool whose dependency face the attached engine
         // cannot satisfy fails HERE �?structured and immediate �?instead of
         // hanging inside the runtime until a timeout.
@@ -1730,6 +1848,9 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
     get cdpQuality() { return resolveConfig(bridge.source() as RawConfig).cdpQuality },
     get cdpMaxWidth() { return resolveConfig(bridge.source() as RawConfig).cdpMaxWidth },
     get cdpBackstopIntervalMs() { return resolveConfig(bridge.source() as RawConfig).cdpBackstopIntervalMs },
+        get viewportWidth() { return resolveConfig(bridge.source() as RawConfig).viewportWidth },
+        get viewportHeight() { return resolveConfig(bridge.source() as RawConfig).viewportHeight },
+        get deviceScaleFactor() { return resolveConfig(bridge.source() as RawConfig).deviceScaleFactor },
     get ffmpegFps() { return resolveConfig(bridge.source() as RawConfig).ffmpegFps },
     get ffmpegMaxWidth() { return resolveConfig(bridge.source() as RawConfig).ffmpegMaxWidth },
     get ffmpegBitrateKbps() { return resolveConfig(bridge.source() as RawConfig).ffmpegBitrateKbps },
@@ -2997,18 +3118,25 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
           type: 'string',
           description: 'Optional absolute output path for the PNG.',
         },
+        hideCursor: {
+          type: 'boolean',
+          description: 'Hide the agent cursor overlay during capture (default true) so the PNG is clean.',
+        },
         space: spaceParam,
       },
       buildScript: (args) => {
         const sel = str(args.selector, '')
         const pth = str(args.path, '')
+        const hideCursor = args.hideCursor !== false
         const shot =
           sel !== ''
             ? `await page.locator(${j(sel)}).screenshot(${pth ? `{ path: ${j(pth)} }` : ''})`
             : `await page.screenshot(${pth ? `{ path: ${j(pth)} }` : ''})`
         return (
           `${useSpace(str(args.space, cfg.activeSpace))}${ensureRealTab()}` +
-          `const path = ${shot}\n` +
+          `${hideCursor ? `try { if (ego && ego.hideCursor) await ego.hideCursor() } catch {}\nawait new Promise(r => setTimeout(r, 60))\n` : ''}` +
+          `let path\n` +
+          `try { path = ${shot} } finally { ${hideCursor ? `try { if (ego && ego.showCursor) await ego.showCursor() } catch {}` : ''} }\n` +
           `console.log('${SENTINEL}' + JSON.stringify({ ok: true, path }))\n`
         )
       },
@@ -3629,6 +3757,7 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
       execute: async (args: Record<string, unknown>, exec: ToolExec) =>
         withEgoLock(async () => {
           cfg.spaceTracker.setCurrentSession(callingSessionId(exec), resolveEffectiveLink(cfg.links, cfg.activeTargetId)?.link.id ?? ''); markEgoToolCall(callingSessionId(exec))
+          pendingViewport = cfg
           const result = await runWithStaleSpaceRetry(
             ctx,
             cfg,
@@ -3647,6 +3776,73 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
           }
         }),
       presentCall: () => ({ card: 'generic', title: 'bcdp_captcha', kind: 'other', rawInput: null }),
+    } as unknown as DefineToolOpts),
+  )
+  reg(
+    defineTool({
+      name: 'bcdp_wait_for_human',
+      description:
+        'Block until a human clears a CAPTCHA / completes a login or 2FA on the page, and (optionally) until `selector` appears as the "done" signal. Say what you need in the conversation FIRST ("solve it in the agent browser window, I will wait"), then call this. Returns { needed, resolved, waitedMs, polls, detected, kind, url }. A timeout is NOT an error: resolved=false means "still not done" — report back and call again, or escalate with bcdp_space({op:"handoff"}) for a full takeover. This is a deliberate blocking poll, NOT an approval flow.',
+      parameters: {
+        space: { type: 'string', description: 'Task-space name or numeric id; defaults to the active space.' },
+        selector: { type: 'string', description: 'Optional CSS selector that signals completion (e.g. ".dashboard"); the poll succeeds once the challenge is gone AND this element exists.' },
+        timeoutMs: { type: 'number', description: 'Max wait in ms (default 120000, capped at 300000).' },
+        reason: { type: 'string', description: 'Short human-readable reason (shown in the tool card; not enforced).' },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            ok: { type: 'boolean', required: true },
+            needed: { type: 'boolean', required: true },
+            resolved: { type: 'boolean', required: true },
+            waitedMs: { type: 'number', required: true },
+            polls: { type: 'number' },
+            detected: { type: 'boolean' },
+            kind: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+            url: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+            hint: { type: 'string' },
+          },
+        },
+        render: renderText,
+      },
+      // Larger than the max wait so the poll itself is not cut off by the tool timeout.
+      timeoutMs: 320_000,
+      execute: async (args: Record<string, unknown>, exec: ToolExec) =>
+        withEgoLock(async () => {
+          cfg.spaceTracker.setCurrentSession(callingSessionId(exec), resolveEffectiveLink(cfg.links, cfg.activeTargetId)?.link.id ?? ''); markEgoToolCall(callingSessionId(exec))
+          pendingViewport = cfg
+          const timeoutMs = Math.max(1000, Math.min(300_000, num(args.timeoutMs, 120_000)))
+          const selector = str(args.selector, '')
+          const result = await runWithStaleSpaceRetry(
+            ctx,
+            cfg,
+            { signal: exec?.signal } as ToolExec,
+            () => waitForHumanScript(str(args.space, cfg.activeSpace), { timeoutMs, selector }),
+          )
+          if (!result.ok)
+            return { ok: false, needed: false, resolved: false, waitedMs: 0, polls: 0, error: result.error, hint: 'the wait call failed before polling; retry once' }
+          const p = (parseSentinel(mergeCliOutput(result)) || {}) as Record<string, unknown>
+          const resolved = !!p.resolved
+          return {
+            ok: true,
+            needed: !!p.needed,
+            resolved,
+            waitedMs: typeof p.waitedMs === 'number' ? p.waitedMs : 0,
+            polls: typeof p.polls === 'number' ? p.polls : 0,
+            detected: !!p.detected,
+            kind: (p.kind as string) ?? null,
+            url: (p.url as string) ?? null,
+            hint: resolved
+              ? 'human cleared the challenge; continue with the task'
+              : 'still waiting — ask the user again, call bcdp_wait_for_human again, or use bcdp_space op=handoff for a full takeover',
+          }
+        }),
+      presentCall: (args: unknown) => {
+        const r = str((args as Record<string, unknown>)?.reason, '')
+        return { card: 'generic', title: r ? `bcdp_wait_for_human — ${r}` : 'bcdp_wait_for_human', kind: 'other', rawInput: null }
+      },
     } as unknown as DefineToolOpts),
   )
   reg(
@@ -3922,6 +4118,7 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
         timeoutMs: TOOL_TIMEOUT_MS,
         execute: async (args: Record<string, unknown>, exec: ToolExec) => {
           cfg.spaceTracker.setCurrentSession(callingSessionId(exec), resolveEffectiveLink(cfg.links, cfg.activeTargetId)?.link.id ?? ''); markEgoToolCall(callingSessionId(exec))
+          pendingViewport = cfg
           // Honor the documented per-run timeout override (integer ms). Falls
           // back to the plugin's default grace when absent/invalid.
           const timeoutMs =
@@ -4086,6 +4283,7 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
       timeoutMs: 10_000,
       execute: async (_args: Record<string, unknown>, exec: ToolExec) => {
         cfg.spaceTracker.setCurrentSession(callingSessionId(exec), resolveEffectiveLink(cfg.links, cfg.activeTargetId)?.link.id ?? ''); markEgoToolCall(callingSessionId(exec))
+          pendingViewport = cfg
         const judge = judgeCfg()
         const runtime = judgeRuntimeOf()
         const { attach } = effectiveChannel(cfg)
@@ -4157,6 +4355,7 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
       timeoutMs: 60_000,
       execute: async (args: Record<string, unknown>, exec: ToolExec) => {
         cfg.spaceTracker.setCurrentSession(callingSessionId(exec), resolveEffectiveLink(cfg.links, cfg.activeTargetId)?.link.id ?? ''); markEgoToolCall(callingSessionId(exec))
+          pendingViewport = cfg
         const blocked = attachGate()
         if (blocked !== '') return { ok: false, text: blocked }
         const goal = str(args.goal, '')
@@ -4282,6 +4481,7 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
       timeoutMs: 60_000,
       execute: async (args: Record<string, unknown>, exec: ToolExec) => {
         cfg.spaceTracker.setCurrentSession(callingSessionId(exec), resolveEffectiveLink(cfg.links, cfg.activeTargetId)?.link.id ?? ''); markEgoToolCall(callingSessionId(exec))
+          pendingViewport = cfg
         const blocked = attachGate()
         if (blocked !== '') return { ok: false, text: blocked }
         const judge = judgeCfg()
@@ -4360,6 +4560,7 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
       timeoutMs: TOOL_TIMEOUT_MS,
       execute: async (args: Record<string, unknown>, exec: ToolExec) => {
         cfg.spaceTracker.setCurrentSession(callingSessionId(exec), resolveEffectiveLink(cfg.links, cfg.activeTargetId)?.link.id ?? ''); markEgoToolCall(callingSessionId(exec))
+          pendingViewport = cfg
         const blocked = attachGate()
         if (blocked !== '') return { ok: false, text: blocked }
         const goal = str(args.goal, '')
@@ -4435,6 +4636,7 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
       timeoutMs: TOOL_TIMEOUT_MS,
       execute: async (args: Record<string, unknown>, exec: ToolExec) => {
         cfg.spaceTracker.setCurrentSession(callingSessionId(exec), resolveEffectiveLink(cfg.links, cfg.activeTargetId)?.link.id ?? ''); markEgoToolCall(callingSessionId(exec))
+          pendingViewport = cfg
         const blocked = attachGate()
         if (blocked !== '') return { ok: false, text: blocked }
         const url = str(args.url, '')

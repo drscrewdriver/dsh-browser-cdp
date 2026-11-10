@@ -37,7 +37,7 @@ describe("tier table coverage", () => {
     const listed = Object.values(TIER_MEMBERS).flat();
     // 双向对齐：源码里注册的每个名字都在表上，表上每个名字都还在源码里。
     expect(names.slice().sort()).toEqual(listed.slice().sort());
-    expect(names.length).toBe(34);
+    expect(names.length).toBe(35);
     expect(unknownTieredTools(names)).toEqual([]);
   });
 
@@ -65,7 +65,7 @@ describe("tier table coverage", () => {
       "bcdp_cdp", "bcdp_http", "bcdp_upload", "bcdp_download", "bcdp_dialog",
     ]);
     expect(TIER_MEMBERS.session).toEqual([
-      "bcdp_captcha", "bcdp_auth_flush", "bcdp_login_import",
+      "bcdp_captcha", "bcdp_wait_for_human", "bcdp_auth_flush", "bcdp_login_import",
     ]);
     // 第八批：逃生舱独立成批，1.5.0 起合并为单工具（verbatim 切换两种形态）。
     expect(TIER_MEMBERS.escape).toEqual(["bcdp_script"]);

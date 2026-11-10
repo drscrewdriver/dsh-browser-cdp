@@ -441,3 +441,100 @@ describe("runtime chrome.mjs (single-window launch)", () => {
     ).toBeTruthy();
   });
 });
+
+// ─── resolveEgoEnv: macOS (#65 / #68) ──────────────────────────────────────
+// The platform is injectable, so the darwin branches are exercised from any
+// host. The one assertion that needs real `.app` bundles is skipped elsewhere.
+
+describe("resolveEgoEnv (macOS)", () => {
+  it("never marks macOS headless, even without DISPLAY (#16)", () => {
+    const env = resolveEgoEnv(
+      {},
+      { platform: "darwin", baseEnv: { HOME: "/Users/test" } },
+    );
+    // macOS GUI is Aqua/Quartz and never exports $DISPLAY; treating its absence
+    // as headless would re-introduce #16 (no real window for scan-code login).
+    expect(env.EGO_LINUX_HEADLESS).toBe(undefined);
+  });
+
+  it("honours cfg.chromePath over auto-detection on macOS", () => {
+    const configured = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+    const env = resolveEgoEnv(
+      { chromePath: configured },
+      { platform: "darwin", baseEnv: { HOME: "/Users/test" } },
+    );
+    expect(env.EGO_LINUX_CHROME).toBe(configured);
+  });
+
+  it("never overrides a user-set EGO_LINUX_CHROME on macOS", () => {
+    const userSet = "/opt/custom/Google Chrome";
+    const env = resolveEgoEnv(
+      {},
+      { platform: "darwin", baseEnv: { EGO_LINUX_CHROME: userSet, HOME: "/Users/test" } },
+    );
+    expect(env.EGO_LINUX_CHROME).toBe(userSet);
+  });
+
+  it("injects the detected Chrome binary into EGO_LINUX_CHROME (real darwin only)", () => {
+    // Needs a real macOS host with Chrome/Chromium/Edge/Brave installed.
+    if (process.platform !== "darwin") return;
+    const env = resolveEgoEnv(
+      {},
+      { platform: "darwin", baseEnv: { HOME: process.env.HOME } },
+    );
+    expect(env.EGO_LINUX_CHROME).toBeTruthy();
+    expect(env.EGO_LINUX_CHROME?.includes(".app/Contents/MacOS/")).toBeTruthy();
+    expect(env.EGO_LINUX_CHROME?.includes("cdp-chrome-wrapper")).toBe(false);
+  });
+});
+
+// ─── runtime chrome.mjs / paths.mjs (macOS support) ─────────────────────────
+// Source-level assertions that the vendored runtime carries the darwin fixes
+// even when the test host is not macOS.
+
+describe("runtime chrome.mjs (macOS support)", () => {
+  const readSrc = () =>
+    import("node:fs/promises").then((fs) =>
+      fs.readFile(
+        new URL("../runtime/ego-linux/src/chrome.mjs", import.meta.url),
+        "utf8",
+      ),
+    );
+
+  it("has installPathCandidates() covering darwin .app bundles", async () => {
+    const src = await readSrc();
+    expect(src.includes("installPathCandidates")).toBeTruthy();
+    expect(src.includes(".app")).toBeTruthy();
+    // darwin bundle path shape: <X>.app/Contents/MacOS/<binary>
+    expect(src.includes('"Contents", "MacOS"')).toBeTruthy();
+    // resolveBinary must consult the install-path fallback after `which` misses.
+    expect(src.includes("for (const candidate of installPathCandidates())")).toBeTruthy();
+  });
+
+  it("ensureXDisplay() exempts darwin (no Xvfb on macOS)", async () => {
+    const src = await readSrc();
+    expect(
+      src.includes('process.platform === "win32" || process.platform === "darwin"'),
+    ).toBeTruthy();
+  });
+
+  it("LAUNCH_FLAGS supports EGO_LINUX_USE_MOCK_KEYCHAIN diagnostic", async () => {
+    const src = await readSrc();
+    expect(src.includes("EGO_LINUX_USE_MOCK_KEYCHAIN")).toBeTruthy();
+    expect(src.includes("--use-mock-keychain")).toBeTruthy();
+  });
+});
+
+describe("runtime paths.mjs (macOS cookie paths)", () => {
+  it("declares macOS Application Support profile candidates", async () => {
+    const src = await import("node:fs/promises").then((fs) =>
+      fs.readFile(
+        new URL("../runtime/ego-linux/src/paths.mjs", import.meta.url),
+        "utf8",
+      ),
+    );
+    expect(src.includes("IS_MAC")).toBeTruthy();
+    expect(src.includes("Application Support")).toBeTruthy();
+    expect(src.includes("Library")).toBeTruthy();
+  });
+});

@@ -77,6 +77,7 @@ const POWER = [
 ] as const
 const SESSION = [
   'bcdp_captcha',
+  'bcdp_wait_for_human',
   'bcdp_auth_flush',
   'bcdp_login_import',
 ] as const

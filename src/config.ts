@@ -64,6 +64,12 @@ export const Config = z.object({
   cdpQuality: z.number().min(1).max(100).step(1).description('CDP JPEG quality.').volatile(),
   cdpMaxWidth: z.number().min(320).max(1920).step(40).description('CDP frame max width.').volatile(),
   cdpBackstopIntervalMs: z.number().min(1000).max(10000).step(100).description('CDP recovery screenshot interval.').volatile(),
+  // Fixed CSS viewport (issue: HiDPI hosts shrink the CSS viewport, so sites
+  // serve their collapsed mobile layout). Applied via CDP emulation on every
+  // call because a one-shot heredoc process cannot keep the override alive.
+  viewportWidth: z.number().min(0).max(3840).step(10).description('Fixed CSS viewport width for agent pages (e.g. 1440). 0 = use the browser window size.').volatile(),
+  viewportHeight: z.number().min(0).max(2160).step(10).description('Fixed CSS viewport height for agent pages (e.g. 900). 0 = use the browser window size.').volatile(),
+  deviceScaleFactor: z.number().min(0).max(4).step(0.25).description('Device pixel ratio for the fixed viewport. 0 = the browser default.').volatile(),
   ffmpegFps: z.number().min(5).max(30).step(1).description('FFmpeg video FPS.').volatile(),
   ffmpegMaxWidth: z.number().min(320).max(1920).step(40).description('FFmpeg video max width.').volatile(),
   ffmpegBitrateKbps: z.number().min(500).max(20000).step(250).description('FFmpeg target video bitrate in kbps.').volatile(),
@@ -419,6 +425,11 @@ export function resolveConfig(config: RawConfig = {}): ResolvedConfig {
     cdpQuality: finiteIn(config.cdpQuality, 1, 100) ? config.cdpQuality : (finiteIn(config.screencastQuality, 1, 100) ? config.screencastQuality : 55),
     cdpMaxWidth: finiteIn(config.cdpMaxWidth, 320, 1920) ? config.cdpMaxWidth : (finiteIn(config.screencastMaxWidth, 320, 1920) ? config.screencastMaxWidth : 960),
     cdpBackstopIntervalMs: finiteIn(config.cdpBackstopIntervalMs, 1000, 10000) ? config.cdpBackstopIntervalMs : (finiteIn(config.backstopIntervalMs, 200, 10000) ? Math.max(1000, config.backstopIntervalMs) : 3000),
+    // 0 = leave the browser's own viewport untouched (previous behavior). Both
+    // dimensions must be non-zero before the emulation prelude is emitted.
+    viewportWidth: finiteIn(config.viewportWidth, 0, 3840) ? config.viewportWidth : 0,
+    viewportHeight: finiteIn(config.viewportHeight, 0, 2160) ? config.viewportHeight : 0,
+    deviceScaleFactor: finiteIn(config.deviceScaleFactor, 0, 4) ? config.deviceScaleFactor : 0,
     ffmpegFps: finiteIn(config.ffmpegFps, 5, 30) ? config.ffmpegFps : profileDefaults.fps,
     ffmpegMaxWidth: finiteIn(config.ffmpegMaxWidth, 320, 1920) ? config.ffmpegMaxWidth : profileDefaults.width,
     ffmpegBitrateKbps: finiteIn(config.ffmpegBitrateKbps, 500, 20000) ? config.ffmpegBitrateKbps : profileDefaults.bitrateKbps,

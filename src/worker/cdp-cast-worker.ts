@@ -522,7 +522,7 @@ async function main(): Promise<void> {
         }
       }
       if (req.method === 'POST' && url.pathname === '/api/close') { const { targetId } = await readJson(req); if (!active || !targetId) return sendJson(res, 400, { ok: false, error: 'targetId required' }); await active.cdp.call('Target.closeTarget', { targetId }); return sendJson(res, 200, { ok: true }) }
-      if (req.method === 'POST' && url.pathname === '/api/flush') { if (!active) return sendJson(res, 409, { ok: false, error: 'no live browser' }); await active.cdp.call('Storage.flushCookies').catch(() => { /* ignore */ }); return sendJson(res, 200, { ok: true }) }
+      if (req.method === 'POST' && url.pathname === '/api/flush') { if (!active) return sendJson(res, 409, { ok: false, error: 'no live browser' }); let total = 0; try { const jar = await active.cdp.call('Storage.getCookies') as { cookies?: unknown[] }; total = Array.isArray(jar?.cookies) ? jar.cookies.length : 0 } catch { total = 0 } const flushed = await active.cdp.call('Storage.flushCookies').then(() => total).catch(() => 0); return sendJson(res, 200, { ok: true, total, flushed }) }
       if (req.method === 'GET' && url.pathname === '/api/stream') {
         res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive', 'x-accel-buffering': 'no' })
         res.write(':ok\n\n')

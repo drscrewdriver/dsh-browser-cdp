@@ -1,3 +1,25 @@
+## 1.8.0 (2026-11-10)
+
+**macOS 开箱可用 + bcdp_wait_for_human + hideCursor + 固定视口 + flush 真实计数（对齐 dsh-ego-browser 优势）。**
+
+### macOS 开箱（P0，移植自 dsh-ego-browser #65/#68/#95）
+- **runtime `chrome.mjs`**：新增 `installPathCandidates()`，`which` 全部 miss 后扫描 macOS `/Applications` + `~/Applications` 的 Chrome/Chromium/Edge/Brave/Tungsten Edge `.app/Contents/MacOS/`（Windows 也补 Program Files/LocalAppData）。
+- **runtime `ensureXDisplay()`**：豁免 `darwin`（与 win32 同形）——macOS GUI 是 Aqua/Quartz、从不导出 `$DISPLAY`，之前会被误判为无头而尝试起 Xvfb 失败。
+- **plugin `findChromeBinary()`**：新增 `darwinChromeCandidates()` + IS_DARWIN 分支（Chrome 不在 PATH，只在 `.app` 内）。
+- **plugin `resolveEgoEnv()`**：`EGO_LINUX_CHROME` 注入条件由 `win32` 扩展为 `win32 || darwin`，darwin 首冷启动不再报 "no Chrome/Chromium binary found"。
+- **runtime `paths.mjs`**：`CHROME_CONFIG_CANDIDATES` 新增 macOS `~/Library/Application Support/...` 分支（login-import 能定位源 profile）。
+- **诊断**：`EGO_LINUX_USE_MOCK_KEYCHAIN=1`（或 `chromeArgs: "--use-mock-keychain"`）在 macOS 上用 mock keychain 启动 Chrome，用于判断 cookie 不落盘是否 Keychain 所致（默认关，降低静态加密强度）；README 补充 `Default/Cookies`（macOS/Linux）与 `Default/Network/Cookies`（Windows Chrome 127+）区别。
+
+### 新增
+- **`bcdp_wait_for_human`**：阻塞轮询直到人工完成 CAPTCHA/登录/2FA，可选 `selector` 作为“已完成”信号；返回 `{needed, resolved, waitedMs, polls, detected, kind, url}`。超时不报错（`resolved:false`），属轻量等待，区别于 `bcdp_space(op:handoff)` 的显式让权。
+- **`bcdp_screenshot({hideCursor})`**：截图前临时隐藏 agent 虚拟光标（默认 true），`finally` 恢复，PNG 不再截到光标。
+- **固定视口**：新增 `viewportWidth/viewportHeight/deviceScaleFactor` 设置（volatile），经 `ensureRealTab()` 尾部 `Emulation.setDeviceMetricsOverride` 每次调用生效，HiDPI 宿主避免站点降级移动布局。
+- **`bcdp_auth_flush` 真实计数**：worker `/api/flush` 先 `Storage.getCookies` 统计 jar，再 `Storage.flushCookies`，返回 `{total, flushed}`（不再固定 total:0）。
+
+### 说明
+- 工具数 34 → 35（新增 `bcdp_wait_for_human`，归 session 分级）。
+- macOS 运行时/路径分支仅影响 darwin；Linux/Windows 行为不变（条件隔离）。
+
 ## 1.7.12 (2026-11-08)
 
 **新增：整页 Tab 锚点报告 @引用（tab-anchor-report）。**

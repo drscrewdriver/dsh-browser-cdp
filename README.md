@@ -13,14 +13,14 @@
 [![dshfind](https://dshfind.com/api/badge/drscrewdriver/dsh-browser-cdp?lang=zh)](https://dshfind.com/zh/plugins/drscrewdriver/dsh-browser-cdp?ref=badge) 
 [![dsh.so risk](https://cdn.dsh.so/badge/dsh-browser-cdp.svg)](https://www.dsh.so/artifact/dsh-browser-cdp/?ref=badge)
 [![dsh.so install · dsh 0.2.1-rc.2](https://cdn.dsh.so/badge/install/dsh-browser-cdp@0.2.1-rc.2.svg)](https://www.dsh.so/artifact/dsh-browser-cdp/?ref=badge-install)
-> 看得见的 Agent 浏览器（CDP 接入），同时驱动 egolite / Tabbit / Chrome / Edge / Brave / Lightpanda。常驻只有 `bcdp_status`（401 字符），其余 33 个 `bcdp_*` 工具按活动批次解锁——不碰浏览器的会话不缴 schema token 税（实测 −91.9%）。实时观察窗支持直接点击/滚动/中文输入，点选元素以 `@"picks/*.json"` 引用投进输入框，人机验证提醒；非 CDP 通道（ego CLI / Tabbit CLI）以 3s 轮询同步画面。宿主 `>=0.1.7-rc.1 <0.3.0-0`（窗口 era）。
+> 看得见的 Agent 浏览器（CDP 接入），同时驱动 egolite / Tabbit / Chrome / Edge / Brave / Lightpanda。常驻只有 `bcdp_status`（401 字符），其余 34 个 `bcdp_*` 工具按活动批次解锁——不碰浏览器的会话不缴 schema token 税（实测 −91.9%）。实时观察窗支持直接点击/滚动/中文输入，点选元素以 `@"picks/*.json"` 引用投进输入框，人机验证提醒；非 CDP 通道（ego CLI / Tabbit CLI）以 3s 轮询同步画面。宿主 `>=0.1.7-rc.1 <0.3.0-0`（窗口 era）。
 >
-> Visible agent browser for DSH over CDP, also driving egolite / Tabbit / Chrome / Edge / Brave / Lightpanda. Only `bcdp_status` stays resident (401 chars); the other 33 context-optimized `bcdp_*` tools unlock per activity batch, so non-browser sessions pay no schema tax (−91.9% measured). Realtime watch panel with direct click/scroll/IME, element picks quoted into the composer as `@"picks/*.json"`, human-verification notices; non-CDP channels (ego CLI / Tabbit CLI) sync frames by 3s polling. Host `>=0.1.7-rc.1 <0.3.0-0` (window era).
+> Visible agent browser for DSH over CDP, also driving egolite / Tabbit / Chrome / Edge / Brave / Lightpanda. Only `bcdp_status` stays resident (401 chars); the other 34 context-optimized `bcdp_*` tools unlock per activity batch, so non-browser sessions pay no schema tax (−91.9% measured). Realtime watch panel with direct click/scroll/IME, element picks quoted into the composer as `@"picks/*.json"`, human-verification notices; non-CDP channels (ego CLI / Tabbit CLI) sync frames by 3s polling. Host `>=0.1.7-rc.1 <0.3.0-0` (window era).
 
 [简体中文](README.md) | [Français](README.fr.md) | [Deutsch](README.de.md) | [Italiano](README.it.md) | [Русский](README.ru.md) | [Español](README.es.md)
 
 
-> **仓库**：`github.com/drscrewdriver/dsh-browser-cdp`｜当前版本 **v1.7.12**｜版本历史见 [CHANGELOG.md](CHANGELOG.md)｜详情页：[dshfind](https://dshfind.com/zh/plugins/drscrewdriver/dsh-browser-cdp)
+> **仓库**：`github.com/drscrewdriver/dsh-browser-cdp`｜当前版本 **v1.8.0**｜版本历史见 [CHANGELOG.md](CHANGELOG.md)｜详情页：[dshfind](https://dshfind.com/zh/plugins/drscrewdriver/dsh-browser-cdp)
 
 ### 版本兼容矩阵
 
@@ -48,7 +48,7 @@
 
 **登录态导入（v0.8.5 新增）**：工具 `bcdp_login_import`，把你日常 Chrome/Edge/Brave 里的登录 cookie **按域名**复制进 agent 浏览器（真实二进制无头启动 + CDP 透传读取，兼容 Chrome 127+ 的 App-Bound Encryption，不做离线解密；源浏览器运行中可选择优雅关闭后导入，窗口下次启动自动恢复）。cookie 值不出现在任何日志与输出中；导入前自动备份源 cookie 库，异常清空自动还原。配合默认的磁盘持久化 Profile，导入的登录态跨重启永久保留。
 
-一款 **CDP 浏览器代理**：内置 **ego 兼容运行时**（供 AI Agent 用的 Chromium，来源与许可逐文件见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)）接入 DeepSeek Harness，以 **34 个结构化 `bcdp_*` 工具**驱动浏览器，并配一套**实时观察前端口**——agent 后台操作网页时，你能像看直播一样看到它正在浏览的每个页面，还能直接操作它。
+一款 **CDP 浏览器代理**：内置 **ego 兼容运行时**（供 AI Agent 用的 Chromium，来源与许可逐文件见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)）接入 DeepSeek Harness，以 **35 个结构化 `bcdp_*` 工具**驱动浏览器，并配一套**实时观察前端口**——agent 后台操作网页时，你能像看直播一样看到它正在浏览的每个页面，还能直接操作它。
 
 **一点私藏的独特之处（self-observation）**：agent 用的就是这一个 Chromium——连它操作 **DSH 自身**（管理会话、任务看板、调设置）时，观察窗也实时显示、你能随时接手。不只是"看得见 agent 在网页上干活"，连 agent 操作 DSH 界面本身都是全程可见、可掌控的。
 
@@ -62,7 +62,7 @@
 
 | 能力 | 本插件（本仓库） | 同类插件 |
 |---|---|---|
-| 结构化工具数 | **34 个**，职责单一、可确定性调用 | **3 个**（`run`/`help`/`status`） |
+| 结构化工具数 | **35 个**，职责单一、可确定性调用 | **3 个**（`run`/`help`/`status`） |
 | 实时观察窗（CDP JPEG / FFmpeg H.264 双后端 + 标签条 + 历史抽屉） | ✅ 有 | ❌ 无 |
 | 监控窗鼠标**直接操作**真实浏览器（点击/拖拽/滚动回传 CDP） | ✅ 有 | ❌ 无 |
 | **观察窗点选元素 → 捕获并引用进对话输入框**（`[CDP-PICKS]` 结构化块，人工指认目标） | ✅ 有 | ❌ 无 |
@@ -76,7 +76,7 @@
 - **控得住**：别家只读；我们监控窗**直接驱动**同一个 agent 浏览器，需要时你亲手接管（缩放/拖拽/点击），不必打断 agent 重来。
 - **指得准**：你在观察窗里**点选**页面元素，插件捕获其 `backendNodeId`/`tag`/`id` 与语义描述，以 `[CDP-PICKS]` 结构化块并入对话输入框草稿（同页多元素自动合并编号）——agent 拿到的是精确目标，不用猜"你说的按钮是哪个"。
 
-> 以上对比基于公开可见的可核实事实：本仓库代码（`bin/cdp-cast-worker.mjs` 实时推流 + CDP 输入回传、`lib/index.js` 34 个注册工具、`lib/cast-server.js` host 桥接、`lib/client.js` 的 `deliverPickToConversation` 点选引用）与同类插件公开可见的源码/README。此文档不含对任何他人的贬低——我们只陈述自己多实现并验证了哪些能力。
+> 以上对比基于公开可见的可核实事实：本仓库代码（`bin/cdp-cast-worker.mjs` 实时推流 + CDP 输入回传、`lib/index.js` 35 个注册工具、`lib/cast-server.js` host 桥接、`lib/client.js` 的 `deliverPickToConversation` 点选引用）与同类插件公开可见的源码/README。此文档不含对任何他人的贬低——我们只陈述自己多实现并验证了哪些能力。
 
 **相对内置运行时本体（一个无头 CLI），我们多做了这些（都可对照本仓库代码核实）：**
 
@@ -233,7 +233,7 @@ dshx list                                                # 应显示：[on] dsh-
 
 识别失败的端点（`engine: unknown`）保持**全能力**——误判只应"少给"，不应"错给"。
 
-## 工具清单（34 个，前缀 `bcdp_`，完整索引见 `bcdp_help`）
+## 工具清单（35 个，前缀 `bcdp_`，完整索引见 `bcdp_help`）
 
 | 类别 | 工具 |
 |---|---|
@@ -411,6 +411,13 @@ pnpm run build   # tsdown 三 bundle：lib/index.js + lib/client.js + bin/cdp-ca
 - **登录态持久化**：Chrome 运行期 Cookie 仅优雅关闭时落盘，强杀重启需重登。
 - **Tabbit 通道覆盖面**：仅 `space` / `navigate` / `snapshot` / `click` / `fill` / `screenshot` / `tab op=list` 已接入，其余工具返回明确错误而不回落其他后端；观察窗只能看帧、不能点选元素引用，无下载事件（`capabilities.ts` 的 `tabbit` 投影：`overlay` / `bindingCalled` / `downloadEvents` / `browserClose` 均为 false）。`bcdp_jev_*` 评审链在 Tabbit 下没有接入分发器，调用返回“尚未支持”而不是错驱另一个浏览器。
 - 输出 schema 为宽松 `additionalProperties: true`，客户端以实际返回值为准。
+
+## macOS 开箱与 Cookie 排查
+
+- **开箱可用**：macOS 上 Chrome 从不在 `PATH`，而在 `.app` 包内。本版自动探测 `/Applications` 与 `~/Applications` 下的 Chrome / Chromium / Edge / Brave / Tungsten Edge，并注入运行时；headed 启动不依赖 X11/Xvfb（macOS 图形栈是 Aqua/Quartz，本就无 `$DISPLAY`）。无需手动填 `chromePath`。
+- **Cookie 落盘路径**：macOS（与 Linux）用 `Default/Cookies`；**不是** Windows Chrome 127+ 的 `Default/Network/Cookies`。
+- **Cookie 不落盘诊断（macOS 27 + Chrome 156+，issue #93）**：若 `bcdp_auth_flush` 报告的 cookie jar 非空但 `Default/Cookies` 未变，可临时用 mock keychain 对照：设环境变量 `EGO_LINUX_USE_MOCK_KEYCHAIN=1`，或在设置页 `chromeArgs` 填 `--use-mock-keychain`，然后冷启动浏览器重测。**默认关闭**——它会降低静态加密强度，仅用于诊断。
+- **登录导入**：`bcdp_login_import` 在 macOS 从 `~/Library/Application Support/{Google/Chrome,Chromium,Microsoft Edge,BraveSoftware/Brave-Browser}` 定位源 profile。
 
 ## 许可与署名
 

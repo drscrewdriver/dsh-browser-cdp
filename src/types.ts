@@ -246,6 +246,12 @@ export interface ResolvedConfig {
   cdpQuality: number
   cdpMaxWidth: number
   cdpBackstopIntervalMs: number
+  /** Fixed CSS viewport width; 0 = use the browser window size. */
+  viewportWidth: number
+  /** Fixed CSS viewport height; 0 = use the browser window size. */
+  viewportHeight: number
+  /** Device pixel ratio for the fixed viewport; 0 = browser default. */
+  deviceScaleFactor: number
   ffmpegFps: number
   ffmpegMaxWidth: number
   ffmpegBitrateKbps: number

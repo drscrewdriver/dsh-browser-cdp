@@ -3821,10 +3821,12 @@ clearTimeout((panel as any)._dshHideT)
 			} else if (this.selectedTabId !== null) {
 				currentSpace = this.lastList.find(function (s: any) { return s.targetId === self.selectedTabId }) || null
 				currentTargetId = this.selectedTabId
-				// spaces payloads no longer carry thumbnails; pull the latest
-				// cached JPEG from the SSE frame pipeline so the view shows
-				// something instead of "no screenshot yet".
-				if (currentSpace && !currentSpace.thumbnail) {
+				// spaces payloads never carry thumbnails, and the SSE `frame` handler
+				// paints the newest image IMPERATIVELY onto <img>. If this snapshot kept
+				// an older thumbnail, every re-render would set `src` back to it and the
+				// panel would flash new→old→new between 3s captures. Always take the
+				// newest cached frame so React and the stream agree.
+				if (currentSpace) {
 					var cached = this.frameCache.get(currentTargetId)
 					if (cached) currentSpace = Object.assign({}, currentSpace, { thumbnail: cached })
 				}
@@ -3836,10 +3838,10 @@ clearTimeout((panel as any)._dshHideT)
 				if (activeMarked) {
 					currentSpace = Object.assign({}, activeMarked)
 					currentTargetId = activeMarked.targetId
-					if (!currentSpace.thumbnail) {
-						var cached2 = this.frameCache.get(currentTargetId)
-						if (cached2) currentSpace.thumbnail = cached2
-					}
+					// Same rule as the pinned branch: the newest cached frame wins, so a
+					// re-render can never repaint a stale image over the live one.
+					var cached2 = this.frameCache.get(currentTargetId)
+					if (cached2) currentSpace.thumbnail = cached2
 				}
 			}
 			this.currentActiveId = currentTargetId

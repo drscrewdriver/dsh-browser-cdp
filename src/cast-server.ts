@@ -1247,11 +1247,12 @@ export function initCastServer(
     if (Date.now() - lastCliFrameAt < 1000) return
     const at = Date.now()
     lastCliFrameAt = at
-    // Re-emit spaces TOO: if the panel was emptied by a transient empty spaces
-    // event, a frame-only replay cannot restore it (no live <img> to receive
-    // it). Re-asserting the spaces list re-mounts the live view, then the
-    // frames paint the cached images — recovering within ≤1s.
-    writeCliImages(lastCliFrames, at)
+    // FRAMES ONLY. Replaying `spaces` every second made the panel rebuild its view
+    // once a second, and that rebuild re-applied the PREVIOUS cached image while
+    // the SSE frame had already painted the new one — the visible "gap" between
+    // 3s captures. The image is all this timer owes the client; the tab list is
+    // already re-asserted by the next real capture.
+    writeCliImages(lastCliFrames, at, false)
   }, 1000)
   try { (cliFrameHoldTimer as unknown as { unref?: () => void }).unref?.() } catch { /* ignore */ }
   ctx.effect?.(() => () => { clearInterval(cliFrameHoldTimer) })

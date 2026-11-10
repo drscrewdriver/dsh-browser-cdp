@@ -203,6 +203,21 @@ export function markEgoToolCall(sessionId?: string): void {
  * keeps the ego-cli poller (which captures PNG) unchanged.
  */
 export function broadcastCliFrame(frame: { png: Buffer; url: string; title: string; seq: number; updatedAt: number; fmt?: 'png' | 'jpeg' }): void {
+  // Remember the newest frame so the hold/heartbeat timer can re-emit it during
+  // the gap between 3s CLI captures (a screenshot can momentarily stall the
+  // page's rendering, and there is no screencast on the ego-cli route).
+  lastCliFrameBroadcast = frame
+  lastCliFrameAt = Date.now()
+  writeCliFrame(frame)
+}
+/** Newest CLI frame seen, replayed by the 1s hold timer in initCastServer. */
+let lastCliFrameBroadcast: { png: Buffer; url: string; title: string; seq: number; updatedAt: number; fmt?: 'png' | 'jpeg' } | null = null
+/** Wall-clock of the last broadcast/replay; the hold timer only fills >1s gaps. */
+let lastCliFrameAt = 0
+/** Push one CLI frame to every SSE client. `includeSpaces` also re-emits the
+ * synthetic spaces list (real captures do; the 1s hold replay only refreshes
+ * the image to avoid churning the client's store/render every second). */
+function writeCliFrame(frame: { png: Buffer; url: string; title: string; seq: number; updatedAt: number; fmt?: 'png' | 'jpeg' }, includeSpaces = true): void {
   if (sseClients.size === 0) return
   const synthetic = [{
     targetId: CLI_FRAME_TARGET_ID,
@@ -216,7 +231,7 @@ export function broadcastCliFrame(frame: { png: Buffer; url: string; title: stri
   const frameEvent = `event: frame\ndata: ${JSON.stringify(framePayload)}\n\n`
   for (const res of sseClients) {
     try {
-      res.write(spacesFrame)
+      if (includeSpaces) res.write(spacesFrame)
       res.write(frameEvent)
     } catch {
       sseClients.delete(res)
@@ -1017,6 +1032,26 @@ export function initCastServer(
       proxyWorkerVideo(port, req, res)
     },
   })
+
+  // Frame hold/buffer: replay the newest CLI frame once per second so the watch
+  // panel never goes blank in the 3s capture gap (a screenshot can momentarily
+  // stall the page's rendering, and there is no screencast on the ego-cli route).
+  // Skipped while a CDP screencast endpoint owns the panel, and when no frame or
+  // no client is present. This is the "cache ≥1s" guarantee the user asked for.
+  const cliFrameHoldTimer = setInterval(() => {
+    if (sseClients.size === 0) return
+    if (getAttachEndpoint() !== null) return
+    if (lastCliFrameBroadcast === null) return
+    if (Date.now() - lastCliFrameAt < 1000) return
+    lastCliFrameAt = Date.now()
+    // Re-emit spaces TOO: if the panel was emptied by a transient empty spaces
+    // event, a frame-only replay cannot restore it (no live <img> to receive
+    // it). Re-asserting the synthetic space re-mounts the live view, then the
+    // frame paints the cached image — recovering within ≤1s.
+    writeCliFrame(lastCliFrameBroadcast)
+  }, 1000)
+  try { (cliFrameHoldTimer as unknown as { unref?: () => void }).unref?.() } catch { /* ignore */ }
+  ctx.effect?.(() => () => { clearInterval(cliFrameHoldTimer) })
 
   ctx.effect?.(() => () => {
     try { disposeSpaces() } catch { /* ignore */ }

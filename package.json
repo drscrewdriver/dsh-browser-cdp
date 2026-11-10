@@ -1,6 +1,6 @@
 {
   "name": "dsh-browser-cdp",
-  "version": "1.8.2",
+  "version": "1.8.3",
   "description": "dsh-browser-cdp: visible agent browser for DSH — drives the vendored ego-compatible Chromium over CDP, and can also attach to a running Chrome/Edge/Brave or route through egolite, Tabbit and Lightpanda backends. 35 structured bcdp_* tools; only bcdp_status stays resident by default (lazy injection, −91.9% schema per turn for non-browser sessions). Realtime watch panel with direct click/scroll/IME input, element picks quoted into the composer, human-verification notices; non-CDP channels sync frames by 3s polling. Web shell: floating watch ball without dsh-better-sidebar, sidebar tab with it. Headless/TUI hosts: tools-only. [DSH 0.1.7-rc.1 ~ 0.2.2-rc.1 (exact rc enumeration): declarative settings via Config .volatile() fields; for DSH 0.1.2-rc.1 ~ 0.1.5-rc.3 use the 0.17.x line]",
   "type": "module",
   "main": "./lib/index.js",

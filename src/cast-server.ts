@@ -928,6 +928,41 @@ export function initCastServer(
     },
   })
 
+  // POST /api/bcdp/window-size — panel size-sync / presets / maximize. Proxies
+  // to the worker, which drives Browser.setWindowBounds on the real Chrome
+  // window (CDP worker route; the ego-cli route has no CDP ws → 409).
+  const disposeWindowSize = server.register({
+    kind: 'exact',
+    path: '/api/bcdp/window-size',
+    handler: async (reqRaw: unknown, resRaw: unknown) => {
+      const req = reqRaw as IncomingMessage
+      const res = resRaw as ServerResponse
+      const port = await ensureWorker()
+      if (port === null) return sendJson(res, 409, { ok: false, error: 'no live agent browser (size-sync needs the CDP worker; the ego-cli route has no CDP ws)' })
+      const body = await readJsonBody(req).catch(() => ({}) as Record<string, unknown>)
+      const result = await proxyPost(port, '/api/window-size', body)
+      if (!result) return sendJson(res, 502, { ok: false, error: 'window-size worker unavailable' })
+      return sendJson(res, result.status, result.body)
+    },
+  })
+
+  // POST /api/bcdp/navigate — panel refresh / manual URL. Proxies to the worker
+  // (Page.reload / Page.navigate on the active page target).
+  const disposePanelNavigate = server.register({
+    kind: 'exact',
+    path: '/api/bcdp/navigate',
+    handler: async (reqRaw: unknown, resRaw: unknown) => {
+      const req = reqRaw as IncomingMessage
+      const res = resRaw as ServerResponse
+      const port = await ensureWorker()
+      if (port === null) return sendJson(res, 409, { ok: false, error: 'no live agent browser' })
+      const body = await readJsonBody(req).catch(() => ({}) as Record<string, unknown>)
+      const result = await proxyPost(port, '/api/navigate', body)
+      if (!result) return sendJson(res, 502, { ok: false, error: 'navigate worker unavailable' })
+      return sendJson(res, result.status, result.body)
+    },
+  })
+
   // POST /api/bcdp/raise — pop the agent browser out as a REAL visible window
   // (issue #51): when the backing browser runs headless, the runtime's
   // `ego-browser --open` replaces it with a headed instance on the SAME
@@ -1063,6 +1098,8 @@ export function initCastServer(
     try { disposePick() } catch { /* ignore */ }
     try { disposePickClick() } catch { /* ignore */ }
     try { disposeFlush() } catch { /* ignore */ }
+    try { disposeWindowSize() } catch { /* ignore */ }
+    try { disposePanelNavigate() } catch { /* ignore */ }
     try { disposeRaise() } catch { /* ignore */ }
     try { disposeLoginImport() } catch { /* ignore */ }
     try { disposeHealth() } catch { /* ignore */ }

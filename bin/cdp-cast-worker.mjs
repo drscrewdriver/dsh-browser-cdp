@@ -6355,6 +6355,70 @@ function capabilitiesFromEnvValue(value) {
 }
 
 //#endregion
+//#region src/worker/window-size.ts
+/** Chrome refuses slivers; below this a resize is not worth sending. */
+const MIN_VIEWPORT_WIDTH = 320;
+const MIN_VIEWPORT_HEIGHT = 200;
+/** A sanity ceiling; the OS clamps to the display anyway. */
+const MAX_VIEWPORT_WIDTH = 3840;
+const MAX_VIEWPORT_HEIGHT = 2160;
+/** Keep a requested viewport inside a sane range (a sliver is unusable). */
+function clampViewportSize(width, height) {
+	return {
+		width: Math.min(MAX_VIEWPORT_WIDTH, Math.max(MIN_VIEWPORT_WIDTH, Math.round(width))),
+		height: Math.min(MAX_VIEWPORT_HEIGHT, Math.max(MIN_VIEWPORT_HEIGHT, Math.round(height)))
+	};
+}
+/**
+* Apply a drag delta to the current viewport width. The panel edge maps to a
+* window-width CHANGE, not an absolute width: the panel is much narrower than
+* the window, so absolute mapping would shrink the window to the sidebar on the
+* first frame.
+*/
+function widthWithDelta(currentWidth, delta) {
+	const next = Math.round(currentWidth + delta);
+	return Math.min(MAX_VIEWPORT_WIDTH, Math.max(MIN_VIEWPORT_WIDTH, next));
+}
+/**
+* Compute CDP `Browser.setWindowBounds` bounds for a desired page viewport.
+* `left`/`top` are preserved when known so the window does not jump while the
+* user drags a panel edge. `windowState: 'normal'` is always included: a
+* maximized window ignores width/height until it is restored.
+*/
+function computeWindowBounds(viewport, chromeFrame = {
+	width: 0,
+	height: 0
+}, current = {}) {
+	const width = Math.max(MIN_VIEWPORT_WIDTH, Math.round(viewport.width + Math.max(0, chromeFrame.width)));
+	const height = Math.max(MIN_VIEWPORT_HEIGHT, Math.round(viewport.height + Math.max(0, chromeFrame.height)));
+	return {
+		...typeof current.left === "number" && Number.isFinite(current.left) ? { left: Math.round(current.left) } : {},
+		...typeof current.top === "number" && Number.isFinite(current.top) ? { top: Math.round(current.top) } : {},
+		width,
+		height,
+		windowState: "normal"
+	};
+}
+/** Aspect-ratio presets offered by the panel (label → height/width ratio). */
+const ASPECT_RATIOS = {
+	"16:9": 9 / 16,
+	"4:3": 3 / 4,
+	"21:9": 9 / 21,
+	"1:1": 1,
+	"9:16": 16 / 9
+};
+/**
+* Resolve an aspect preset to a viewport height for the given width. Unknown
+* labels fall back to the current height (a no-op), so a stale client value
+* never distorts the window.
+*/
+function aspectHeight(width, aspect, fallbackHeight) {
+	const ratio = ASPECT_RATIOS[aspect];
+	if (ratio === void 0) return fallbackHeight;
+	return Math.round(width * ratio);
+}
+
+//#endregion
 //#region src/worker/cdp-cast-worker.ts
 const SENTINEL = "@@DSH_RESULT@@";
 /**
@@ -6400,6 +6464,8 @@ const sseClients = /* @__PURE__ */ new Set();
 const videoClients = /* @__PURE__ */ new Set();
 const probeCache = /* @__PURE__ */ new Map();
 const frameCache = /* @__PURE__ */ new Map();
+const winCache = /* @__PURE__ */ new Map();
+const chromeFrameCache = /* @__PURE__ */ new Map();
 let active = null;
 /**
 * M1.4 / T5.1c — the pick channel rides the worker's RESIDENT connection.
@@ -7028,6 +7094,130 @@ async function main() {
 					total,
 					flushed
 				});
+			}
+			if (req.method === "POST" && url.pathname === "/api/window-size") {
+				if (!active) return sendJson(res, 409, {
+					ok: false,
+					error: "no live browser"
+				});
+				const body = await readJson(req);
+				const targetId = await activeTargetId();
+				if (!targetId) return sendJson(res, 409, {
+					ok: false,
+					error: "no active page target"
+				});
+				try {
+					let win = winCache.get(targetId);
+					if (!win || Date.now() - win.at > 1e4) {
+						const r = await active.cdp.call("Browser.getWindowForTarget", { targetId });
+						win = {
+							windowId: r.windowId,
+							bounds: r.bounds || {},
+							at: Date.now()
+						};
+						winCache.set(targetId, win);
+					}
+					if (body.maximize === true) {
+						await active.cdp.call("Browser.setWindowBounds", {
+							windowId: win.windowId,
+							bounds: { windowState: "maximized" }
+						});
+						return sendJson(res, 200, {
+							ok: true,
+							maximized: true,
+							windowId: win.windowId
+						});
+					}
+					let cf = chromeFrameCache.get(targetId);
+					if (!cf || Date.now() - cf.at > 2e3) {
+						const v = (await active.sessions.call(targetId, "Runtime.evaluate", {
+							expression: "({ow:outerWidth,oh:outerHeight,iw:innerWidth,ih:innerHeight})",
+							returnByValue: true
+						}, 3e3))?.result?.value || {};
+						cf = {
+							width: Math.max(0, (v.ow || 0) - (v.iw || 0)),
+							height: Math.max(0, (v.oh || 0) - (v.ih || 0)),
+							viewport: {
+								width: v.iw || 0,
+								height: v.ih || 0
+							},
+							at: Date.now()
+						};
+						chromeFrameCache.set(targetId, cf);
+					}
+					const cur = cf.viewport;
+					let width = typeof body.width === "number" && Number.isFinite(body.width) ? body.width : typeof body.delta === "number" && Number.isFinite(body.delta) ? widthWithDelta(cur.width, body.delta) : cur.width;
+					let height = typeof body.height === "number" && Number.isFinite(body.height) ? body.height : typeof body.dy === "number" && Number.isFinite(body.dy) ? cur.height + body.dy : cur.height;
+					if (typeof body.aspect === "string" && body.aspect !== "") height = aspectHeight(width, body.aspect, height);
+					const clamped = clampViewportSize(width, height);
+					const bounds = computeWindowBounds(clamped, {
+						width: cf.width,
+						height: cf.height
+					}, {
+						left: win.bounds.left,
+						top: win.bounds.top
+					});
+					await active.cdp.call("Browser.setWindowBounds", {
+						windowId: win.windowId,
+						bounds
+					});
+					cf.viewport = {
+						width: clamped.width,
+						height: clamped.height
+					};
+					cf.at = Date.now();
+					return sendJson(res, 200, {
+						ok: true,
+						windowId: win.windowId,
+						viewport: {
+							width: clamped.width,
+							height: clamped.height
+						}
+					});
+				} catch (error) {
+					return sendJson(res, 502, {
+						ok: false,
+						error: error.message || String(error)
+					});
+				}
+			}
+			if (req.method === "POST" && url.pathname === "/api/navigate") {
+				if (!active) return sendJson(res, 409, {
+					ok: false,
+					error: "no live browser"
+				});
+				const body = await readJson(req);
+				const targetId = await activeTargetId();
+				if (!targetId) return sendJson(res, 409, {
+					ok: false,
+					error: "no active page target"
+				});
+				try {
+					if (body.reload === true) {
+						await active.sessions.call(targetId, "Page.reload", { ignoreCache: body.ignoreCache === true }, 15e3);
+						return sendJson(res, 200, {
+							ok: true,
+							reloaded: true,
+							targetId
+						});
+					}
+					const navUrl = typeof body.url === "string" ? body.url.trim() : "";
+					if (navUrl === "") return sendJson(res, 400, {
+						ok: false,
+						error: "url required"
+					});
+					await active.sessions.call(targetId, "Page.navigate", { url: navUrl }, 15e3);
+					return sendJson(res, 200, {
+						ok: true,
+						url: navUrl,
+						targetId
+					});
+				} catch (error) {
+					return sendJson(res, 502, {
+						ok: false,
+						error: error.message || String(error)
+					});
+				}
 			}
 			if (req.method === "GET" && url.pathname === "/api/stream") {
 				res.writeHead(200, {

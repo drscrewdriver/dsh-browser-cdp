@@ -1,3 +1,14 @@
+## 1.9.0 (2026-11-10)
+
+**观察窗尺寸同步/预设/最大化 — 后端能力落地（纯函数 + worker/host 路由）。**
+
+- **`src/worker/window-size.ts`（新）**：`clampViewportSize` / `widthWithDelta` / `computeWindowBounds` / `aspectHeight` + `ASPECT_RATIOS`（16:9/4:3/21:9/1:1/9:16）；纯函数、14 单测覆盖。
+- **worker `POST /api/window-size`**：支持 `{width,height,delta,dy,aspect,maximize}`；经 `Browser.getWindowForTarget` + `setWindowBounds` 改真实 Chrome 窗口；缓存 windowId(10s)/chrome-frame(2s) 使每次拖动仅 1 次往返；返回 `{viewport}` 供客户端坐标映射。
+- **worker `POST /api/navigate`**：面板刷新（`Page.reload`）/手动 URL（`Page.navigate`）。
+- **host 路由**：`POST /api/bcdp/window-size`、`POST /api/bcdp/navigate` 代理到 worker（ego-cli 无 CDP ws → 409）。
+- **边界**：尺寸同步/最大化/面板刷新仅 CDP worker 路线生效；ego-cli 降级路线无 CDP，返回 409 明确提示。
+- **待续**：客户端 UI（工具栏 URL/最大化/🖁 尺寸同步 toggle/预设/拖拽热区）将在随后版本接入 `EgoBrowserTab`(React) + 浮窗两处。
+
 ## 1.8.3 (2026-11-10)
 
 **侧栏帧缓冲：每秒重播最后一帧（≥1s 不落空）。**

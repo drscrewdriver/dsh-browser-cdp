@@ -13,6 +13,7 @@ import { FfmpegCaptureBackend } from './capture-ffmpeg.ts'
 import { PickChannel } from './pick-channel.ts'
 import { captureMarked } from '../cdp/marks.ts'
 import { BCDP_CDP_ENGINE, capabilitiesFromEnvValue } from '../cdp/capabilities.ts'
+import { clampViewportSize, widthWithDelta, computeWindowBounds, aspectHeight } from './window-size.ts'
 
 const SENTINEL = '@@DSH_RESULT@@'
 /**
@@ -104,6 +105,11 @@ const sseClients = new Set<SseClient>()
 const videoClients = new Set<VideoClient>()
 const probeCache = new Map<string, { at: number; human: unknown }>()
 const frameCache = new Map<string, CachedFrame>()
+// Panel size-sync caches: a CDP round-trip for the windowId/bounds/chrome-frame
+// on every drag step is ~5 round-trips; cache them so each step is one
+// setWindowBounds. Short TTLs keep them fresh without stalling the drag.
+const winCache = new Map<string, { windowId: number; bounds: { left?: number; top?: number; width?: number; height?: number }; at: number }>()
+const chromeFrameCache = new Map<string, { width: number; height: number; viewport: { width: number; height: number }; at: number }>()
 let active: ActiveBrowser | null = null
 
 /**
@@ -523,6 +529,72 @@ async function main(): Promise<void> {
       }
       if (req.method === 'POST' && url.pathname === '/api/close') { const { targetId } = await readJson(req); if (!active || !targetId) return sendJson(res, 400, { ok: false, error: 'targetId required' }); await active.cdp.call('Target.closeTarget', { targetId }); return sendJson(res, 200, { ok: true }) }
       if (req.method === 'POST' && url.pathname === '/api/flush') { if (!active) return sendJson(res, 409, { ok: false, error: 'no live browser' }); let total = 0; try { const jar = await active.cdp.call('Storage.getCookies') as { cookies?: unknown[] }; total = Array.isArray(jar?.cookies) ? jar.cookies.length : 0 } catch { total = 0 } const flushed = await active.cdp.call('Storage.flushCookies').then(() => total).catch(() => 0); return sendJson(res, 200, { ok: true, total, flushed }) }
+      // POST /api/window-size — panel size-sync drives the REAL Chrome window.
+      // Body: { width?, height?, delta?, dy?, aspect?, maximize? }. The client's
+      // live-image box maps to a window viewport, plus Chrome's own frame delta
+      // (outer-inner), via Browser.setWindowBounds. windowId/chrome-frame are
+      // cached so each drag step is a single round-trip.
+      if (req.method === 'POST' && url.pathname === '/api/window-size') {
+        if (!active) return sendJson(res, 409, { ok: false, error: 'no live browser' })
+        const body = await readJson(req)
+        const targetId = await activeTargetId()
+        if (!targetId) return sendJson(res, 409, { ok: false, error: 'no active page target' })
+        try {
+          let win = winCache.get(targetId)
+          if (!win || Date.now() - win.at > 10_000) {
+            const r = await active.cdp.call('Browser.getWindowForTarget', { targetId }) as { windowId: number; bounds?: { left?: number; top?: number; width?: number; height?: number } }
+            win = { windowId: r.windowId, bounds: r.bounds || {}, at: Date.now() }
+            winCache.set(targetId, win)
+          }
+          if (body.maximize === true) {
+            await active.cdp.call('Browser.setWindowBounds', { windowId: win.windowId, bounds: { windowState: 'maximized' } })
+            return sendJson(res, 200, { ok: true, maximized: true, windowId: win.windowId })
+          }
+          let cf = chromeFrameCache.get(targetId)
+          if (!cf || Date.now() - cf.at > 2_000) {
+            const ev = await active.sessions.call(targetId, 'Runtime.evaluate', { expression: '({ow:outerWidth,oh:outerHeight,iw:innerWidth,ih:innerHeight})', returnByValue: true }, 3000) as { result?: { value?: { ow?: number; oh?: number; iw?: number; ih?: number } } }
+            const v = ev?.result?.value || {}
+            cf = {
+              width: Math.max(0, (v.ow || 0) - (v.iw || 0)),
+              height: Math.max(0, (v.oh || 0) - (v.ih || 0)),
+              viewport: { width: v.iw || 0, height: v.ih || 0 },
+              at: Date.now(),
+            }
+            chromeFrameCache.set(targetId, cf)
+          }
+          const cur = cf.viewport
+          let width = typeof body.width === 'number' && Number.isFinite(body.width) ? body.width : (typeof body.delta === 'number' && Number.isFinite(body.delta) ? widthWithDelta(cur.width, body.delta) : cur.width)
+          let height = typeof body.height === 'number' && Number.isFinite(body.height) ? body.height : (typeof body.dy === 'number' && Number.isFinite(body.dy) ? cur.height + body.dy : cur.height)
+          if (typeof body.aspect === 'string' && body.aspect !== '') height = aspectHeight(width, body.aspect, height)
+          const clamped = clampViewportSize(width, height)
+          const bounds = computeWindowBounds(clamped, { width: cf.width, height: cf.height }, { left: win.bounds.left, top: win.bounds.top })
+          await active.cdp.call('Browser.setWindowBounds', { windowId: win.windowId, bounds })
+          cf.viewport = { width: clamped.width, height: clamped.height }
+          cf.at = Date.now()
+          return sendJson(res, 200, { ok: true, windowId: win.windowId, viewport: { width: clamped.width, height: clamped.height } })
+        } catch (error) {
+          return sendJson(res, 502, { ok: false, error: (error as Error).message || String(error) })
+        }
+      }
+      // POST /api/navigate — panel refresh / manual URL. Body: { reload?, ignoreCache?, url? }.
+      if (req.method === 'POST' && url.pathname === '/api/navigate') {
+        if (!active) return sendJson(res, 409, { ok: false, error: 'no live browser' })
+        const body = await readJson(req)
+        const targetId = await activeTargetId()
+        if (!targetId) return sendJson(res, 409, { ok: false, error: 'no active page target' })
+        try {
+          if (body.reload === true) {
+            await active.sessions.call(targetId, 'Page.reload', { ignoreCache: body.ignoreCache === true }, 15000)
+            return sendJson(res, 200, { ok: true, reloaded: true, targetId })
+          }
+          const navUrl = typeof body.url === 'string' ? body.url.trim() : ''
+          if (navUrl === '') return sendJson(res, 400, { ok: false, error: 'url required' })
+          await active.sessions.call(targetId, 'Page.navigate', { url: navUrl }, 15000)
+          return sendJson(res, 200, { ok: true, url: navUrl, targetId })
+        } catch (error) {
+          return sendJson(res, 502, { ok: false, error: (error as Error).message || String(error) })
+        }
+      }
       if (req.method === 'GET' && url.pathname === '/api/stream') {
         res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive', 'x-accel-buffering': 'no' })
         res.write(':ok\n\n')

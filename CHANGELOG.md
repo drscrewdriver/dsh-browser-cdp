@@ -1,3 +1,16 @@
+## 1.9.7 (2026-11-10)
+
+**窄宽度下登录/验证横幅不再被挤成一列字。**
+
+- **根因**：横幅是单行 flex，右侧 `note`（“登录态由该浏览器自身保存”）写了 `flex: none; white-space: nowrap`，不收缩；窄侧栏下它把主文案的可用宽压到 ~1 字，就变成竖排一列。
+- **修法（两处横幅同步）**：
+  - 容器 `flex-wrap: wrap; row-gap` → 放不下时按钮/note 换行，而不是挤压正文；
+  - 正文 `flex: 1 1 11~12em; min-width: 0; overflow-wrap: anywhere`；
+  - `note` 改 `flex: 0 1 auto; min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis`（超长就省略）；
+  - 横幅设为 `container-type: inline-size`，`@container (max-width: 260px)` 时直接隐藏 `note` 与 captcha 的 kind 胶囊。
+- **文案缩短**：`loginSelfPersist` 改为“登录态由该浏览器自身保存” / “Saved by the browser profile itself.”｡
+- **测试**：1021 passed / 13 skipped（纯样式改动）。
+
 ## 1.9.6 (2026-11-10)
 
 **修掉两次捕获之间的画面缺口（1s 缓冲重播导致的重渲染回退）。**

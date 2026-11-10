@@ -138,7 +138,7 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 			refresh: 'Refresh',
 			backToLive: '← Back to live',
 			dragHint: 'Drag to move panel',
-			loginTitle: 'Log in via the CDP browser bridge window on your desktop',
+			loginTitle: 'If the page asks you to sign in, log in in the {where} on your desktop.',
 			loginBtn: 'Logged in, save',
 			loginSaving: 'Saving…',
 			loginSaved: 'Saved {n} sessions',
@@ -146,7 +146,14 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 			loginFailed: 'Save failed',
 			loginDismiss: 'Dismiss',
 			captchaTitle: '⚠️ CAPTCHA detected',
-			captchaHint: 'Complete verification in the CDP browser bridge window; the agent will continue.',
+			captchaHint: 'Complete the verification manually in the {where}; the agent will continue after that.',
+			whereCdp: '“{label}” browser window',
+			whereEgo: 'ego browser window',
+			whereTabbit: 'Tabbit browser window',
+			whereLocal: 'managed Chrome window',
+			whereGeneric: 'agent browser window',
+			loginHeadless: 'The active target is Lightpanda (headless) — there is no window to sign in or verify in. Switch to a headed target (CDP endpoint / local Chrome / ego CLI / Tabbit).',
+			loginSelfPersist: 'This browser keeps the login in its own profile — nothing to save here.',
 			captchaDismiss: 'Dismiss',
 			hintReset: 'Reset · scroll to pan · Ctrl+scroll to zoom · double-click to reset',
 			hintPan: 'Ctrl+scroll to zoom · Ctrl+drag to pan · double-click to reset',
@@ -253,7 +260,7 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 			refresh: '刷新',
 			backToLive: '← 返回实时',
 			dragHint: '拖动移动面板',
-			loginTitle: '需要账号登录时，请到桌面上那个 「CDP 浏览器代理」 Chrome 窗口完成登录。',
+			loginTitle: '需要账号登录时，请到桌面上那个 {where} 完成登录。',
 			loginBtn: '已登录，保存',
 			loginSaving: '保存中…',
 			loginSaved: '已保存 {n} 条会话',
@@ -261,7 +268,14 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 			loginFailed: '保存失败',
 			loginDismiss: '关闭提示',
 			captchaTitle: '⚠️ 检测到人机验证',
-			captchaHint: '请在桌面那个 「CDP 浏览器代理」 浏览器窗口手动完成验证，agent 会继续。',
+			captchaHint: '请在桌面那个 {where} 手动完成验证，agent 会继续。',
+			whereCdp: '「{label}」浏览器窗口',
+			whereEgo: 'ego 浏览器窗口',
+			whereTabbit: 'Tabbit 浏览器窗口',
+			whereLocal: '本机 Chrome 窗口（受管启动）',
+			whereGeneric: 'agent 浏览器窗口',
+			loginHeadless: '当前激活的是 Lightpanda（无头引擎），没有可登录/验证的窗口；请切换到有头目标（CDP 端点 / 本机 Chrome / ego CLI / Tabbit）。',
+			loginSelfPersist: '登录态保存在该浏览器自己的 profile 里，无需手动落盘。',
 			captchaDismiss: '关闭提示',
 			hintReset: '已复位 · 滚轮滚动页面 · Ctrl+滚轮缩放 · 双击复位',
 			hintPan: 'Ctrl+滚轮缩放 · Ctrl+拖动平移 · 双击复位',
@@ -339,6 +353,37 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 			var text = dict[key] || (watchEn as any)[key] || key
 			if (params) { for (var k in params) { text = text.replace(new RegExp('{' + k + '}', 'g'), String(params[k])) } }
 			return text
+		}
+
+		// ── backend-aware guidance copy ────────────────────────────────────────
+		// The login / captcha strips must name the window the user is actually
+		// looking at. `/api/bcdp/spaces` carries `link: { kind, label, engine }`
+		// for the ACTIVE connection target, so one copy template covers a raw CDP
+		// endpoint, the ego browser, Tabbit, and the managed local Chrome.
+		function linkWhere(link: any): string {
+			var kind = (link && link.kind) || ''
+			var label = (link && link.label) || ''
+			if (kind === 'lightpanda') return ''
+			if (kind === 'ego-cli') return wt('whereEgo')
+			if (kind === 'tabbit-cli') return wt('whereTabbit')
+			if (kind === 'localhost' || kind === 'local') return wt('whereLocal')
+			if (label) return wt('whereCdp', { label: label })
+			return wt('whereGeneric')
+		}
+		function linkLoginLine(link: any): string {
+			if ((link && link.kind) === 'lightpanda') return wt('loginHeadless')
+			return wt('loginTitle', { where: linkWhere(link) })
+		}
+		function linkCaptchaLine(link: any): string {
+			if ((link && link.kind) === 'lightpanda') return wt('loginHeadless')
+			return wt('captchaHint', { where: linkWhere(link) })
+		}
+		// Only a CDP endpoint / managed local Chrome has a worker that can flush
+		// cookies down to disk. ego CLI and Tabbit own their profiles; Lightpanda
+		// has no profile UI — showing "save login" for them is a dead end.
+		function linkFlushable(link: any): boolean {
+			var kind = (link && link.kind) || ''
+			return kind !== 'ego-cli' && kind !== 'tabbit-cli' && kind !== 'lightpanda'
 		}
 
 		const SPACES_ROUTE = '/api/bcdp/spaces'
@@ -1509,13 +1554,13 @@ h('button', { type: 'button', disabled: !writable || isFull(links) || hasCliLink
 					</div>
 					<div id="dsh-ego-tabs"></div>
 					<div id="dsh-ego-login">
-						<span class="dsh-ego-login-txt">${wt('loginTitle')}</span>
+						<span class="dsh-ego-login-txt" id="dsh-ego-login-txt">${wt('loginTitle', { where: wt('whereGeneric') })}</span>
 						<button id="dsh-ego-login-btn" class="dsh-ego-login-btn" type="button">${wt('loginBtn')}</button>
 						<span class="dsh-ego-login-note" id="dsh-ego-login-note"></span>
 						<button class="dsh-ego-dismiss" type="button" title="${wt('loginDismiss')}" data-dismiss="login">×</button>
 					</div>
 					<div id="dsh-ego-captcha">
-						<span class="dsh-ego-captcha-txt"><b>${wt('captchaTitle')}</b> — ${wt('captchaHint')}</span>
+						<span class="dsh-ego-captcha-txt"><b>${wt('captchaTitle')}</b> — <span id="dsh-ego-captcha-hint">${wt('captchaHint', { where: wt('whereGeneric') })}</span></span>
 						<span class="dsh-ego-captcha-kind" id="dsh-ego-captcha-kind"></span>
 						<button class="dsh-ego-dismiss" type="button" title="${wt('captchaDismiss')}" data-dismiss="captcha">×</button>
 					</div>
@@ -1547,10 +1592,12 @@ h('button', { type: 'button', disabled: !writable || isFull(links) || hasCliLink
 				const historyList = panel.querySelector('#dsh-ego-historylist')
 				const tabsEl = panel.querySelector('#dsh-ego-tabs')
 				const loginEl = panel.querySelector('#dsh-ego-login')
+				const loginTxt = panel.querySelector('#dsh-ego-login-txt')
 				const loginBtn = panel.querySelector('#dsh-ego-login-btn')
 				const loginNote = panel.querySelector('#dsh-ego-login-note')
 				const captchaEl = panel.querySelector('#dsh-ego-captcha')
 				const captchaKindEl = panel.querySelector('#dsh-ego-captcha-kind')
+				const captchaHintEl = panel.querySelector('#dsh-ego-captcha-hint')
 				const FLUSH_ROUTE = '/api/bcdp/flush'
 
 				// Guide strips that the user can dismiss (×). Once closed in this
@@ -1583,6 +1630,9 @@ h('button', { type: 'button', disabled: !writable || isFull(links) || hasCliLink
 				// of depending on a fresh network round-trip (which may hang when
 				// the worker/host is transiently unreachable).
 				let lastList: any[] = []
+				// Which connection target the panel is looking at ({kind,label,engine}),
+				// reported by /api/bcdp/spaces. Drives the login / captcha copy.
+				let panelLink: any = null
 
 				// Toggle the history drawer (side panel).
 				const setHistory = (open: any) => {
@@ -2277,6 +2327,9 @@ h('button', { type: 'button', disabled: !writable || isFull(links) || hasCliLink
 							if (disposed || !res.ok) { renderEmpty(); return }
 							const data = await res.json()
 							if (!data || data.ok !== true) { renderEmpty(); return }
+							// Backend identity for the login / captcha copy (CDP endpoint label,
+							// ego browser, Tabbit, Lightpanda, …) — refreshed with the spaces list.
+							if (data.link) panelLink = data.link
 							applyCaptureStatus(data.capture)
 							if (data.cliFrameMode === true && Array.isArray(data.spaces)) {
 								// Seed an instant image from the route; ongoing updates arrive
@@ -2598,16 +2651,24 @@ clearTimeout((panel as any)._dshHideT)
 					const show = hasPage && !captchaEl.classList.contains('show')
 					loginEl.classList.toggle('show', show)
 					loginNote.textContent = ''
+					// Name the backend actually in use and drop the "save login" action
+					// when it cannot apply (ego CLI / Tabbit own their profiles; headless
+					// Lightpanda has no window at all).
+					if (loginTxt) loginTxt.textContent = linkLoginLine(panelLink)
+					const canFlush = linkFlushable(panelLink)
+					if (loginBtn instanceof HTMLElement) loginBtn.hidden = !canFlush
+					if (!canFlush) loginNote.textContent = wt('loginSelfPersist')
 				}
 				// Human-verification (CAPTCHA) reminder: if any live page reports a
 				// challenge, flash a strip asking the user to complete it in the
-				// 'ego lite — agent' browser window (the same session the panel views).
+				// browser window the panel is actually viewing.
 				const maybeShowCaptchaGuide = () => {
 					if (disposed || dismissedGuides.captcha) return
 					const hit = lastList.find(s => s.humanCheck && s.humanCheck.detected)
 					const show = !!hit
 					captchaEl.classList.toggle('show', show)
 					if (show && captchaKindEl) captchaKindEl.textContent = hit.humanCheck.kind || 'captcha'
+					if (captchaHintEl) captchaHintEl.textContent = linkCaptchaLine(panelLink)
 				}
 				// "已登录，保存" → POST /api/bcdp/flush, which forces the agent
 				// browser's persistent cookies down to its on-disk profile so a
@@ -3584,6 +3645,8 @@ clearTimeout((panel as any)._dshHideT)
 			this._zoomHint = null
 			this._zoomHintTimer = null
 			this._pointerState = null
+			// Backend identity from /api/bcdp/spaces ({kind,label,engine}).
+			this.link = null
 			var self = this
 			this.keyboardProxy = createKeyboardProxy(function (targetId: any, type: any, params: any) { self.sendInput(targetId, type, params) })
 			this.dismissedGuides = { login: false, captcha: false }
@@ -3603,6 +3666,7 @@ clearTimeout((panel as any)._dshHideT)
 				busy: false,
 				showLoginGuide: false,
 				captchaKind: null,
+				link: null,
 				historyOpen: false,
 				zoomHint: null,
 				wiringStale: false,
@@ -3693,6 +3757,7 @@ clearTimeout((panel as any)._dshHideT)
 				s.engineUnsupported = self.engineUnsupported
 				s.pick = self._pick
 				s.pickMessage = self._pickMessage
+				s.link = self.link
 			})
 			this._syncWatch(currentTargetId)
 		}
@@ -3836,6 +3901,7 @@ clearTimeout((panel as any)._dshHideT)
 					if (self.disposed || !res.ok) { self._renderEmpty(); return }
 					var data = await res.json()
 					if (!data || data.ok !== true) { self._renderEmpty(); return }
+					if (data.link) self.link = data.link
 					self._applyCaptureStatus(data.capture)
 					// ego-cli degraded frame source: poll the single synthetic space and
 					// seed frameCache with the cli-frame route URL (same trick as the FAB
@@ -4521,10 +4587,10 @@ clearTimeout((panel as any)._dshHideT)
 			// Guide strips
 			var guides = []
 			if (state.showLoginGuide) {
-				guides.push(h(EgoLoginGuide, { key: 'login', controller: controller }))
+				guides.push(h(EgoLoginGuide, { key: 'login', controller: controller, link: state.link }))
 			}
 			if (state.captchaKind) {
-				guides.push(h(EgoCaptchaGuide, { key: 'captcha', kind: state.captchaKind, controller: controller }))
+				guides.push(h(EgoCaptchaGuide, { key: 'captcha', kind: state.captchaKind, controller: controller, link: state.link }))
 			}
 
 			// Tab strip
@@ -4685,11 +4751,14 @@ clearTimeout((panel as any)._dshHideT)
 			var note = noteState[0], setNote = noteState[1]
 			var savingState = React.useState(false)
 			var saving = savingState[0], setSaving = savingState[1]
+			// Headless engines have no window to sign in to, and ego CLI / Tabbit keep
+			// the login in their own profiles — no "save login" action for those.
+			var canFlush = linkFlushable(props.link)
 			return h('div', { className: 'dsh-ego-side-login' },
 				h('span', { className: 'dsh-ego-side-login-txt' },
-					wt('loginTitle')
+					linkLoginLine(props.link)
 				),
-				h('button', {
+				canFlush ? h('button', {
 					className: 'dsh-ego-side-login-btn' + (saving ? ' saving' : ''),
 					type: 'button',
 					disabled: saving,
@@ -4701,7 +4770,8 @@ clearTimeout((panel as any)._dshHideT)
 							else setNote(j && j.error ? wt('loginNotConnected') : wt('loginFailed'))
 						}).catch(function () { setNote(wt('loginFailed')) }).finally(function () { setSaving(false) })
 					},
-				}, saving ? wt('loginSaving') : wt('loginBtn')),
+				}, saving ? wt('loginSaving') : wt('loginBtn')) : null,
+				!canFlush ? h('span', { className: 'dsh-ego-side-login-note' }, wt('loginSelfPersist')) : null,
 				note ? h('span', { className: 'dsh-ego-side-login-note' }, note) : null,
 				h('button', {
 					className: 'dsh-ego-side-iconbtn', type: 'button', title: wt('loginDismiss'),
@@ -4717,7 +4787,7 @@ clearTimeout((panel as any)._dshHideT)
 			return h('div', { className: 'dsh-ego-side-captcha' },
 				h('span', { className: 'dsh-ego-side-captcha-txt' },
 					h('b', null, wt('captchaTitle')),
-					' — ' + wt('captchaHint')
+					' — ' + linkCaptchaLine(props.link)
 				),
 				h('span', { className: 'dsh-ego-side-captcha-kind' }, kind),
 				h('button', {

@@ -18,7 +18,7 @@ import type { EgoContext, RegisterRouteOptions, ResolvedConfig, WebServerLike } 
 import type { SettingsBridge } from './settings.ts'
 import type { FfmpegInstallationManager, FfmpegStatus } from './ffmpeg-installation.ts'
 import type { LoginImportOptions, LoginImportReport } from './login-import.ts'
-import { EGO_LINUX_CDP_URL } from './cdp-targets.ts'
+import { EGO_LINUX_CDP_URL, resolveEffectiveLink } from './cdp-targets.ts'
 import { BCDP_CDP_ENGINE } from './cdp/capabilities.ts'
 import type { CliFramePoller } from './cast/cli-frame-poller.ts'
 import type { PanelActionRunner } from './cast/panel-actions.ts'
@@ -683,6 +683,18 @@ export function initCastServer(
   const ensureWorker = makeEnsureWorker(ctx, cfg, ffmpegManager)
   const pushConfig = makePushConfig(ensureWorker, ffmpegManager)
   activeCliPoller = cliPoller
+  // Identity of the connection target the panel is currently viewing. The
+  // panel's login / captcha strips use it to name the window the user must act
+  // in (a CDP endpoint label, "ego browser", "Tabbit browser", …) instead of
+  // hard-coding one backend's window title.
+  const activeLinkInfo = (): { kind: string; label: string; engine: string | null } => {
+    const eff = resolveEffectiveLink(cfg.links, cfg.activeTargetId)
+    return {
+      kind: eff?.link.kind ?? '',
+      label: (eff?.link as { label?: string } | undefined)?.label ?? '',
+      engine: getAttachEngine(),
+    }
+  }
   // The web shell exposes `webServer` — the only HTTP host surface the plugin
   // uses. It is NOT a required inject (TUI / headless hosts have none), so we
   // resolve it opportunistically via ctx.get('webServer'); if absent here there
@@ -759,6 +771,7 @@ export function initCastServer(
             toolCallCount,
             cliFrameMode: true,
             cliFrameIntervalMs: 3000,
+            link: activeLinkInfo(),
             spaces: [{
               targetId: CLI_FRAME_TARGET_ID,
               url: cliFrame.url,
@@ -768,13 +781,16 @@ export function initCastServer(
             }],
           })
         }
-        return sendJson(res, 200, { ok: false, spaces: [], toolCallCount, reason: 'no live agent browser' })
+        return sendJson(res, 200, { ok: false, spaces: [], toolCallCount, link: activeLinkInfo(), reason: 'no live agent browser' })
       }
       const data = await proxyFrom(port, '/api/spaces')
-      if (!data) return sendJson(res, 200, { ok: false, spaces: [], toolCallCount, reason: 'worker not ready' })
+      if (!data) return sendJson(res, 200, { ok: false, spaces: [], toolCallCount, link: activeLinkInfo(), reason: 'worker not ready' })
       // Attach the host-side tool-call counter (the worker doesn't know about
-      // tool invocations; only the host's defineEgoTool path does).
-      return sendJson(res, 200, { ...(data as Record<string, unknown>), toolCallCount })
+      // tool invocations; only the host's defineEgoTool path does) and the
+      // active link identity — the panel's login / captcha copy must name the
+      // backend the user is actually looking at (CDP endpoint, ego CLI, Tabbit,
+      // Lightpanda), not a hard-coded "CDP bridge" window.
+      return sendJson(res, 200, { ...(data as Record<string, unknown>), link: activeLinkInfo(), toolCallCount })
     },
   })
 

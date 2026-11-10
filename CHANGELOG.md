@@ -1,3 +1,13 @@
+## 1.9.2 (2026-11-10)
+
+**登录/人机验证提示按实际后端命名（CDP 端点 / ego 浏览器 / Tabbit / Lightpanda）。**
+
+- **host**：`GET /api/bcdp/spaces` 新增 `link: { kind, label, engine }`（来自 `resolveEffectiveLink` + 附加引擎），三种分支（worker 代理 / cliFrame 降级 / 无浏览器）都带。
+- **文案模板化**：`loginTitle`/`captchaHint` 改用 `{where}` 占位符，新增 `whereCdp`(「{label}」浏览器窗口) / `whereEgo` / `whereTabbit` / `whereLocal` / `whereGeneric` / `loginHeadless`。不再硬编码「CDP 浏览器代理」。
+- **按后端降级提示**：ego-cli 与 Tabbit 自身持有 profile，不再显示「已登录，保存」（原先在 ego 路线点它只会得到「未连接浏览器」）；Lightpanda（无头）改为提示切换有头目标并隐藏保存按钮。
+- **两处 UI 同步**：侧栏 Tab（`state.link` 进快照）与浮窗（`panelLink` 随 spaces 刷新）均使用同一套 `linkLoginLine` / `linkCaptchaLine` / `linkFlushable`。
+- 全量 995 passed / 13 skipped。
+
 ## 1.9.1 (2026-11-10)
 
 **尺寸同步/预设/最大化/刷新/URL 两条路线打通 + 客户端 UI 落地（task 13/19/20/21）。**

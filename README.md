@@ -19,21 +19,6 @@
 
 [简体中文](README.md) | [Français](README.fr.md) | [Deutsch](README.de.md) | [Italiano](README.it.md) | [Русский](README.ru.md) | [Español](README.es.md)
 
-<p align="center">
-  <a href="https://dshfind.com/zh/plugins/drscrewdriver/dsh-browser-cdp?ref=badge"><img src="https://dshfind.com/api/badge/drscrewdriver/dsh-browser-cdp?lang=zh" alt="dshfind - dsh-browser-cdp"></a>
-  <a href="https://dshfind.com/zh/plugins/drscrewdriver/dsh-browser-cdp"><img src="https://dshfind.com/api/card/drscrewdriver/dsh-browser-cdp?lang=zh" alt="dsh-browser-cdp card"></a>
-</p>
-
-[![dsh.so risk](https://cdn.dsh.so/badge/dsh-browser-cdp.svg)](https://www.dsh.so/artifact/dsh-browser-cdp/?ref=badge)
-
-<p align="center">
-  <img src="https://img.shields.io/badge/DSH-0.1.7--rc.1~0.2.2--rc.1-blue" alt="DSH 0.1.7-rc.1 ~ 0.2.2-rc.1">
-  <img src="https://img.shields.io/badge/DSH--better--sidebar-%3E%3D0.12.2(optional)-red" alt="dsh-better-sidebar >= 0.12.2 (optional)">
-  <img src="https://img.shields.io/badge/Node-%3E%3D22-brightgreen?logo=node.js&logoColor=white" alt="Node >= 22">
-  <a href="https://www.npmjs.com/package/dsh-browser-cdp"><img src="https://img.shields.io/npm/v/dsh-browser-cdp?logo=npm" alt="npm version"></a>
-  <a href="https://github.com/drscrewdriver/dsh-browser-cdp/releases"><img src="https://img.shields.io/github/v/release/drscrewdriver/dsh-browser-cdp" alt="GitHub release"></a>
-  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="license MIT"></a>
-</p>
 
 > **仓库**：`github.com/drscrewdriver/dsh-browser-cdp`｜当前版本 **v1.7.12**｜版本历史见 [CHANGELOG.md](CHANGELOG.md)｜详情页：[dshfind](https://dshfind.com/zh/plugins/drscrewdriver/dsh-browser-cdp)
 

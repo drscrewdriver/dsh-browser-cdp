@@ -36,6 +36,7 @@ export const EGO_HELP_INDEX: Record<string, string> = {
     'Under toolInjection=lazy (the default) only bcdp_status stays registered — it is the unlock entry: calling it re-opens the other batches for this session. ' +
     'Every other batch (act / observe / wait / power / session / escape / judge) is deregistered until browser activity re-opens them; an idle reaper pass or a restart seals them again. ' +
     'Missing from the list = sealed, not broken, and not a wrong name. ' +
+    'A second gate is the ACTIVATED CHANNEL (link kind): on tabbit-cli only the tools that channel can translate are registered at all — bcdp_status, help, doctor, space, navigate, snapshot, click, fill, screenshot, tab, js, http, script. Everything else stays sealed there even after browser activity, because a call could only fail. On that channel reach for bcdp_js (single expression, e.g. window.scrollBy(0,600)) or bcdp_script (multi-step) instead. Other channels (cdp / ego-cli / lightpanda) are not narrowed by kind. ' +
     'Fix: call bcdp_status (it counts as browser activity), then retry the tool. ' +
     'A call made before that fails with "unknown tool" at the harness level, before this plugin sees it. ' +
     'To keep all 34 resident instead, set toolInjection=always in the profile config. ' +

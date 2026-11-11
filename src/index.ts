@@ -79,9 +79,13 @@ import {
   buildFillSnippet,
   buildScreenshotSnippet,
   buildFrameCaptureSnippet,
+  buildJsSnippet,
+  buildHttpSnippet,
+  buildScriptSnippet,
   translateLocator,
   type TabbitTab,
 } from './cdp/tabbit-cli-link.ts'
+import { TABBIT_CLI_SUPPORTED, backendKindOf } from './toolKinds.ts'
 import { assembleSystemOneBody, buildJudgeRuntime, describeJudge, sendJudge } from './jev/client.ts'
 import { makeJudgeEffects } from './jev/effects.ts'
 import { runAttempt } from './jev/attempt.ts'
@@ -1469,6 +1473,23 @@ export function tabbitSpaceRows(): { tabs: TabbitSpaceRow[]; updatedAt: number; 
   }
 }
 
+/**
+ * 把「本轮真的有图」的那个 tab 标成 active 行。
+ *
+ * 不是美化：客户端 `renderSpaces` 在仅激活模式下只保留 `active === true` 那一行，
+ * 然后拿这份名单去淘汰 `frameCache`。而 CLI 给的 `active` 是**浏览器 MRU tab**，
+ * 轮询拍的却是 **agent 正在驱动的那个 tab**——两者不一致时，刚拍到的帧会被当场
+ * 逐出，视图又切到一个从没拍过的行（“无截图”）；1s 心跳重播把帧塞回来，下个
+ * 3s `spaces` 再逐出——就是每轮一次的画/空闪跳。把主拍 tab 标为 active 后，
+ * 面板跟随的行永远有图。
+ *
+ * primaryTargetId 为空或在名单里找不到时原样返回（保持旧行为兼容，不凭空造 active）。
+ */
+export function rowsWithPrimaryActive(rows: readonly TabbitSpaceRow[], primaryTargetId: string): TabbitSpaceRow[] {
+  if (primaryTargetId === '' || !rows.some((r) => r.targetId === primaryTargetId)) return [...rows]
+  return rows.map((r) => (r.targetId === primaryTargetId ? { ...r, active: true } : { ...r, active: false }))
+}
+
 /** Error carrying the envelope code the gateway maps to a status. */
 function codedError(code: string, message: string): Error {
   return Object.assign(new Error(message), { code })
@@ -1754,7 +1775,10 @@ async function tryTabbitExecute(
   if (!cli.found) return { ok: false, text: `tabbit-cli not found: ${cli.error}` }
   const sub = ctx.subprocess
   // Record task name for frame poller (must reuse same task to access owned tabs).
-  _tabbitLastTaskName = taskName
+  // `bcdp_status` 不登记：它只做 diagnose，不拥有任何 tab。早期版本 status 不走本函数，
+  // 轮询器因此只在首个真实浏览动作后才启动；若让一次状态查询就点亮轮询，面板会在
+  // 还没有 agent 页面时就开始抓用户自己的 tab。
+  if (toolName !== 'bcdp_status') _tabbitLastTaskName = taskName
   const reqId = `${toolName}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
   // Every run reports the tab(s) it acquired. Remember the last one so the frame
   // poller screenshots THAT page instead of the task's default about:blank.
@@ -1764,13 +1788,27 @@ async function tryTabbitExecute(
   }
 
   switch (toolName) {
+    // `bcdp_status` 由宿主侧的 registerEgoStatus 在 tabbit 激活时显式转发到这里；
+    // `bcdp_help` / `bcdp_doctor` 两个 case 目前仍不可达（同为宿主侧 defineTool，
+    // 自己的 execute 不经过本分派闸）。保留是为了日后改回 t() 注册时行为仍正确；
+    // 改动时请一并核对。
     case 'bcdp_status': {
       // Report tabbit backend status: try diagnose (gives browser time to launch)
       const diag = await tabbitDiagnose(sub, cli.cliPath)
       return { ok: diag.reachable, available: diag.reachable, backend: 'tabbit-cli', raw: diag.raw.slice(0, 500), path: cli.cliPath }
     }
     case 'bcdp_help': {
-      return { ok: true, text: `Tabbit backend active (${cli.cliPath}).\nSupported tools: bcdp_space, bcdp_navigate, bcdp_snapshot, bcdp_click, bcdp_fill, bcdp_screenshot, bcdp_tab op=list.\nUnsupported tools will return errors (no ego fallback).`, backend: 'tabbit-cli' }
+      return {
+        ok: true,
+        text: [
+          `Tabbit backend active (${cli.cliPath}).`,
+          `Supported tools (${TABBIT_CLI_SUPPORTED.length}): ${TABBIT_CLI_SUPPORTED.join(', ')}.`,
+          'Not available on this backend (sealed from the tool list): bcdp_cdp, bcdp_key, bcdp_scroll, hover/select/check/drag, bcdp_wait, upload/download/dialog, captcha/auth/login_import, bcdp_jev_*.',
+          'Fallback: bcdp_js for a single expression (e.g. window.scrollBy(0,600)), bcdp_script for multi-step work.',
+          'Unsupported tools return errors (no ego fallback).',
+        ].join('\n'),
+        backend: 'tabbit-cli',
+      }
     }
     case 'bcdp_doctor': {
       const diag = await tabbitDiagnose(sub, cli.cliPath)
@@ -1829,27 +1867,46 @@ async function tryTabbitExecute(
       return { ok: false, text: receipt.error?.message ?? 'navigation failed' }
     }
     case 'bcdp_snapshot': {
-      const maxChars = typeof args.maxChars === 'number' ? args.maxChars : 8000
+      // 厂商对 observe 的 maxChars 有硬区间（真机原错：`observe maxChars must be an
+      // integer from 256 through 20000`）。越界值会白烧一个往返，所以先夹住
+      // 并把生效值回显出去——静默改变语义比报错更难诊断。
+      const requested = typeof args.maxChars === 'number' ? args.maxChars : 8000
+      const maxChars = Math.min(20000, Math.max(256, Math.trunc(requested)))
       const js = buildObserveSnippet(maxChars)
       const { receipt } = await runTabbitSnippet(sub, js, { cliPath: cli.cliPath, taskName, requestId: reqId })
-      if (receipt.ok) { trackRun(receipt); return { ok: true, text: String(receipt.data ?? ''), format: 'plaintext', backend: 'tabbit-playwright' } }
+      if (receipt.ok) {
+        trackRun(receipt)
+        // observe 契约把文本放在 snapshot：整个对象 String() 只会得到 [object Object]。
+        const d = receipt.data as { snapshot?: string; truncated?: boolean } | undefined
+        return {
+          ok: true,
+          text: typeof d?.snapshot === 'string' ? d.snapshot : '',
+          ...(d?.truncated === true ? { truncated: true } : {}),
+          ...(maxChars !== requested ? { maxCharsUsed: maxChars } : {}),
+          ...(receipt.dataTruncated === true ? TABBIT_OVERFLOW_HINT : {}),
+          format: 'plaintext',
+          backend: 'tabbit-playwright',
+        }
+      }
       return { ok: false, text: receipt.error?.message ?? 'observe failed' }
     }
     case 'bcdp_click': {
       const selector = str(args.selector, str(args.loc, ''))
-      const locExpr = translateLocator(selector)
-      if (!locExpr) return { ok: false, text: `bcdp_click: cannot translate selector "${selector}" for tabbit backend` }
-      const js = buildClickSnippet(locExpr)
+      const plan = translateLocator(selector)
+      if (!plan) return { ok: false, text: `bcdp_click: cannot resolve selector "${selector}" on the tabbit backend (use loc=role:…, loc=css:…, loc=href:…, or a snapshot ref like @e3)` }
+      const js = buildClickSnippet(plan)
       const { receipt } = await runTabbitSnippet(sub, js, { cliPath: cli.cliPath, taskName, requestId: reqId })
       if (receipt.ok) { trackRun(receipt); return { ok: true, ...receipt.data as object, backend: 'tabbit-playwright' } }
       return { ok: false, text: receipt.error?.message ?? 'click failed' }
     }
     case 'bcdp_fill': {
       const selector = str(args.selector, str(args.loc, ''))
-      const value = str(args.value, '')
-      const locExpr = translateLocator(selector)
-      if (!locExpr) return { ok: false, text: `bcdp_fill: cannot translate selector "${selector}" for tabbit backend` }
-      const js = buildFillSnippet(locExpr, value)
+      // 工具面的必填名是 `text`（ego 分支同样读 text）；早先这里只读 value，
+      // 等于 tabbit 路线上 fill 永远填一段空串。
+      const value = str(args.text, str(args.value, ''))
+      const plan = translateLocator(selector)
+      if (!plan) return { ok: false, text: `bcdp_fill: cannot resolve selector "${selector}" on the tabbit backend (use loc=role:…, loc=css:…, loc=href:…, or a snapshot ref like @e3)` }
+      const js = buildFillSnippet(plan, value)
       const { receipt } = await runTabbitSnippet(sub, js, { cliPath: cli.cliPath, taskName, requestId: reqId })
       if (receipt.ok) { trackRun(receipt); return { ok: true, ...receipt.data as object, backend: 'tabbit-playwright' } }
       return { ok: false, text: receipt.error?.message ?? 'fill failed' }
@@ -1882,11 +1939,125 @@ async function tryTabbitExecute(
       }
       return { ok: false, text: receipt.error?.message ?? 'screenshot failed' }
     }
+    case 'bcdp_js': {
+      const expr = str(args.expression, '')
+      if (expr === '') return { ok: false, text: 'bcdp_js: expression is required', backend: 'tabbit-playwright' }
+      const { receipt } = await runTabbitSnippet(sub, buildJsSnippet(expr), { cliPath: cli.cliPath, taskName, requestId: reqId })
+      if (receipt.ok) {
+        trackRun(receipt)
+        const d = receipt.data as { result?: unknown } | undefined
+        return { ok: true, result: d?.result ?? null, ...(receipt.dataTruncated === true ? TABBIT_OVERFLOW_HINT : {}), backend: 'tabbit-playwright' }
+      }
+      return { ok: false, text: receipt.error?.message ?? 'js evaluation failed', backend: 'tabbit-playwright' }
+    }
+    case 'bcdp_http': {
+      const url = str(args.url, '')
+      if (url === '') return { ok: false, text: 'bcdp_http: url is required', backend: 'tabbit-playwright' }
+      // server mode 走 Node 侧 fetch，snippet 运行时没有；拒绝而不是静默降级成 browser 语义。
+      if (str(args.mode, 'browser') === 'server') {
+        return {
+          ok: false,
+          text: "bcdp_http: mode=server is unavailable on the tabbit backend (no Node-side fetch in the snippet runtime). Use mode=browser, which sends the request through page.fetch with the browser profile's cookies/CORS.",
+          backend: 'tabbit-playwright',
+        }
+      }
+      const init: Record<string, unknown> = { method: str(args.method, 'GET').toUpperCase() }
+      if (args.headers !== undefined && typeof args.headers === 'object' && args.headers !== null) {
+        init.headers = args.headers
+      }
+      if (args.body !== undefined) init.body = str(args.body, '')
+      const { receipt } = await runTabbitSnippet(sub, buildHttpSnippet(url, init), { cliPath: cli.cliPath, taskName, requestId: reqId })
+      if (receipt.ok) {
+        trackRun(receipt)
+        // data.ok 代的是 HTTP 层结果（page.fetch 对 4xx/5xx 返回 ok:false 而非抛异常），
+        // 展开顺序保证它能覆盖外层的求值成功标记。
+        return { ok: true, ...(receipt.data as object), backend: 'tabbit-playwright' }
+      }
+      return { ok: false, text: friendlyTabbitFetchError(receipt.error?.message ?? 'http request failed'), backend: 'tabbit-playwright' }
+    }
+    case 'bcdp_script': {
+      const script = str(args.script, '')
+      if (script === '') return { ok: false, text: 'bcdp_script: script is required', backend: 'tabbit-playwright' }
+      // verbatim 承诺的是「无 preamble 的 ego 裸 heredoc」，Tabbit 无等价物。
+      if (args.verbatim === true) {
+        return {
+          ok: false,
+          text: 'bcdp_script: verbatim:true is ego-only (it promises a bare ego heredoc with no preamble). Drop verbatim, or switch to an ego-cli/CDP link.',
+          backend: 'tabbit-playwright',
+        }
+      }
+      const timeoutMs = typeof args.timeoutMs === 'number' ? args.timeoutMs : 120_000
+      const { receipt } = await runTabbitSnippet(sub, buildScriptSnippet(script), { cliPath: cli.cliPath, taskName, requestId: reqId, timeoutMs })
+      if (receipt.ok) {
+        trackRun(receipt)
+        const d = receipt.data as { stdout?: string; result?: unknown; error?: string } | undefined
+        if (typeof d?.error === 'string' && d.error !== '') {
+          // 输出 schema 是 strict 的：`stdout` 声明为 required，失败分支也必须给齐
+          // 契约字段（用 error 而不是 text），否则会被宿主拒成「输出不可用」。
+          return {
+            ok: false,
+            stdout: d?.stdout ?? '',
+            stderr: friendlyTabbitScriptError(d.error),
+            output: friendlyTabbitScriptError(d.error),
+            result: null,
+            error: friendlyTabbitScriptError(d.error),
+            backend: 'tabbit-playwright',
+          }
+        }
+        return { ok: true, stdout: d?.stdout ?? '', result: d?.result ?? null, ...(receipt.dataTruncated === true ? TABBIT_OVERFLOW_HINT : {}), backend: 'tabbit-playwright' }
+      }
+      {
+        const msg = friendlyTabbitScriptError(receipt.error?.message ?? 'script failed')
+        return { ok: false, stdout: '', stderr: msg, output: msg, result: null, error: msg, backend: 'tabbit-playwright' }
+      }
+    }
     default:
       // Tabbit is the active backend: do NOT fall through to ego path.
       // Unsupported tools return a clear error instead of silently driving Chrome.
-      return { ok: false, text: `bcdp tool "${toolName}" is not yet supported on tabbit-cli backend. Supported: space, navigate, snapshot, click, fill, screenshot, tab list.` }
+      return {
+        ok: false,
+        text: `bcdp tool "${toolName}" is not supported on the tabbit-cli backend. Supported (${TABBIT_CLI_SUPPORTED.length}): ${TABBIT_CLI_SUPPORTED.join(', ')}. Fallback: bcdp_js (single expression) or bcdp_script (multi-step).`,
+      }
   }
+}
+
+/**
+ * 溢出结果只读回了一部分时的可行动提示。文案跟厂商自己的建议对齐
+ * （`RESULT_TOO_LARGE` 那行：return bounded data or save … to an artifact path
+ * and return only the path）——静默截断会退化成“模型拿残缺正文反复重试”。
+ */
+const TABBIT_OVERFLOW_HINT = {
+  resultTruncated: true,
+  hint: 'result exceeded the read-back cap and was truncated; return bounded data, or save it via artifactPath() (page.fetch as:"file") and return only the path',
+}
+
+/**
+ * `page.fetch` 受页面源的 CORS / CSP 约束，跳源被拒时浏览器只给一句
+ * `TypeError: Failed to fetch`——不解释归因的话，模型会当成工具坏了反复重试
+ * （真机实测撞过：页面已导航到另一域名后再抓原域接口）。
+ */
+function friendlyTabbitFetchError(message: string): string {
+  if (/failed to fetch|ERR_|net::|cors|networkerror/i.test(message)) {
+    return (
+      message +
+      " (page.fetch obeys the current page origin's CORS/CSP rules — a cross-origin URL only works when the server allows it. Either be on that origin first, use a CORS-enabled endpoint, or drive it from bcdp_script.)"
+    )
+  }
+  return message
+}
+
+/**
+ * Tabbit 的 snippet 运行时没有 ego SDK 全局（taskSpaces / cdp / fetch）。
+ * 命中这类 ReferenceError 时补一句环境差异，否则模型会误判工具坏了。
+ */
+function friendlyTabbitScriptError(message: string): string {
+  if (/is not defined/i.test(message) && /\b(taskSpaces|cdp|fetch)\b/.test(message)) {
+    return (
+      message +
+      ' (bcdp_script on the tabbit backend runs in the browser Playwright runtime: taskSpaces / global cdp() / fetch.browser|server do not exist there. Available: page, context, browser, pages(), usePage, tabbit, expect, assert, artifactPath, page.fetch.)'
+    )
+  }
+  return message
 }
 
 function defineEgoTool(ctx: EgoContext, cfg: EgoRuntimeConfig, opts: EgoToolOptions): ToolHandle {
@@ -2189,6 +2360,9 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
       judgeConfigured: judgeConfigured({ jevKey: cfg.jevKey, layaKey: cfg.layaKey }),
       active: browserActive,
       batchDepth: browseBatchDepth,
+      // kind 闸：链路类型是设置里的静态值（volatile），冷启动即可收窄；
+      // 未知 kind 走 'cdp'（全开），宁可多给不可误封。
+      backendKind: backendKindOf(resolveEffectiveLink(cfg.links, cfg.activeTargetId)?.link?.kind),
     }),
     logger: ctx.logger,
   })
@@ -2216,6 +2390,7 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
         judgeConfigured: judgeConfigured({ jevKey: cfg.jevKey, layaKey: cfg.layaKey }),
         active: depth > 0,
         batchDepth: depth,
+        backendKind: backendKindOf(resolveEffectiveLink(cfg.links, cfg.activeTargetId)?.link?.kind),
       }
       // Only restrict among tools that are ALREADY globally registered;
       // the filter hides those this session hasn't earned.
@@ -2355,7 +2530,14 @@ bridge.onChange(() => tiers.reapply())
     try {
       const taskName = `dsh-${sessionSpaceToken('poll')}`
       const result = await tabbitListTabs(ctx.subprocess, cli.cliPath, taskName)
-      Object.assign(_tabbitTabCache, result, { updatedAt: Date.now() })
+      // 一次失败/空清单绝不清空缓存：面板的 tab 行与 `--tab` 目标都来自这里，
+      // 被空结果覆写后 broadcastCliFrames 会退到合成单行（targetId 对不上按 tabId
+      // 绑定的图），画面就变成「闪一下又空」。保留上一份可用清单，下一轮自然更正。
+      if (result.tabs.length > 0) {
+        Object.assign(_tabbitTabCache, result, { updatedAt: Date.now() })
+      } else if (_tabbitTabCache.tabs.length > 0) {
+        ctx.logger?.info?.('dsh-browser-cdp: tabbit inventory returned empty; keeping the previous list')
+      }
     } catch { /* best-effort, never crash the timer */ }
   }, 3000)
   ctx.effect?.(() => () => clearInterval(tabbitTabTimer))
@@ -2376,6 +2558,9 @@ bridge.onChange(() => tiers.reapply())
     join(tmpdir(), `dsh-browser-cdp-frame-${process.pid}-${String(tabId)}.jpg`)
   /** Round-robin cursor: 3s ticks → active tab every tick, one background tab extra. */
   let tabbitFrameRR = 0
+  /** 上一份非空的 tab 清单：瞬时拉不到列表时用它撑住面板，避免退到合成单行。 */
+  let _tabbitGoodRows: TabbitSpaceRow[] = []
+  let _tabbitGoodRowsAt = 0
   const tabbitFrameTimer = setInterval(async () => {
     const eff = resolveEffectiveLink(cfg.links, cfg.activeTargetId)
     if (eff?.link.kind !== TABBIT_CLI_KIND) return
@@ -2392,7 +2577,17 @@ bridge.onChange(() => tiers.reapply())
       // nothing and the capture burns the full hard deadline. Target the tab a
       // tool actually drove, else whatever the inventory flags as active.
       const activeTab = _tabbitLastActiveTabId ?? _tabbitTabCache.tabs.find((t) => t.active === true)?.tabId
-      const rows = tabbitSpaceRows().tabs
+      const inv = tabbitSpaceRows()
+      // rows 为空时不能直接丢给广播：那会命中 `lastCliSpaces = null` 分支、退回
+      // 合成单行，而图是按真实 tabId 绑定的，两者对不上就是白屏。给 30s 的
+      // 「沿用上一份非空清单」窗口，超过才承认真没有 tab。
+      if (inv.tabs.length > 0) {
+        _tabbitGoodRows = inv.tabs
+        _tabbitGoodRowsAt = Date.now()
+      }
+      const rows = inv.tabs.length > 0
+        ? inv.tabs
+        : (Date.now() - _tabbitGoodRowsAt < 30_000 ? _tabbitGoodRows : [])
       const allMode = getCliTrackAll(cfg.tabTracking === 'all')
       // Capture plan for this tick:
       //  - 仅激活: the active tab only (1 CLI run).
@@ -2467,7 +2662,10 @@ bridge.onChange(() => tiers.reapply())
       tabbitFrameSeq++
       // One cycle → one `spaces` + one `frame` per captured tab. The rows are the
       // real inventory, so the strip lists every tab and the images bind by id.
-      broadcastCliFrames(images, rows, Date.now())
+      // 但面板跟随的那一行必须是本轮真拍到的 tab，否则客户端会拿它去淘汰
+      // frameCache 里刚到的帧（见 rowsWithPrimaryActive）。
+      const primaryId = typeof plan[0] === 'number' ? String(plan[0]) : (images[0]?.targetId ?? '')
+      broadcastCliFrames(images, rowsWithPrimaryActive(rows, primaryId), Date.now())
     } catch (err) {
       ctx.logger?.warn?.(`dsh-browser-cdp: tabbit frame poller error: ${String((err as Error)?.message ?? err)}`)
     } finally {
@@ -2774,6 +2972,13 @@ bridge.onChange(() => tiers.reapply())
   )
 }
 /** `bcdp_status` probes the SAME channel work uses: a `nodejs` heredoc. */
+/**
+ * Tabbit 激活时被封在注入面之外的工具清单 + 兜底路径。由 `bcdp_status` 的
+ * `guidance` 字段带出——工具「不在列表」时模型需要知道它不是坏了。
+ */
+const TABBIT_SEALED_GUIDANCE =
+  'On the tabbit backend these tools are sealed (not broken): bcdp_cdp, bcdp_key, bcdp_scroll, hover/select/check/drag, bcdp_wait, upload/download/dialog, captcha/auth/login_import, bcdp_jev_*. Use bcdp_js for a single expression (e.g. window.scrollBy(0,600)) or bcdp_script for multi-step work.'
+
 function registerEgoStatus(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool: ToolHandle) => void, tiers: TierView): void {
   reg(
     defineTool({
@@ -2790,6 +2995,21 @@ function registerEgoStatus(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool: T
             available: { type: 'boolean', required: true },
             path: { type: 'string' },
             exitCode: { type: 'integer' },
+            // tabbit 通道的就绪判定走 diagnose，会带这两个字段；不声明就会被
+            // additionalProperties:false 拒掉——status 仍然算浏览器活动（能解锁其
+            // 它工具），但自己永远不可用。
+            backend: { type: 'string' },
+            raw: { type: 'string' },
+            backendKind: { type: 'string' },
+            toolFace: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                live: { type: 'integer' },
+                sealed: { type: 'integer' },
+              },
+            },
+            guidance: { type: 'string' },
             facades: {
               type: 'object',
               additionalProperties: false,
@@ -2820,6 +3040,24 @@ function registerEgoStatus(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool: T
         // makes pollerObserves resolve to dsh-agent-<sid8> immediately.
         cfg.spaceTracker.setCurrentSession(callingSessionId(exec), resolveEffectiveLink(cfg.links, cfg.activeTargetId)?.link.id ?? '')
         return withEgoLock(async () => {
+          // 注入面与通道类型先算一次：两个返回分支都要带上——probe 失败时模型
+          // 同样需要知道「工具不在列表」是 kind 收窄，不是插件坏了。
+          const face = tiers.surface()
+          const kind = backendKindOf(resolveEffectiveLink(cfg.links, cfg.activeTargetId)?.link?.kind)
+          const faceFields = {
+            backendKind: kind,
+            toolFace: { live: face.live.length, sealed: face.sealed.length },
+            ...(kind === 'tabbit-cli' ? { guidance: TABBIT_SEALED_GUIDANCE } : {}),
+          }
+          // tabbit 为激活链路时，内置运行时的 facade 探针答的不是这个问题（那条
+          // 运行时根本没被驱动）：就绪与否必须由 tabbit-cli diagnose 回答，否则
+          // available 会从错的通道上来。
+          const effLinkStatus = resolveEffectiveLink(cfg.links, cfg.activeTargetId)
+          if (effLinkStatus?.link.kind === TABBIT_CLI_KIND) {
+            const tabName = `dsh-${sessionSpaceToken(callingSessionId(exec) ?? '')}`
+            const probe = await tryTabbitExecute(ctx, cfg, 'bcdp_status', {}, tabName)
+            return { ...(probe as object), ...faceFields }
+          }
           try {
             const { attach } = effectiveChannel(cfg)
             // R1 �?probe with the exact argv real tool runs use, so "available"
@@ -2850,6 +3088,7 @@ function registerEgoStatus(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool: T
                 facades?.browser === 'object',
               path: attach.cliPath ?? cfg.egoBin,
               exitCode: outcome.exitCode,
+              ...faceFields,
               ...(facades ? { facades } : {}),
             }
           } catch (err) {
@@ -2858,6 +3097,7 @@ function registerEgoStatus(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool: T
               available: false,
               path: '',
               exitCode: null,
+              ...faceFields,
               error: describeSpawnFailure(err),
             }
           }
@@ -4382,7 +4622,7 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
       const def = defineTool({
         name: 'bcdp_script',
         description:
-          'Run an arbitrary `ego-browser nodejs` heredoc script in ONE invocation (page/…locator/browser/taskSpaces/site/fetch/cdp preloaded), and return structured {ok, stdout, stderr, result, durationMs, timedOut}. Use for a full multi-step browser task as a single script. The task space is selected and a real (non-blank) tab activated for you before your script runs, so page.* works directly. Set verbatim:true to run the body verbatim with no preamble (the retired bcdp_cli behaviour). For a single page expression use bcdp_js. These scripts expose the vendored SDK (`taskSpaces`, `page.locator()`, global `cdp()`, `fetch.browser|server`) �?NOT the official docs\' `taskSpace()` / `page.click()`.',
+          'Run an arbitrary `ego-browser nodejs` heredoc script in ONE invocation (page/…locator/browser/taskSpaces/site/fetch/cdp preloaded), and return structured {ok, stdout, stderr, result, durationMs, timedOut}. The task space is selected and a real (non-blank) tab activated for you before your script runs, so page.* works directly. Set verbatim:true runs the body with no preamble. For a single page expression use bcdp_js. On tabbit the body runs in the browser Playwright runtime: no taskSpaces/cdp()/fetch.*, verbatim refused. These scripts expose the vendored SDK (`taskSpaces`, `page.locator()`, global `cdp()`, `fetch.browser|server`) �?NOT the official docs\' `taskSpace()` / `page.click()`.',
         parameters: {
           script: {
             type: 'string',
@@ -4414,6 +4654,11 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
               durationMs: { type: 'integer' },
               timedOut: { type: 'boolean' },
               error: { type: 'string' },
+              // tabbit 通道标记：不声明就会被 additionalProperties:false 拒掉。
+              backend: { type: 'string' },
+              // 溢出读回只拿到一部分时的上报字段（同样必须声明）。
+              resultTruncated: { type: 'boolean' },
+              hint: { type: 'string' },
             },
           },
           render: renderText,
@@ -4422,6 +4667,21 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
         execute: async (args: Record<string, unknown>, exec: ToolExec) => {
           cfg.spaceTracker.setCurrentSession(callingSessionId(exec), resolveEffectiveLink(cfg.links, cfg.activeTargetId)?.link.id ?? ''); markEgoToolCall(callingSessionId(exec))
           pendingViewport = cfg
+          // P0-4：`bcdp_script` 是宿主侧 defineTool（不走 defineEgoTool），所以
+          // 必须在这里自己进一次 tabbit 分派闸——否则逃生舱在最需要它的通道上
+          // 永远碰不到 tryTabbitExecute 的那个 case。与 defineEgoTool 同式：
+          // tabbit 为激活链路时硬锁，绝不回落到 ego。
+          {
+            const effLink = resolveEffectiveLink(cfg.links, cfg.activeTargetId)
+            if (effLink?.link.kind === TABBIT_CLI_KIND) {
+              const tabName = `dsh-${sessionSpaceToken(callingSessionId(exec) ?? '')}`
+              const tabResult = await tryTabbitExecute(ctx, cfg, 'bcdp_script', args, tabName)
+              return tabResult ?? {
+                ok: false,
+                text: 'tabbit-cli is the active backend but bcdp_script dispatch failed unexpectedly. Not falling back to ego.',
+              }
+            }
+          }
           // Honor the documented per-run timeout override (integer ms). Falls
           // back to the plugin's default grace when absent/invalid.
           const timeoutMs =

@@ -40,6 +40,8 @@
 // judge 级除开关外还要求配了 Key（否则只能回答「未配置」）。
 export type ToolTier = 'core' | 'act' | 'observe' | 'wait' | 'power' | 'session' | 'escape' | 'judge'
 
+import { kindSupportsTool, type BackendKind } from './toolKinds.ts'
+
 const CORE = [
   'bcdp_status',
 ] as const
@@ -171,6 +173,11 @@ export interface TierPolicy {
   /** 本插件挂载以来是否发生过浏览器活动（bcdp_* 调用）。 */
   active: boolean
   /**
+   * 当前激活链路的通道类型（来自 link.kind）。缺省 = 不做 kind 收窄——
+   * 既有调用方与测试不受影响；`index.ts` 的 policy 每次重读时传入。
+   */
+  backendKind?: BackendKind
+  /**
    * act/observe/wait 已放行的批次数（0–3，按 act → observe → wait 顺序）。
    * 缺省 = 全部放行：既有调用方与测试不必感知批次（`always` 模式也忽略它）。
    */
@@ -222,8 +229,19 @@ export function tierAllowed(tier: ToolTier, p: TierPolicy): boolean {
   return p.active
 }
 
-/** 某工具此刻是否允许注册（名字 → 分级 → 策略）。 */
-export const toolAllowed = (name: string, p: TierPolicy): boolean => tierAllowed(tierOfTool(name), p)
+/**
+ * 某工具此刻是否允许注册（名字 → 分级 → 策略）。
+ *
+ * 除分级闸外还叠一条 kind 闸：该通道根本翻译不了的工具不进注入面——「注入了
+ * 但一调就报错」比「不在列表里」更糟（模型会反复重试，错误文案还污染上下文）。
+ * `core` 级不参与：`bcdp_status` 是 lazy 下唯一的解锁入口，也是解释「工具为何
+ * 不在」的唯一渠道。
+ */
+export const toolAllowed = (name: string, p: TierPolicy): boolean => {
+  const tier = tierOfTool(name)
+  if (p.backendKind !== undefined && tier !== 'core' && !kindSupportsTool(name, p.backendKind)) return false
+  return tierAllowed(tier, p)
+}
 
 // ── 注入控制器 ──────────────────────────────────────────────────────────────
 //

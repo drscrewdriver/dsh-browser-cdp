@@ -20,7 +20,7 @@
 [简体中文](README.md) | [Français](README.fr.md) | [Deutsch](README.de.md) | [Italiano](README.it.md) | [Русский](README.ru.md) | [Español](README.es.md)
 
 
-> **仓库**：`github.com/drscrewdriver/dsh-browser-cdp`｜当前版本 **v1.8.0**｜版本历史见 [CHANGELOG.md](CHANGELOG.md)｜详情页：[dshfind](https://dshfind.com/zh/plugins/drscrewdriver/dsh-browser-cdp)
+> **仓库**：`github.com/drscrewdriver/dsh-browser-cdp`｜当前版本 **v1.9.15**｜版本历史见 [CHANGELOG.md](CHANGELOG.md)｜详情页：[dshfind](https://dshfind.com/zh/plugins/drscrewdriver/dsh-browser-cdp)
 
 ### 版本兼容矩阵
 
@@ -199,9 +199,15 @@ dshx list                                                # 应显示：[on] dsh-
 [Tabbit 浏览器](https://github.com/Tabbit-Browser)本身是 Chromium，但本插件不直接拿它的调试端口：激活 `tabbit-cli` 连接行后，每次 `bcdp_*` 调用被翻译成一段 Playwright 片段，经 `tabbit-cli nodejs` 在浏览器内嵌运行时里执行（适配层 `src/cdp/tabbit-cli-link.ts`）。也就是说 Tabbit 是**第四条连接通道**，与 CDP 端点 / 本机 ego CLI / Lightpanda 并列，按列表优先级争用。
 
 - **添加入口**：设置面板底部表单选「本机 Tabbit CLI」（默认标签 `Tabbit 浏览器`）；第二会被拒绝。`cliPath` 留空走上方的自动解析链。
-- **支持的工具**（1.7.10 现行口径）：`bcdp_space`、`bcdp_navigate`、`bcdp_snapshot`、`bcdp_click`、`bcdp_fill`、`bcdp_screenshot`、`bcdp_tab op=list`，以及入口类 `bcdp_status` / `bcdp_help` / `bcdp_doctor`。**未覆盖的工具明确报错而不静默回落 Chrome**——激活 Tabbit 时插件会硬拒内置运行时启动（避免“以为在 Tabbit 里做、实际驱动了另一个浏览器”）。
+- **支持的工具**（1.9.10 现行口径，共 13 项，真值表在 `src/toolKinds.ts`）：入口类 `bcdp_status` / `bcdp_help` / `bcdp_doctor`；干活类 `bcdp_space`、`bcdp_navigate`、`bcdp_snapshot`、`bcdp_click`、`bcdp_fill`、`bcdp_screenshot`、`bcdp_tab op=list`、`bcdp_js`（单表达式）、`bcdp_http`（`mode=browser` 走 `page.fetch`，带登录 cookie）、`bcdp_script`（多步逃生舱）。**未覆盖的工具不进注入面，也不会静默回落 Chrome**——激活 Tabbit 时插件会硬拒内置运行时启动（避免“以为在 Tabbit 里做、实际驱动了另一个浏览器”）。
+- **该通道的写法差异**：`bcdp_script` 的 body 在浏览器 Playwright 运行时里执行——没有 `taskSpaces` / 全局 `cdp()` / `fetch.browser|server`（那是 ego SDK 的面），有 `page/context/browser/pages()/usePage/tabbit/expect/artifactPath`；`verbatim:true` 直接拒绝（它的语义是 ego 裸 heredoc，本通道无等价物）；`console.log` 由包装层捕获进 `stdout`。快照 ref 走 Tabbit 原生定位器 `aria-ref=eN` 且动作前 `.normalize()`（`@3` / `e3` / `ref=3` 三种写法都收）。
 - **能力降级由连接模式决定**（`src/cdp/capabilities.ts` 的 `tabbit` 投影）：`Browser.*` / `Target.*` 域不可达→无标签枚举与窗口关闭；Overlay 点选不可用→观察窗不能“点选元素引用进输入框”；下载事件不可用→`bcdp_download` 不可用；`Runtime.addBinding` 不可靠→`bindingCalled` 关闭。画面与截图走 page 作域的 `newCDPSession` + `Page.captureScreenshot`，JPEG 原生可用。
 - **观察窗画面**：与内置运行时非 CDP 连接模式同一机制——后台轮询而非 screencast 直推，间隔 3s；重页面上单帧捕获可能贴近 8s 截止线（实测），所以高负载页面的实际刷新率会低于 3s，卡住的帧以 `skipped` 返回而不是挂死面板。
+- **面板缓冲与行绑定**：真实捕获节奏是 3–6s（一次 tick 要跑 1–2 个 CLI），期间 1s 心跳只重播帧、不重发 `spaces`（重发会每秒重建视图并把旧帧打回去，造成闪烁）；没刷新时最多靠重播撑 **4s**（`CLI_FRAME_HOLD_MAX_AGE_MS`），超过就保留最后一帧而不伪装成“还在 live”。广播时会把**本轮真拍到的 tab 标为 active**（`rowsWithPrimaryActive`）——否则仅激活模式下的 `frameCache` 淘汰名单与实拍 tab 不一致，会反复出现画/空交替。
+- **单数据源原则（1.9.15）**：激活链路是 `tabbit-cli` / `ego-cli` 时，CDP 录制 worker **不会被拉起**（`isCliCaptureChannel()`）——它在这类通道上永远 attach 不上，却会每 ~1s 往同一条 SSE 推 `spaces: []`，把 CLI 轮询刚送到的真帧抹掉（面板表现为「显示一秒后恢复空」）。这些通道上帧与 tab 列表的唯一数据源是 `CliFramePoller`。门禁按 `link.kind` 判，不按 `getAttachEndpoint()`，所以 `cdpMode=local` 的受管窗口不受影响。
+- **就绪与可用性分开答**：`bcdp_status` 在激活 tabbit 时走 `tabbit-cli diagnose`（而不是内置 ego 运行时的 facade 探针——那条运行时在这条通道上根本没被驱动），并附带 `backendKind` 与 `toolFace{live,sealed}`；本通道下还返回一段 `guidance`，列出被 kind 收窄的工具与 `bcdp_js`/`bcdp_script` 兜底写法。
+- **`bcdp_http mode=browser` 真的带登录态**：走 `page.fetch`，因此受页面源的 CORS/CSP 约束（跳源被拒会归因说明）；响应体超 8000 字符时截断并附 `hint` 指向 `as:"file" + artifactPath` 的落盘出路。
+- **大结果会被降级成资源，插件负责读回**：Tabbit 运行时的 inline 阈值是硬编码的 16 KiB（`INLINE_RESULT_THRESHOLD_BYTES`，不可配置），超过后回执只给 `{resourceId, byteLength}` 而没有 `value`。本插件会按 `resource` 子命令分块读回（单页 64 KiB，上限自定 2 MB）；只读回一部分时返回 `resultTruncated:true` 并附 `hint`，建议改用 `artifactPath()` / `page.fetch({as:"file"})` 落盘只回路径。不要指望抬高厂商阈值：inline/resource 只是传输方式，阈值真抬高了反而会把大快照静默灌进上下文、后续每轮重复付费。
 - **与 dsh-tabbit 插件的关系**：两者都能驱 Tabbit，但工具面与任务生命周期各自管理。同机共装时建议**二选一**，避免两个 harness 抢同一个 Tabbit 任务槽。
 
 ## Lightpanda 后端（可选引擎，beta）
@@ -284,6 +290,10 @@ wait / space / escape 三族已按 `op` 合并，旧工具名**移除**（不保
 | **合计** | 34 | **24,631** | — |
 
 > 表内 schema 与合计均为 1.7.0 **挂载级实测**（`tests/tier-mount.test.ts` 的度量用例打印），八批求和 = 24,631 与全量档逐字对齐。
+
+### 通道（kind）维度的第二道闸
+
+八批分级之外还叠一道**按激活通道的闸**（`src/toolKinds.ts`）：某通道根本翻译不了的工具根本不进注入面——这比“注入了、一调就报错”更好（模型不会反复撞一条永远走不通的入口，错误文案也不污染上下文）。首版只对 `tabbit-cli` 收窄到 13 项；`cdp` / `ego-cli` / `lightpanda` / 未激活 一律 `'all'`，**行为与改造前逐字一致**（`tests/tier-mount.test.ts` 钉住了这条回归）。`core` 级（`bcdp_status`）永不吃这道闸——它既是 lazy 的唯一解锁入口，也是解释“工具为何不在”的唯一渠道（返回值带 `backendKind` 与 `toolFace{live,sealed}`，`bcdp_help topic=injection` 给全量说明）。这道闸与 `capabilitiesFor(engine)` 的执行期投影**并存不合并**：前者是“通道翻译不了”（冷启动即可判），后者是“连上了但某个 CDP 域不可达”（attach 后才知）。
 
 设置项在插件设置页**最上方**的「工具封印」分块（全部 volatile，翻完当场生效，不重启插件）——一个开关管一组批次，形状照 dsh-prime-memory 的「工具封印」：
 

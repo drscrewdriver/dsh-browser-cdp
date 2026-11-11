@@ -1,6 +1,14 @@
 import { describe, it, expect } from "vitest";
 import { apply } from "../src/index.ts";
 import { TIER_MEMBERS, batchOfTool } from "../src/toolTiers.ts";
+import { TABBIT_CLI_SUPPORTED } from "../src/toolKinds.ts";
+
+/** 一条激活的 tabbit-cli 链路：kind 闸的收窄只在这种链路上发生。 */
+const tabbitConfig = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+  links: [{ id: "tb", kind: "tabbit-cli", label: "Tabbit", enabled: true, cliPath: "" }],
+  activeTargetId: "tb",
+  ...over,
+});
 
 /** 渐进放行的三批（act → observe → wait），按批次筛成员。 */
 const browseBatch = (batch: "act" | "observe" | "wait") =>
@@ -261,5 +269,57 @@ describe("tool tier injection at mount", () => {
     expect(m.live.length).toBeGreaterThan(0);
     m.unmount();
     expect(m.live).toEqual([]);
+  });
+
+  it("tabbit-cli narrows the surface to what that channel can translate", async () => {
+    const m = mount(tabbitConfig());
+    // 冷启动：core 不吃 kind 闸——`bcdp_status` 是唯一的解锁入口与解释渠道。
+    expect(m.live).toEqual(["bcdp_status"]);
+    await pulse(m);
+    // 活动后放开的每一件事，都必须是该通道真能做的。
+    for (const n of m.live) expect(TABBIT_CLI_SUPPORTED).toContain(n);
+    for (const n of ["bcdp_cdp", "bcdp_key", "bcdp_scroll", "bcdp_download", "bcdp_captcha", "bcdp_jev_run"]) {
+      expect(m.live).not.toContain(n);
+    }
+    // 第二次活动放出 observe 批（js/snapshot/screenshot）后，面正好等于支持清单。
+    await pulse(m);
+    expect(sorted(m.live)).toEqual(sorted(TABBIT_CLI_SUPPORTED));
+    expect(m.live.length).toBe(13);
+  });
+
+  it("switching the activated channel re-seals the untranslatable tools (volatile, no remount)", () => {
+    const config: Record<string, unknown> = {
+      toolInjection: "always",
+      links: [{ id: "c1", kind: "cdp", label: "Chrome", endpoint: "http://127.0.0.1:9222", enabled: true }],
+      activeTargetId: "c1",
+    };
+    const m = mount(config);
+    // cdp 链路全开：kind 表对该类型是 'all'，与改造前逐字一致。
+    expect(m.live).toContain("bcdp_cdp");
+    expect(m.live).toContain("bcdp_key");
+    const before = m.live.length;
+    config.links = [{ id: "tb", kind: "tabbit-cli", label: "Tabbit", enabled: true, cliPath: "" }];
+    config.activeTargetId = "tb";
+    m.emitVolatileUpdate();
+    expect(m.live).not.toContain("bcdp_cdp");
+    expect(m.live).not.toContain("bcdp_key");
+    expect(m.live).toContain("bcdp_js");
+    expect(sorted(m.live)).toEqual(sorted(TABBIT_CLI_SUPPORTED));
+    expect(m.live.length).toBeLessThan(before);
+  });
+
+  it("ego-cli / lightpanda / unactivated channels stay exactly as before", () => {
+    const tabbit = mount(tabbitConfig({ toolInjection: "always" })).live.length;
+    for (const over of [
+      { links: [{ id: "e1", kind: "ego-cli", label: "ego", enabled: true }], activeTargetId: "e1" },
+      { links: [{ id: "l1", kind: "lightpanda", label: "LP", enabled: true, servePath: "" }], activeTargetId: "l1" },
+      { links: [], activeTargetId: "" },
+    ]) {
+      const { live } = mount({ toolInjection: "always", ...over });
+      // 不收窄：这些通道上一个工具都不能因为 kind 而消失。
+      expect(live.length).toBeGreaterThan(tabbit);
+      expect(live).toContain("bcdp_cdp");
+      expect(live).toContain("bcdp_key");
+    }
   });
 });

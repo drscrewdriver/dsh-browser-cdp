@@ -1,3 +1,75 @@
+## 1.9.15 (2026-11-12)
+
+**面板「显示一秒后恢复空」的真因：两路数据源在同一条 SSE 上打架。**
+
+- **取证方式**：不再靠读代码推断——挂载构建产物 + 真 subprocess + 真 tabbit，伪造一个 SSE 订阅者录 18s 事件流（`.tempscript/probe-panel-events.mjs`）。
+- **录到的事实**：`ensureWorker()` 没有任何通道门禁，所以在激活链路是 `tabbit-cli` 时 CDP 录制 worker 照样被拉起；它抱着一个重启后已失效的 targetId 反复 `No target with given id found`（每 ~5.5s 一轮），并把 `spaces: []` **每 ~1s** 推入同一条 SSE。CLI 轮询的真帧 3–6s 才到一次，于是每次刚画上就在 1s 内被空清单抹掉——那个“1 秒”正是 worker 的 keepalive 周期。
+- **修复**：新增 `isCliCaptureChannel()`（按 `link.kind` 判，不按 `getAttachEndpoint()`——`cdpMode=local` 也没有远端 endpoint，但那里 worker 才是正确数据源），在这些通道上 `ensureWorker()` 直接返回 null，走已有的“静默保持连接”分支；帧的唯一数据源回到 `CliFramePoller`。
+- **修复后同探针复验**：`capture-status … failed` 三连与 `spaces 0 rows` 全部消失，只剩一次 `spaces 1 row` + 每 ~1s 一帧 88 KB JPEG。
+- **1.9.13/1.9.14 保留**：行绑定与缓冲上限都是真问题，但都不是这个闪跳的主因。
+- **测试**：`tests/tabbit-panel-rows.test.ts` 新增 3 例钉住门禁（tabbit/ego 关闭、cdp/lightpanda 保留、未激活归 worker 以保护 cdpMode=local）。
+
+## 1.9.14 (2026-11-12)
+
+**修输出契约：`bcdp_status` / `bcdp_script` 在 tabbit 通道不再被宿主拒掉。**
+
+- **根因**：这两个工具用的是各自的严格 schema（`additionalProperties: false`），而 1.9.10 给 tabbit 分支加的 `backend` / `raw` 字段没登记进 properties；`bcdp_script` 的失败分支更足：自创了未声明的 `text`，同时漏掉了声明为 `required` 的 `stdout`。结果是 status 仍会被计为浏览器活动（能解锁其他工具）但自己的输出不可用，script 同理。
+- **修法**：`backend`/`raw` 补进 status schema；`backend`/`resultTruncated`/`hint` 补进 script schema（output schema 不进模型工具面，不吃每轮 token）；失败分支回到契约内（用已声明的 `error`/`stderr`/`output`，`stdout` 给空串、`result` 给 null）。
+- **闸门**：新增 `tests/tabbit-backend-dispatch.test.ts` 的 “output contract conformance” 组，按分支（inline / 溢出读回 / 求值错 / CLI 失败 / diagnose 路径）逐个校对声明表：发未登记 key 或缺 required 字段都会直接挂。这一类回归已经踩过两次，靠肉眼守不住。
+- **同样确认的事实（本轮未改）**：`commonOutputSchema` 是 `additionalProperties: true`，所以 `bcdp_js`/`bcdp_snapshot`/`bcdp_click`/`bcdp_fill`/`bcdp_http` 带 `backend` 本来就不会被拒；`bcdp_tab op=new/switch` 的 not-supported 与跳源 `page.fetch` 被 CORS 拒也都是既有设计/已记录项，不是回归。
+
+## 1.9.13 (2026-11-12)
+
+**观察窗闪跳的真因：面板跟随的行与本轮拍到的 tab 不是同一个。**
+
+- **机制**（客户端 `renderSpaces`）：仅激活模式下只保留 `active === true` 那一行，然后拿这份名单去淘汰 `frameCache`。而 CLI 给的 `active` 是**浏览器 MRU tab**，轮询拍的是 **agent 正在驱动的那个 tab**——两者不一致时，刚拍到的帧被当场逐出，视图又切到一个从没拍过的行（“无截图”）；1s 心跳重播把帧塞回来，下个 3s `spaces` 再逐出——就是每轮一次的画/空闪跳。
+- **宿主侧**：新增 `rowsWithPrimaryActive()`，广播时把本轮主拍 tab 标为 active（主拍 tab 不在名单时不凭空造）。
+- **客户端侧**：本轮无图可贴时把 `liveImg` / `liveImgTargetId` 清空（旧代码让它继续指向上一个已被 `innerHTML=''` 拆掉的节点，导致后续帧比对 targetId 失败、面板停在空白上）；`applyFrame` 的自动跟随在「没有任何图在贴」时也允许拉起视图。
+- **缓冲窗口明确化**：心跳重播不再无限期。新增 `CLI_FRAME_HOLD_MAX_AGE_MS = 4000` 与纯函数 `cliFrameHoldDue()`：真实捕获节奏是 3–6s（一次 tick 跑 1–2 个 CLI，慢页面单帧能贴近 8s 截止），缓冲跨过这个间隙；超过 4s 还重播就是在把已经死掉的捕获路径伪装成活着。
+- **1.9.11 的两条保留**（空清单不覆写缓存、status 不提前点亮轮询）：它们是真问题，但不是本次闪跳的主因。
+- **测试**：新增 `tests/tabbit-panel-rows.test.ts`（9 例：主拍行绑定、不可变、无主拍时保持原样、仅激活过滤后恰好一个 active；缓冲窗口的 1s 下限 / 4s 上限 / 首帧前不动作 / 窗口常量区）。
+
+## 1.9.12 (2026-11-12)
+
+**溢出结果不再静默变空：按 `resource` 分块读回。**
+
+- **背景**：厂商运行时的 `INLINE_RESULT_THRESHOLD_BYTES = 16 * 1024` 是 `task-runtime.mjs:17` 里的硬编码常量，只在能力表里被**播报**（`controller.mjs` / `docs.mjs` 的 `inlineResultThresholdBytes`），无 env / 无 CLI 参数 / 无请求级开关——抬不了，也不该抬（inline 还是 resource 只决定传输方式，不决定能不能拿到数据；真把 inline 阈值抬高，一次大快照会静默灌进上下文并在之后每轮重复付费）。
+- **旧行为（bug）**：`result` 被降级成 `{resourceId, byteLength, elapsedMs, nextAction, requestId}`（没有 `value`）时，`parseTabbitReceipt` 的 `result?.value ?? result` 会把这个引用对象当成返回值本身——于是 `ok:true` 但快照/脚本输出**全空**。大 `bcdp_snapshot`、`console.log` 大 JSON 的 `bcdp_script` 都会命中。
+- **现在**：`runTabbitSnippet` 识别降级载荷（需同时命中 `resourceId` + 数字 `byteLength` 且无 `value`，避免误伤页面自己返回带 resourceId 的对象），用 `resource --task --resource --offset --max-bytes` 分块读回并 `JSON.parse`；偏移跟服务的 `nextOffset` 原值走（`offsetUnit:"byte"` 且要求字符边界），没有 `nextOffset` / 空块 / 不前进一律判为「没读完」而绝不自旋；不前进的重发块不入库（否则会拼出 `partialpartial`）。
+- **上限与上报**：读回上限是我们自己定的 `TABBIT_RESOURCE_MAX_BYTES = 2 MB`（单页 64 KiB = 厂商 `MAX_RESOURCE_READ_BYTES`）；只读回一部分时，`bcdp_snapshot`/`bcdp_js`/`bcdp_script` 会带 `resultTruncated:true` 与 `hint`，文案对齐厂商 `RESULT_TOO_LARGE` 的建议（返边界数据，或 `artifactPath()` / `page.fetch({as:"file"})` 落盘只回路径）。
+- **测试**：新增 `tests/tabbit-resource-readback.test.ts`（8 例：降级识别、误判边界、单页/多页、提前中断上报、inline 不发资源请求、CLI 出错与字节上限守卫）。
+
+## 1.9.11 (2026-11-12)
+
+**修观察窗「闪一下又空」：空 tab 清单不再抹掉面板依据。**
+
+- **现象**：侧边栏画面没有 3s 左右的缓冲，过段时间闪一下就变空。
+- **机制**：面板广播里 `lastCliSpaces = spaces && spaces.length > 0 ? spaces : null`——清单为空就退到**合成单行**（`CLI_FRAME_TARGET_ID`），而 Tabbit 的帧是按真实 `tabId` 绑定的，两边对不上 → 白屏；下一轮清单恢复又出图，形成闪烁。而 `_tabbitTabCache` 会被一轮回空的 `tabs` 结果直接 `Object.assign` 覆写（`tabbitListTabs` 解析失败时正好返回 `{tabs: []}`）。
+- **修法**：空清单不覆写缓存（保留上一份并记一行 info）；帧 tick 再加 30s 的「沿用上一份非空清单」窗口，超过才承认真没有 tab。
+- **同时收回 1.9.10 的一个时序副作用**：`bcdp_status` 现在会转发到 tabbit `diagnose`，顺带登记了 `_tabbitLastTaskName`——等于一次状态查询就点亮帧轮询，面板会在还没有 agent 页面时去抓用户自己的 tab。现在 status 不登记任务名，轮询仍由首个真实浏览动作启动。
+- **已排除项**：帧数据源本身在 Tabbit 1.21 上健康（真机两次捕获均成功，54 KB JPEG / 147 ms），所以不是 `newCDPSession` / `Page.captureScreenshot` 被升级破。
+
+## 1.9.10 (2026-11-11)
+
+**Tabbit 通道补齐四项能力；lazy 注入加一道「按激活通道」的闸。**
+
+- **为什么这么排优先级**：从 `~/.dsh/sessions` 的 139 个会话里抽出 1003 次 `bcdp_*` 调用做冷热区复查——`bcdp_js` 313 次（31%，最热）、`bcdp_script` 72 次、`bcdp_click` 43 + `bcdp_fill` 15、`bcdp_http` 4（全部是带 cookie 的 XHR / 静态资源逆向）；而 `bcdp_cdp` 仅 1 次且用的是被 Tabbit 拒绝的 `Browser.getWindowForTarget`。优先级按这个实测排，不按主观猜测。
+- **新增**（`src/cdp/tabbit-cli-link.ts` + `tryTabbitExecute`）：`bcdp_js`（包成 IIFE 走 `page.evaluate`）、`bcdp_http`（`mode=browser` 走 `page.fetch`，带 profile cookie；`mode=server` 显式拒绝而非静默降级）、`bcdp_script`（包装层捕获 `console.log` 进 `stdout`、收集抛错、body 后强制换行防末行 `//` 吃掉收尾；`verbatim:true` 拒绝）。
+- **修正**：快照 ref 此前被猜成 `[data-ref="N"]` 属性（注释自认 best-effort，实际永远点不中），改为 Tabbit 原生 `aria-ref=eN` + 动作前 `.normalize()`，`@3` / `e3` / `ref=3` 三种写法都收；`bcdp_fill` 的 tabbit 分支读的是 `args.value`，而工具面必填名是 `text`——等于该路线上 fill 永远填空串。
+- **kind 闸**（新 `src/toolKinds.ts`）：激活链路翻译不了的工具不再进注入面。首版只对 `tabbit-cli` 收窄到 13 项，`cdp` / `ego-cli` / `lightpanda` / 未激活 保持 `'all'`（行为零变化，由 `tests/tier-mount.test.ts` 钉住）；`core` 级不吃闸。`bcdp_status` 返回新增 `backendKind` 与 `toolFace{live,sealed}`，Tabbit 下附 `guidance`；`bcdp_help topic=injection` 说明这道闸与兜底写法。
+- **顺手发现**：`bcdp_script` 与 `status`/`help`/`doctor` 都是宿主侧 `defineTool`，不经过 `defineEgoTool` 的 tabbit 分派闸——`bcdp_script` 已按同式补上分派（否则逃生舱在本通道仍是死代码）；`status`/`help`/`doctor` 的三个 case 目前不可达，已加注释标注并保留。
+- **契约取证**：真机 `tabbit-cli` 报 `CLI_REGISTRATION_UNAVAILABLE`（需重启 Tabbit 刷新注册），于是改读浏览器自带的 `TabbitDance\runtime`（`docs.mjs` 能表 capabilityVersion 20 + fork 过的 coreBundle）做实现级取证，当场发现并修掉三处会在真机上坏掉/失效的写法：
+  - `page.fetch` 返回的是 **HTTP 元数据对象**（文本在 `text` 属性，HTTP 错误返回 `ok:false` 不抛）——初稿写成 `await __r.text()` 会 TypeError；现按契约读属性、显式 `as:"text"`、并透传 `ok`（4xx 不再被当作成功）。
+  - `tabbit.observe` 同样返回对象、**文本在 `snapshot`**：`bcdp_snapshot` 此前的 `String(receipt.data)` 在真机上只会得到 `[object Object]`（既有缺陷），现改为取 `snapshot` 并透出 `snapshotTruncated`。
+  - `parseTabbitReceipt` 原先不认 `error:{name,code,message}` 对象形态，导致**所有真机失败被洗成 `unknown error`**，模型只能盲重试；已补该分支并优先取 `error.code`。
+  - 反向证实了 `aria-ref` 引擎（`_createAriaRefEngine`）与 `Locator.normalize()`（走 `resolveSelector` channel）真实存在，P0-2 的方向成立。
+- **上限不是终点**：`bcdp_http` 响应体被 8000 字符截断时额外返一条 `hint`，指向 `bcdp_script` + `page.fetch({as:"file", savePath: artifactPath(…)})` 这条真出路——实测用例里就有整份 CSS 要找 `@font-face`，那类响应远超上限，只报 `truncated` 等于让模型拿残缺正文反复重试。
+- **kind 表不靠字面量自证**：`src/toolKinds.ts` 以 type-only import 取 `BrowserLinkKind`（零运行时依赖、不成环），宿主新增 kind 时 `Record` 缺键会直接编译报错，强制登记。
+- **status 在 tabbit 上答对了通道**：`bcdp_status` 原先走内置 ego 运行时的 facade 探针，而那条运行时在这条通道上根本没被驱动（`available` 答的是错的通道）。现在激活 tabbit 时转发到 `tryTabbitExecute('bcdp_status')`（真 `diagnose`），`backendKind` / `toolFace` / `guidance` 照旧附带。
+- **跳源报错不再只有一句 `Failed to fetch`**：`page.fetch` 受页面源的 CORS/CSP 约束，真机实测（页面已导航到另一域名后抓原域接口）撞出这个归因盲区；新增 `friendlyTabbitFetchError` 说明同源规则与出路。
+- **真机回归**：修复 `launcher-target.json` 指向已删版本（机器级遗留）后，两层真机验证全通——直接调 CLI 5/5 PASS；加载构建产物 `lib/index.js` + 真 subprocess + 真 Tabbit 逐工具实跑 13/13 PASS（`tool surface 13/35`、`toolFace{live:13,sealed:22}`、volatile 切 tabbit→cdp 得 `{live:30,sealed:5}` 再切回 `{live:13,sealed:22}`、`aria-ref` 点击后 `document.URL` 实际跳转、同源 `page.fetch` 在服务端 echo 里带上了浏览器已有的两枚 `dsh-auth-*` 登录 cookie）。
+- **测试**：1084 passed / 13 skipped（新增 tool-kinds、tabbit-js/http/script-snippet、tabbit-backend-dispatch 五个文件与 aria-ref 用例；含 observe / fetch 契约、截断指引、CORS 归因、status 走 diagnose 的回归）；`npm run typecheck` 双 tsconfig 无错。
+
 ## 1.9.9 (2026-11-10)
 
 **Tabbit 路线补上全模式：后台 tab 也出图（轮转捕获）。**

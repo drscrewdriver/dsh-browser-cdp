@@ -2117,6 +2117,11 @@ h('button', { type: 'button', disabled: !writable || isFull(links) || hasCliLink
 						attachLiveImg(s.targetId, img)
 						view.appendChild(img)
 					} else {
+						// 没有可贴的图：必须把 liveImg 登记清空。否则它还挂着上一轮已被
+						// body.innerHTML='' 拆掉的节点，后续 frame 事件比对 targetId 失败，
+						// 面板就停在“无截图”上不再回来。
+						liveImg = null
+						liveImgTargetId = null
 						const n = document.createElement('div')
 						n.className = 'dsh-ego-liveurl'
 						n.textContent = streamEngineUnsupported ? wt('engineUnsupportedBanner') : wt('noScreenshot')
@@ -2363,6 +2368,9 @@ h('button', { type: 'button', disabled: !writable || isFull(links) || hasCliLink
 						attachLiveImg(current.targetId, img)
 						view.appendChild(img)
 					} else {
+						// 同上：本轮没有图可贴，liveImg 必须清空，后续 frame 才能重新拉起视图。
+						liveImg = null
+						liveImgTargetId = null
 						const n = document.createElement('div')
 						n.className = 'dsh-ego-liveurl'
 						n.textContent = streamEngineUnsupported ? wt('engineUnsupportedBanner') : wt('noScreenshot')
@@ -2481,7 +2489,7 @@ h('button', { type: 'button', disabled: !writable || isFull(links) || hasCliLink
 					// repainting tab (video/animation) must NOT hijack the view; we
 					// merely swap its cached frame so the moment the user/agent brings
 					// the tab forward the correct picture is already there.
-					if (!pinned && selectedTabId === null && targetId === agentActiveId) {
+					if (!pinned && selectedTabId === null && (targetId === agentActiveId || liveImg === null)) {
 						const now = Date.now()
 						if (now - lastFrameAt >= FRAME_FOLLOW_MIN_MS) {
 							lastFrameAt = now

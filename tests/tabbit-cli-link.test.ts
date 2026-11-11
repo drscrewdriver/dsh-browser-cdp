@@ -1,9 +1,12 @@
 import { describe, it, expect } from "vitest";
 import {
+  buildClickSnippet,
+  buildFillSnippet,
   buildFrameCaptureSnippet,
   buildScreenshotSnippet,
   parseTabbitReceipt,
   runTabbitSnippet,
+  translateLocator,
   TABBIT_CAPTURE_DEADLINE_MS,
   TABBIT_FRAME_JPEG_QUALITY,
   TABBIT_MAX_TIMEOUT_MS,
@@ -221,5 +224,59 @@ describe("runTabbitSnippet --timeout-ms contract", () => {
 
   it("passes a valid timeout through untouched", async () => {
     expect(timeoutValue(await captureArgv(120000))).toBe("120000");
+  });
+});
+
+describe("tabbit locator translation", () => {
+  // 快照 ref 曾被猜成 [data-ref="N"] 属性——绝大多数页面不存在该属性，
+  // 等于 ref 永远点不中。Tabbit 的原生定位器是 aria-ref=eN，且必须 normalize。
+  it("maps snapshot refs to the native aria-ref locator with normalize", () => {
+    for (const sel of ["@e3", "e3", "@3", "3", "ref=3", "ref=e3"]) {
+      expect(translateLocator(sel)).toEqual({ expr: 'page.locator("aria-ref=e3")', normalize: true });
+    }
+  });
+
+  it("keeps the pre-existing selector forms byte-identical", () => {
+    expect(translateLocator('loc=role:button[name="Save"]')).toEqual({
+      expr: 'page.getByRole("button", {name: "Save", exact: true})',
+      normalize: false,
+    });
+    expect(translateLocator("loc=css:.btn")).toEqual({ expr: 'page.locator(".btn")', normalize: false });
+    expect(translateLocator("loc=href:/x")).toEqual({
+      expr: `page.locator(${JSON.stringify('a[href="/x"]')})`,
+      normalize: false,
+    });
+    expect(translateLocator("div > p")).toEqual({ expr: 'page.locator("div > p")', normalize: false });
+  });
+
+  it("reads loc=css:3 as a CSS selector, never as a ref", () => {
+    expect(translateLocator("loc=css:3")).toEqual({ expr: 'page.locator("3")', normalize: false });
+  });
+
+  it("passes xpath= through to Playwright, which understands it natively", () => {
+    expect(translateLocator("xpath=//a")).toEqual({ expr: 'page.locator("xpath=//a")', normalize: false });
+  });
+
+  it("returns null for input it cannot resolve", () => {
+    expect(translateLocator("")).toBeNull();
+    expect(translateLocator("@e")).toBeNull();
+    expect(translateLocator("@3x")).toBeNull();
+  });
+
+  it("normalizes before acting when the plan says so", () => {
+    const click = buildClickSnippet({ expr: 'page.locator("aria-ref=e3")', normalize: true });
+    expect(click.split("\n")[0]).toBe('const el = await page.locator("aria-ref=e3").normalize();');
+    expect(click).toContain("await el.click();");
+    expect(click).toContain("normalized: true");
+
+    const fill = buildFillSnippet({ expr: 'page.locator(".x")', normalize: false }, "v");
+    expect(fill.split("\n")[0]).toBe('const el = page.locator(".x");');
+    expect(fill).toContain('await el.fill("v");');
+    expect(fill).toContain("normalized: false");
+  });
+
+  it("escapes the fill value instead of interpolating it raw", () => {
+    const fill = buildFillSnippet({ expr: 'page.locator(".x")', normalize: false }, 'a"b\\c');
+    expect(fill).toContain(JSON.stringify('a"b\\c'));
   });
 });

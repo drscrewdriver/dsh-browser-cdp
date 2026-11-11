@@ -18,7 +18,7 @@ import type { EgoContext, RegisterRouteOptions, ResolvedConfig, WebServerLike } 
 import type { SettingsBridge } from './settings.ts'
 import type { FfmpegInstallationManager, FfmpegStatus } from './ffmpeg-installation.ts'
 import type { LoginImportOptions, LoginImportReport } from './login-import.ts'
-import { EGO_LINUX_CDP_URL, resolveEffectiveLink } from './cdp-targets.ts'
+import { EGO_LINUX_CDP_URL, EGO_CLI_KIND, TABBIT_CLI_KIND, resolveEffectiveLink } from './cdp-targets.ts'
 import { BCDP_CDP_ENGINE } from './cdp/capabilities.ts'
 import type { CliFramePoller } from './cast/cli-frame-poller.ts'
 import type { PanelActionRunner } from './cast/panel-actions.ts'
@@ -242,6 +242,7 @@ export function broadcastCliFrames(images: CliFrameImage[], spaces?: CliSpaceRow
   // between 3s CLI captures (a screenshot can momentarily stall rendering).
   lastCliFrames = images
   lastCliFrameAt = stamp
+  lastCliFrameRealAt = stamp
   // A caller that KNOWS the real tab inventory hands it in, so the panel's tab
   // strip is driven by the same cadence as the picture. No override = synthetic
   // single row (ego-cli / Tabbit callers always provide one now).
@@ -254,6 +255,24 @@ let lastCliSpaces: CliSpaceRow[] | null = null
 let lastCliFrames: CliFrameImage[] | null = null
 /** Wall-clock of the last broadcast/replay; the hold timer only fills >1s gaps. */
 let lastCliFrameAt = 0
+/**
+ * Wall-clock of the last REAL capture (never bumped by a replay). The hold
+ * buffer is measured against this, not against `lastCliFrameAt`.
+ */
+let lastCliFrameRealAt = 0
+/**
+ * 缓冲窗口：真实捕获节奏 3–6s（一次 tick 要跑 1–2 个 CLI，慢页面上单帧能贴
+ * 近 8s 截止），所以没刷新时面板最多靠重播撑 4s。
+ */
+export const CLI_FRAME_HOLD_MAX_AGE_MS = 4000
+/**
+ * 心跳重播判定（抽成纯函数是为了把“最多缓冲 4s”钉成可断言的不变量）：
+ * 距上次重播 ≥1s（避免每帧刷）且距上次真实捕获 ≤缓冲窗口。
+ */
+export const cliFrameHoldDue = (now: number, lastRealAt: number, lastReplayAt: number): boolean =>
+  lastRealAt !== 0 &&
+  now - lastReplayAt >= 1000 &&
+  now - lastRealAt <= CLI_FRAME_HOLD_MAX_AGE_MS
 /** Push one capture cycle to every SSE client. `includeSpaces` also re-emits the
  * spaces list (real captures do; the 1s hold replay only refreshes the images
  * to avoid churning the client's store/render every second). */
@@ -641,6 +660,17 @@ function workerEnv(): NodeJS.ProcessEnv {
   return base
 }
 
+/**
+ * 该激活通道是否由 CLI 轮询供帧（而不是 CDP screencast）。
+ *
+ * 这是 CDP worker 的门禁依据。不能用 `getAttachEndpoint() === null` 当判据：
+ * `cdpMode=local`（受管本地启动）也没有远端 endpoint，但那里 worker 才是正确数据源。
+ */
+export function isCliCaptureChannel(cfg: Pick<ResolvedConfig, 'links' | 'activeTargetId'>): boolean {
+  const kind = resolveEffectiveLink(cfg.links, cfg.activeTargetId)?.link.kind
+  return kind === EGO_CLI_KIND || kind === TABBIT_CLI_KIND
+}
+
 /** Ensure a single ego-cast worker is running (idempotent). Launches it via
  * ctx.subprocess. Re-spawns whenever the previous worker is found dead (its
  * pid no longer alive or its /api/health does not answer), so a crashed
@@ -656,6 +686,11 @@ function makeEnsureWorker(ctx: EgoContext, cfg: ResolvedConfig, ffmpegManager: F
     return alive ? state.port : null
   }
   return async function ensureWorker(): Promise<number | null> {
+    // 通道门禁：在 ego-cli / tabbit-cli 上 worker 永远 attach 不上，却会抱着一个
+    // 重启后已失效的 targetId 反复失败（`No target with given id found`），并把
+    // `spaces: []` 每 ~1s 推入同一条 SSE——把 CLI 轮询刚送到的真帧抹掉。
+    // 面板表现为「显示一秒后恢复空」。这些通道上帧的唯一数据源是 CliFramePoller。
+    if (isCliCaptureChannel(cfg)) return null
     const running = await launchedWorkerPort()
     if (running !== null) return running
     // Worker is dead or not yet up; spawn one, rate-limited.
@@ -1238,13 +1273,20 @@ export function initCastServer(
   // Frame hold/buffer: replay the newest CLI frame once per second so the watch
   // panel never goes blank in the 3s capture gap (a screenshot can momentarily
   // stall the page's rendering, and there is no screencast on the ego-cli route).
-  // Skipped while a CDP screencast endpoint owns the panel, and when no frame or
+  // Skipped when a CDP screencast endpoint owns the panel, and when no frame or
   // no client is present. This is the "cache ≥1s" guarantee the user asked for.
+  //
+  // The replay is bounded by CLI_FRAME_HOLD_MAX_AGE_MS: a real capture tick costs
+  // 1–2 CLI runs (0.15–2.6 s each, and slow ticks skip a beat), so the actual
+  // cadence is 3–6 s — the buffer exists to bridge exactly that. Past 4 s of
+  // silence the panel keeps the last painted image but the timer stops feeding:
+  // replaying a five-minute-old frame forever makes a dead capture path look
+  // alive, which is the worse failure.
   const cliFrameHoldTimer = setInterval(() => {
     if (sseClients.size === 0) return
     if (getAttachEndpoint() !== null) return
     if (lastCliFrames === null) return
-    if (Date.now() - lastCliFrameAt < 1000) return
+    if (!cliFrameHoldDue(Date.now(), lastCliFrameRealAt, lastCliFrameAt)) return
     const at = Date.now()
     lastCliFrameAt = at
     // FRAMES ONLY. Replaying `spaces` every second made the panel rebuild its view

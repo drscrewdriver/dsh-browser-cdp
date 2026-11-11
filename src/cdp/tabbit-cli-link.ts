@@ -92,6 +92,10 @@ export interface TabbitReceipt {
    * frame poller needs to re-target the SAME page the tools drove.
    */
   tabIds?: number[]
+  /** 溢出结果只读回了一部分（达到字节上限或资源读取中断）。 */
+  dataTruncated?: boolean
+  /** 降级载荷的原始字节数，仅在有 `dataTruncated` 时有意义。 */
+  dataByteLength?: number
 }
 
 /**
@@ -140,12 +144,18 @@ export function parseTabbitReceipt(stdout: string): TabbitReceipt {
   if (status === 'queued' || status === 'running') {
     return { ok: false, status, requestId, ...tabField }
   }
-  // failed / interrupted
+  // failed / interrupted。错误信息在代际间有三种形态：字符串 `error`、
+  // `result.error`、对象 `error:{name,code,message}`（Runtime Service 与新版 CLI
+  // 用的就是这个）。缺掉第三种时所有真机失败都会被洗成 'unknown error'，
+  // 模型拿不到任何可行动信息，只能盲重试。
+  const errObj = obj.error as { message?: unknown; code?: unknown } | undefined
   const errMsg = typeof obj.error === 'string' ? obj.error
     : typeof (obj.result as any)?.error === 'string' ? (obj.result as any).error
+    : typeof errObj?.message === 'string' ? errObj.message
     : typeof obj.message === 'string' ? obj.message
     : 'unknown error'
   const errCode = typeof obj.code === 'string' ? obj.code
+    : typeof errObj?.code === 'string' ? errObj.code
     : /timeout/i.test(errMsg) ? 'TIMEOUT'
     : /not attached|not found|no element/i.test(errMsg) ? 'ELEMENT_NOT_FOUND'
     : /ERR_|net::|navigation/i.test(errMsg) ? 'NAVIGATION_FAILED'
@@ -221,7 +231,119 @@ export async function runTabbitSnippet(
   const { exitCode } = await handle.done
   const stdout = readAll(handle.collected.stdout)
   const receipt = parseTabbitReceipt(stdout)
+
+  // 结果超过厂商运行时的 inline 阈值（`INLINE_RESULT_THRESHOLD_BYTES` = 16 KiB，
+  // 硬编码不可配置）时，回执里的 `result` 是 `{resourceId, byteLength, elapsedMs,
+  // nextAction, requestId}` —— 没有 `value`。旧逻辑把它直接当成值，于是上层看到
+  // `ok:true` 但所有字段都是空（大快照、大 console.log 静默变空）。按 `resource`
+  // 子命令分块读回，把可用上限抬到我们自己声明的量级，截断时显式上报。
+  if (receipt.ok) {
+    const ref = tabbitResourceRef(receipt.data)
+    if (ref !== null) {
+      const { text, complete } = await readTabbitResource(subprocess, opts.cliPath, opts.taskName, ref.resourceId)
+      if (text !== '') {
+        try {
+          receipt.data = JSON.parse(text)
+        } catch {
+          receipt.data = text
+        }
+      } else {
+        receipt.data = null
+      }
+      if (!complete) {
+        receipt.dataTruncated = true
+        receipt.dataByteLength = ref.byteLength
+      }
+    }
+  }
+
   return { receipt, exitCode: exitCode ?? 1 }
+}
+
+/** 降级后只在回执里出现的资源引用。 */
+export interface TabbitResourceRef {
+  resourceId: string
+  byteLength: number
+}
+
+/** 我们自己定的读回上限（不是厂商的 16 KiB inline 阈值，那个改不了）。 */
+export const TABBIT_RESOURCE_MAX_BYTES = 2_000_000
+/** 厂商单页上限 MAX_RESOURCE_READ_BYTES = 64 KiB，超过会拆成多页。 */
+export const TABBIT_RESOURCE_PAGE_BYTES = 64 * 1024
+
+/**
+ * 判断一份 `data` 是不是「被降级成资源」的载荷。
+ *
+ * 要同时命中 `resourceId`（非空字符串）与数字 `byteLength`，且不得有 `value` 键：
+ * 页面代码真的可能返回一个带 resourceId 的对象，单字段判据会误伤。
+ */
+export const tabbitResourceRef = (data: unknown): TabbitResourceRef | null => {
+  if (typeof data !== 'object' || data === null) return null
+  const o = data as Record<string, unknown>
+  if (typeof o.resourceId !== 'string' || o.resourceId === '') return null
+  if (typeof o.byteLength !== 'number') return null
+  if ('value' in o) return null
+  return { resourceId: o.resourceId, byteLength: o.byteLength }
+}
+
+/**
+ * 用 `resource` 子命令分块读回一个溢出结果。
+ *
+ * 实测扁平形状：`{data, nextOffset, eof, offset, offsetUnit:"byte", byteLength, resourceId, encoding}`，
+ * 其中 `data` 就是结果值的 JSON 文本。偏移按**字节**计且服务端要求起始偏移落在
+ * 字符边界上（`startingOffsetMustBeBoundary`），所以下一跳必须用服务给的 `nextOffset`
+ * 原值，不能自己累加长度。畸形块（无 nextOffset / 空 data / 不前进）一律当
+ * 「没读完」收手，绝不自旋。
+ */
+export async function readTabbitResource(
+  subprocess: SubprocessService,
+  cliPath: string,
+  taskName: string,
+  resourceId: string,
+  maxBytes: number = TABBIT_RESOURCE_MAX_BYTES,
+): Promise<{ text: string; complete: boolean }> {
+  let offset = 0
+  let text = ''
+  for (let guard = 0; guard < 4096; guard += 1) {
+    const handle = subprocess.spawn({
+      argv: [
+        cliPath,
+        'resource',
+        '--task',
+        taskName,
+        '--resource',
+        resourceId,
+        '--offset',
+        String(offset),
+        '--max-bytes',
+        String(TABBIT_RESOURCE_PAGE_BYTES),
+      ],
+      cwd: process.cwd(),
+      env: { ...process.env },
+      stdio: { stdin: { data: '' }, stdout: { maxBytes: 4 * 1024 * 1024 }, stderr: { maxBytes: 64 * 1024 } },
+      graceMs: 40_000,
+    })
+    const { exitCode } = await handle.done
+    const stdout = readAll(handle.collected.stdout).trim()
+    if ((exitCode ?? 1) !== 0 || stdout === '') return { text, complete: false }
+    let chunk: { data?: unknown; nextOffset?: unknown; eof?: unknown }
+    try {
+      chunk = JSON.parse(stdout)
+    } catch {
+      return { text, complete: false }
+    }
+    const piece = typeof chunk.data === 'string' ? chunk.data : ''
+    if (chunk.eof === true) return { text: text + piece, complete: true }
+    if (piece === '') return { text, complete: false }
+    const next = typeof chunk.nextOffset === 'number' ? chunk.nextOffset : Number.NaN
+    // 偏移不前进说明这块是重发，它的 data 不带新信息：并进结果就会重复拼接
+    // （实测会凑出 `partialpartial`），所以先判位移再入库。
+    if (!Number.isFinite(next) || next <= offset) return { text, complete: false }
+    text += piece
+    offset = next
+    if (offset >= maxBytes) return { text, complete: false }
+  }
+  return { text, complete: false }
 }
 
 /**
@@ -374,16 +496,102 @@ export function buildNavigateSnippet(url: string, waitUntil: string): string {
   return `await page.goto(${JSON.stringify(url)}, {waitUntil: ${JSON.stringify(waitUntil)}}); return {url: page.url(), title: await page.title()};`
 }
 
+/**
+ * `bcdp_snapshot` 的 observe 封装。
+ *
+ * 契约（运行时自描述 docs.mjs，capabilityVersion 20）：`tabbit.observe()` 返回的是
+ * 对象 `{page, pages, frames, snapshot, snapshotTruncated, …}`，**文本在 `snapshot`**，
+ * 直接 `String()` 整个对象只会得到 `[object Object]`。同时把 `snapshotTruncated`
+ * 透出去：截断后的快照不能当作完整清单用。
+ */
 export function buildObserveSnippet(maxChars: number): string {
-  return `return await tabbit.observe({frames: "none", maxChars: ${maxChars}});`
+  return [
+    `const __o = await tabbit.observe({frames: "none", maxChars: ${maxChars}});`,
+    `return { snapshot: (__o && typeof __o.snapshot === "string") ? __o.snapshot : "", truncated: !!(__o && __o.snapshotTruncated) };`,
+  ].join('\n')
 }
 
-export function buildClickSnippet(locatorExpr: string): string {
-  return `await ${locatorExpr}.click(); return {clicked: true};`
+export function buildClickSnippet(plan: LocatorPlan): string {
+  const head = plan.normalize
+    ? `const el = await ${plan.expr}.normalize();`
+    : `const el = ${plan.expr};`
+  return `${head}\nawait el.click();\nreturn {clicked: true, normalized: ${plan.normalize}};`
 }
 
-export function buildFillSnippet(locatorExpr: string, value: string): string {
-  return `await ${locatorExpr}.fill(${JSON.stringify(value)}); return {filled: true};`
+export function buildFillSnippet(plan: LocatorPlan, value: string): string {
+  const head = plan.normalize
+    ? `const el = await ${plan.expr}.normalize();`
+    : `const el = ${plan.expr};`
+  return `${head}\nawait el.fill(${JSON.stringify(value)});\nreturn {filled: true, normalized: ${plan.normalize}};`
+}
+
+/** `bcdp_http` 响应体在浏览器侧就截断，避免超大资源拖爆上下文。 */
+export const TABBIT_HTTP_BODY_CHARS = 8000
+
+/**
+ * 被截断时的出路指引。
+ *
+ * 实测用例里就有整份 CSS（找 @font-face 解字体加密）——那种响应远超本上限，
+ * 只给 `truncated:true` 会让模型拿残缺正文反复重试；得告诉它文件落盘这条真路。
+ */
+export const TABBIT_HTTP_CLIP_HINT =
+  'body clipped at the inline budget; for larger payloads use bcdp_script with page.fetch(url, {as: "file", savePath: artifactPath("name")}) and read the saved file.'
+
+/**
+ * `bcdp_js`：单表达式求值。
+ *
+ * 必须包成 IIFE：Playwright 的 `evaluate` 收字符串时按【表达式】求值，直接传
+ * `() => x` 会得到一个函数对象（不可序列化）。表达式内部的 `//` 行注释会
+ * 吃掉收尾括号，属于调用方需避免的写法（错误会由 CLI 原样冒出来）。
+ */
+export function buildJsSnippet(expression: string): string {
+  const wrapped = `(() => (${expression}))()`
+  return [
+    `const __v = await page.evaluate(${JSON.stringify(wrapped)});`,
+    `return { ok: true, result: __v };`,
+  ].join('\n')
+}
+
+/**
+ * `bcdp_http`：走 Tabbit 的 `page.fetch`（带浏览器 cookie / CORS / CSP）。
+ *
+ * 契约（docs.mjs `networkHelper`）：返回的是 **HTTP 元数据对象**，不是 Response——
+ * `{ok, status, statusText, url, redirected, bytes, contentType, headers, via, text?, json?, path?}`，
+ * 文本在 `__r.text` 属性上（写成 `__r.text()` 会 TypeError）；HTTP 错误返回 `ok:false`
+ * 而不抛异常，所以 `ok` 必须透传而不能写死 true。
+ * `as:"text"` 显式索要文本；不传 `maxBytes`（那个是尺寸上限，超了会 reject 而非截断），
+ * 截断由本 snippet 自己完成。
+ */
+export function buildHttpSnippet(url: string, init: Record<string, unknown>): string {
+  const opts = { ...init, as: 'text' }
+  return [
+    `const __r = await page.fetch(${JSON.stringify(url)}, ${JSON.stringify(opts)});`,
+    `const __t = (typeof __r.text === "string") ? __r.text : "";`,
+    `const __clip = __t.length > ${TABBIT_HTTP_BODY_CHARS};`,
+    `return { ok: __r.ok !== false, status: __r.status, body: __t.slice(0, ${TABBIT_HTTP_BODY_CHARS}), truncated: __clip, contentType: __r.contentType, ...(__clip ? { hint: ${JSON.stringify(TABBIT_HTTP_CLIP_HINT)} } : {}) };`,
+  ].join('\n')
+}
+
+/**
+ * `bcdp_script`：把内容包进 async IIFE 执行。
+ *
+ * 两件事必须做对：
+ *  1. 捕获 `console.log` —— 既有 description 承诺「可用 console.log(JSON.stringify())
+ *     拿 result」，而 Tabbit 通道默认丢弃 console 输出；
+ *  2. body 后强制换行 —— 否则末行 `//` 注释会把收尾的 `})();` 一起注释掉。
+ */
+export function buildScriptSnippet(body: string): string {
+  return [
+    'const __lines = [];',
+    'const __log = console.log;',
+    'console.log = (...a) => { try { __lines.push(a.map(x => typeof x === "string" ? x : JSON.stringify(x)).join(" ")) } catch {} };',
+    'let __ret = null, __err = null;',
+    'try {',
+    `  __ret = await (async () => { ${body}\n })();`,
+    '} catch (e) { __err = String((e && e.message) || e); }',
+    'finally { console.log = __log; }',
+    'return { stdout: __lines.join("\\n"), result: __ret, ...(__err !== null ? { error: __err } : {}) };',
+  ].join('\n')
 }
 
 /**
@@ -473,32 +681,58 @@ export function buildFrameCaptureSnippet(
 }
 
 /**
- * Translate a bcdp_* locator/ref format into a Playwright locator expression.
+ * 一个可执行的定位计划。`normalize` 表达的是【时序】要求（动作前必须 await），
+ * 这是表达式字符串无法承载的信息——aria-ref 必须先 normalize 才能在 DOM
+ * 重渲染后重新解析。
+ */
+export interface LocatorPlan {
+  /** Playwright locator 表达式。 */
+  expr: string
+  /** true = 动作前先 `await <expr>.normalize()`。 */
+  normalize: boolean
+}
+
+/**
+ * Translate a bcdp_* locator/ref format into a locator plan.
  * - `loc=role:button[name="Save"]` → `page.getByRole("button", {name: "Save", exact: true})`
  * - `loc=css:.btn-submit` → `page.locator(".btn-submit")`
- * - `@N` → `page.locator('[data-ref="N"]')` (best-effort, may not work on Tabbit)
+ * - `loc=href:/x` → `page.locator('a[href="/x"]')`
+ * - `@e3` / `e3` / `@3` / `3` / `ref=e3` / `ref=3` → `page.locator("aria-ref=e3")` + normalize
+ * - 其它裸 CSS → `page.locator(sel)`
+ * - 无法识别 → null
+ *
+ * aria-ref 是 Tabbit 快照 ref 的原生定位器；此前猜成 `[data-ref="N"]` 属性，
+ * 绝大多数页面不存在该属性，等于 ref 永远点不中。
  */
-export function translateLocator(selector: string): string | null {
+export function translateLocator(selector: string): LocatorPlan | null {
   if (!selector) return null
   // loc=role format
   const roleMatch = selector.match(/^loc=role:(\w+)\[name="(.+?)"\]$/)
   if (roleMatch) {
-    return `page.getByRole(${JSON.stringify(roleMatch[1])}, {name: ${JSON.stringify(roleMatch[2])}, exact: true})`
+    return {
+      expr: `page.getByRole(${JSON.stringify(roleMatch[1])}, {name: ${JSON.stringify(roleMatch[2])}, exact: true})`,
+      normalize: false,
+    }
   }
   // loc=css format
   const cssMatch = selector.match(/^loc=css:(.+)$/)
   if (cssMatch) {
-    return `page.locator(${JSON.stringify(cssMatch[1])})`
+    return { expr: `page.locator(${JSON.stringify(cssMatch[1])})`, normalize: false }
   }
   // loc=href format
   const hrefMatch = selector.match(/^loc=href:(.+)$/)
   if (hrefMatch) {
-    return `page.locator(${JSON.stringify(`a[href="${hrefMatch[1]}"]`)})`
+    return { expr: `page.locator(${JSON.stringify(`a[href="${hrefMatch[1]}"]`)})`, normalize: false }
+  }
+  // Snapshot ref（Tabbit 原生 aria-ref 定位器）。
+  // 本仓的两种写法都要吃：工具面写的是 `ref=N`，快照侧习惯写 `@N`/`eN`。
+  const refMatch = selector.match(/^(?:ref\s*=\s*|@\s*)?\s*(?:e\s*)?(\d+)$/i)
+  if (refMatch) {
+    return { expr: `page.locator("aria-ref=e${refMatch[1]}")`, normalize: true }
   }
   // Plain CSS selector (no loc= prefix)
   if (!selector.startsWith('@') && !selector.startsWith('loc=')) {
-    return `page.locator(${JSON.stringify(selector)})`
+    return { expr: `page.locator(${JSON.stringify(selector)})`, normalize: false }
   }
-  // @N ref — best-effort (won't work reliably on Tabbit)
   return null
 }

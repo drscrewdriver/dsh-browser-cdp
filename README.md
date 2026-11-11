@@ -20,7 +20,7 @@
 [简体中文](README.md) | [Français](README.fr.md) | [Deutsch](README.de.md) | [Italiano](README.it.md) | [Русский](README.ru.md) | [Español](README.es.md)
 
 
-> **仓库**：`github.com/drscrewdriver/dsh-browser-cdp`｜当前版本 **v1.9.15**｜版本历史见 [CHANGELOG.md](CHANGELOG.md)｜详情页：[dshfind](https://dshfind.com/zh/plugins/drscrewdriver/dsh-browser-cdp)
+> **仓库**：`github.com/drscrewdriver/dsh-browser-cdp`｜当前版本 **v1.9.16**｜版本历史见 [CHANGELOG.md](CHANGELOG.md)｜详情页：[dshfind](https://dshfind.com/zh/plugins/drscrewdriver/dsh-browser-cdp)
 
 ### 版本兼容矩阵
 

@@ -1,3 +1,12 @@
+## 1.9.16 (2026-11-12)
+
+**修复 `bcdp_snapshot` 的死开关：`maxChars` 补进工具 schema 声明。**
+
+- **成因**：1.9.12 给 tabbit 分支接上了 maxChars 夹取（256..20000）与 `maxCharsUsed` 回显，但参数表里从未声明这个字段——宿主按 schema 收参数，模型永远传不进来，只能吃默认 8000；夹取/回显代码全测试可达、生产死路。
+- **修法**：`bcdp_snapshot` 新增 optional `maxChars`（integer），描述里钉死语义：tabbit 专用、夹到厂商接受的 256..20000、其他通道忽略。配合 1.9.12 的 resource 读回，模型现在能一次拿到大快照而不用反复拍两轮。
+- **闸门**：新增「参数必须在注册 schema 里声明」的断言（`tests/tabbit-backend-dispatch.test.ts`），防止实现与接口面脱节的同类回归再发生。
+- **审计后维持现状**：bcdp_script/bcdp_js 的 description 已含 tabbit 语义（1.9.14）；bcdp_http 的 tabbit 限制（server 拒绝/CORS 归因）继续走运行时文案与 help.ts ACTIVATED CHANNEL，不塞常驻 schema。
+
 ## 1.9.15 (2026-11-12)
 
 **面板「显示一秒后恢复空」的真因：两路数据源在同一条 SSE 上打架。**

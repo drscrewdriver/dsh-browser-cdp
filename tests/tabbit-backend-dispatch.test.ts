@@ -271,6 +271,17 @@ describe("bcdp_snapshot on the tabbit backend", () => {
     expect(ok.value.maxCharsUsed).toBeUndefined();
   });
 
+  it("declares maxChars in the registered tool schema (knob must be reachable)", () => {
+    // 1.9.12 只把夹取逻辑接上了 args.maxChars，但 schema 没声明这个参数——
+    // 模型永远传不进来，8000 以外的一切区间都是死开关。这条把「参数必须
+    // 被声明」钉成闸门，防止再出现实现与接口面脱节的同类回归。
+    const m = mountTabbit();
+    // 注册句柄上的 parameters 是 schemastery 包装后的对象 schema，真实参数表在 properties。
+    const props = m.handles.get("bcdp_snapshot").parameters.properties;
+    expect(props).toHaveProperty("maxChars");
+    expect(props.maxChars.type).toBe("integer");
+  });
+
   it("surfaces the read-back cap instead of an empty body when the result overflowed", async () => {
     const m = mountTabbit();
     // 降级回执：没有 value，只有 resourceId + byteLength（真实形状）；

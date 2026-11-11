@@ -3351,7 +3351,7 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
     t({
       name: 'bcdp_snapshot',
       description:
-        'Read the current page as text: the full-page semantic tree annotated with [ref=N, loc=...] selectors that bcdp_click / bcdp_fill can target. To target across calls prefer a `loc=` over `@N`: a loc is stable, a ref is renumbered every snapshot.',
+        'Read the page as text: the semantic tree annotated with [ref=N, loc=...] selectors usable by bcdp_click / bcdp_fill. Prefer `loc=` over `@N` across calls: locs are stable, refs renumber each snapshot.',
       parameters: {
         space: spaceParam,
         scope: {
@@ -3363,6 +3363,10 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
           type: 'string',
           description:
             "scope='subtree': the node to capture - a `loc=` token (stable across calls) or a ref like '@12' from a fresh snapshot.",
+        },
+        maxChars: {
+          type: 'integer',
+          description: 'tabbit only: char budget 256..20000.',
         },
       },
       buildScript: (args) => {

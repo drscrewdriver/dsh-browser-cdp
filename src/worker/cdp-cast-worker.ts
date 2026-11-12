@@ -308,10 +308,37 @@ async function listTargets(): Promise<Array<{ targetId: string; url: string; tit
   return (result.targetInfos || []).filter((target) => target.type === 'page')
 }
 
-async function activeTargetId(): Promise<string | null> {
-  if (!active?.port) return (currentStatus.targetId as string | null) || null
+/**
+ * DevTools HTTP base of a CDP proxy. A remote attach hands over only the
+ * WebSocket URL, and proxies (CloakBrowser and friends) serve /json/* under
+ * that same path, so swap the scheme and keep the path:
+ *   wss://host/api/profiles/<id>/cdp  ->  https://host/api/profiles/<id>/cdp/json/list
+ */
+function proxyBase(wsUrl: string): string | null {
+  if (wsUrl === '') return null
   try {
-    const response = await fetch(`http://127.0.0.1:${active.port}/json/list`, { signal: AbortSignal.timeout(1500) })
+    const url = new URL(wsUrl)
+    const scheme = url.protocol === 'wss:' ? 'https:' : 'http:'
+    return `${scheme}//${url.host}${url.pathname.replace(/\/+$/, '')}`
+  } catch { return null }
+}
+
+/**
+ * Where to ask "which page is in front". A local launch gives a loopback
+ * DevTools port, a remote attach gives only a WebSocket URL — both end up at
+ * the same /json/list, which is why one code path below serves both.
+ */
+function devtoolsBase(browser: Pick<ActiveBrowser, 'port' | 'wsUrl'> | null): string | null {
+  if (browser === null) return null
+  if (browser.port !== null) return `http://127.0.0.1:${browser.port}`
+  return proxyBase(browser.wsUrl)
+}
+
+async function activeTargetId(): Promise<string | null> {
+  const base = devtoolsBase(active)
+  if (base === null) return (currentStatus.targetId as string | null) || null
+  try {
+    const response = await fetch(`${base}/json/list`, { signal: AbortSignal.timeout(1500) })
     const list = response.ok ? await response.json() as Array<{ id?: string; type?: string }> : []
     return list.find((entry) => entry.type === 'page')?.id || (currentStatus.targetId as string | null) || null
   } catch { return (currentStatus.targetId as string | null) || null }

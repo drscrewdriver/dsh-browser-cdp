@@ -6501,6 +6501,13 @@ let currentStatus = {
 	generation: 0,
 	watchers: 0
 };
+/**
+* Last tab the user (or a watch) deliberately made current: a panel tab click
+* (/api/switch-tab) or a watch start/switch. Remote CDP has no local
+* /json/list to ask, and Target.getTargets does not report a foreground tab,
+* so this is the only record of "which tab is active" once the user picks one.
+*/
+let lastActivatedTargetId = null;
 let videoInit = null;
 function normalizeConfig(input) {
 	const next = { ...castConfig };
@@ -6719,8 +6726,15 @@ async function listTargets() {
 	if (!active) return [];
 	return ((await active.cdp.call("Target.getTargets")).targetInfos || []).filter((target) => target.type === "page");
 }
-async function activeTargetId() {
-	if (!active?.port) return currentStatus.targetId || null;
+async function activeTargetId(pages) {
+	const known = pages ?? await listTargets();
+	if (!active?.port) {
+		const ids = new Set(known.map((target) => target.targetId));
+		const current = currentStatus.targetId;
+		if (lastActivatedTargetId && ids.has(lastActivatedTargetId)) return lastActivatedTargetId;
+		if (current && ids.has(current)) return current;
+		return known[0]?.targetId ?? null;
+	}
 	try {
 		const response = await fetch(`http://127.0.0.1:${active.port}/json/list`, { signal: AbortSignal.timeout(1500) });
 		return (response.ok ? await response.json() : []).find((entry) => entry.type === "page")?.id || currentStatus.targetId || null;
@@ -6730,7 +6744,7 @@ async function activeTargetId() {
 }
 async function snapshotSpaces() {
 	const targets = await listTargets();
-	const activeId = await activeTargetId();
+	const activeId = await activeTargetId(targets);
 	const spaces = [];
 	for (const target of targets.slice(0, 30)) {
 		const frame = frameCache.get(target.targetId);
@@ -6904,15 +6918,23 @@ async function main() {
 					ok: false,
 					error: "no live browser"
 				});
+				const body = await readJson(req);
+				const started = await manager.startWatch(body);
+				if (body?.targetId) lastActivatedTargetId = body.targetId;
 				return sendJson(res, 200, {
 					ok: true,
-					...await manager.startWatch(await readJson(req))
+					...started
 				});
 			}
-			if (req.method === "POST" && url.pathname === "/api/watch/switch") return sendJson(res, 200, {
-				ok: true,
-				...await manager.switchWatch(await readJson(req))
-			});
+			if (req.method === "POST" && url.pathname === "/api/watch/switch") {
+				const body = await readJson(req);
+				const switched = await manager.switchWatch(body);
+				if (body?.targetId) lastActivatedTargetId = body.targetId;
+				return sendJson(res, 200, {
+					ok: true,
+					...switched
+				});
+			}
 			if (req.method === "POST" && url.pathname === "/api/watch/stop") return sendJson(res, 200, {
 				ok: true,
 				...await manager.stopWatch(await readJson(req))
@@ -7085,6 +7107,7 @@ async function main() {
 				});
 				try {
 					await active.cdp.call("Target.activateTarget", { targetId });
+					lastActivatedTargetId = targetId;
 					return sendJson(res, 200, {
 						ok: true,
 						targetId

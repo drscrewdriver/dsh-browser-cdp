@@ -140,6 +140,13 @@ function ensurePickChannel(): PickChannel | null {
   return pickChannel
 }
 let currentStatus: Record<string, unknown> = { backend: 'cdp', state: 'idle', targetId: null, generation: 0, watchers: 0 }
+/**
+ * Last tab the user (or a watch) deliberately made current: a panel tab click
+ * (/api/switch-tab) or a watch start/switch. Remote CDP has no local
+ * /json/list to ask, and Target.getTargets does not report a foreground tab,
+ * so this is the only record of "which tab is active" once the user picks one.
+ */
+let lastActivatedTargetId: string | null = null
 let videoInit: { generation: number; mime: string; buffer: Buffer } | null = null
 
 function normalizeConfig(input: Record<string, unknown>): CastConfig {
@@ -308,8 +315,24 @@ async function listTargets(): Promise<Array<{ targetId: string; url: string; tit
   return (result.targetInfos || []).filter((target) => target.type === 'page')
 }
 
-async function activeTargetId(): Promise<string | null> {
-  if (!active?.port) return (currentStatus.targetId as string | null) || null
+async function activeTargetId(pages?: Array<{ targetId: string; url: string; title: string; type: string }>): Promise<string | null> {
+  const known = pages ?? await listTargets()
+  if (!active?.port) {
+    // Remote CDP attach has no local DevTools HTTP port, so there is no
+    // /json/list endpoint to ask. Falling back to currentStatus.targetId alone
+    // is not enough: it is null until a watch starts, and it can point at a tab
+    // that was since closed. Both cases left every tab active:false, and the
+    // watch panel renders active tabs only — so it stayed on its empty state
+    // forever and never started the watch that would have filled targetId in.
+    // Order otherwise follows what the browser reports, like /json/list did.
+    const ids = new Set(known.map((target) => target.targetId))
+    const current = currentStatus.targetId as string | null
+    // The tab the user last picked or started watching wins: that is the
+    // remote equivalent of "the foreground tab" that /json/list reports.
+    if (lastActivatedTargetId && ids.has(lastActivatedTargetId)) return lastActivatedTargetId
+    if (current && ids.has(current)) return current
+    return known[0]?.targetId ?? null
+  }
   try {
     const response = await fetch(`http://127.0.0.1:${active.port}/json/list`, { signal: AbortSignal.timeout(1500) })
     const list = response.ok ? await response.json() as Array<{ id?: string; type?: string }> : []
@@ -319,7 +342,7 @@ async function activeTargetId(): Promise<string | null> {
 
 async function snapshotSpaces(): Promise<Array<Record<string, unknown>>> {
   const targets = await listTargets()
-  const activeId = await activeTargetId()
+  const activeId = await activeTargetId(targets)
   const spaces: Array<Record<string, unknown>> = []
   for (const target of targets.slice(0, 30)) {
     const frame = frameCache.get(target.targetId)
@@ -422,8 +445,19 @@ async function main(): Promise<void> {
       if (req.method === 'GET' && url.pathname === '/api/watch/status') return sendJson(res, 200, { ok: true, ...manager.status() })
       if (req.method === 'GET' && url.pathname === '/api/video/status') return sendJson(res, 200, { ok: true, ...manager.status(), mime: videoInit?.mime || null })
       if (req.method === 'POST' && url.pathname === '/api/config') { castConfig = normalizeConfig(await readJson(req)); await manager.updateConfig(); return sendJson(res, 200, { ok: true, config: castConfig }) }
-      if (req.method === 'POST' && url.pathname === '/api/watch/start') { if (!active) return sendJson(res, 409, { ok: false, error: 'no live browser' }); return sendJson(res, 200, { ok: true, ...await manager.startWatch(await readJson(req) as { clientId: string; targetId: string }) }) }
-      if (req.method === 'POST' && url.pathname === '/api/watch/switch') return sendJson(res, 200, { ok: true, ...await manager.switchWatch(await readJson(req) as { clientId: string; targetId: string }) })
+      if (req.method === 'POST' && url.pathname === '/api/watch/start') {
+        if (!active) return sendJson(res, 409, { ok: false, error: 'no live browser' })
+        const body = await readJson(req) as { clientId: string; targetId: string }
+        const started = await manager.startWatch(body)
+        if (body?.targetId) lastActivatedTargetId = body.targetId
+        return sendJson(res, 200, { ok: true, ...started })
+      }
+      if (req.method === 'POST' && url.pathname === '/api/watch/switch') {
+        const body = await readJson(req) as { clientId: string; targetId: string }
+        const switched = await manager.switchWatch(body)
+        if (body?.targetId) lastActivatedTargetId = body.targetId
+        return sendJson(res, 200, { ok: true, ...switched })
+      }
       if (req.method === 'POST' && url.pathname === '/api/watch/stop') return sendJson(res, 200, { ok: true, ...await manager.stopWatch(await readJson(req) as { clientId: string }) })
       if (req.method === 'POST' && url.pathname === '/api/input') {
         const body = await readJson(req)
@@ -538,6 +572,7 @@ async function main(): Promise<void> {
         if (!active || targetId === '') return sendJson(res, 400, { ok: false, error: 'targetId required' })
         try {
           await active.cdp.call('Target.activateTarget', { targetId })
+          lastActivatedTargetId = targetId
           return sendJson(res, 200, { ok: true, targetId })
         } catch (error) {
           return sendJson(res, 502, { ok: false, error: (error as Error).message || String(error) })

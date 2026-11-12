@@ -6719,10 +6719,36 @@ async function listTargets() {
 	if (!active) return [];
 	return ((await active.cdp.call("Target.getTargets")).targetInfos || []).filter((target) => target.type === "page");
 }
-async function activeTargetId() {
-	if (!active?.port) return currentStatus.targetId || null;
+/**
+* DevTools HTTP base of a CDP proxy. A remote attach hands over only the
+* WebSocket URL, and proxies (CloakBrowser and friends) serve /json/* under
+* that same path, so swap the scheme and keep the path:
+*   wss://host/api/profiles/<id>/cdp  ->  https://host/api/profiles/<id>/cdp/json/list
+*/
+function proxyBase(wsUrl) {
+	if (wsUrl === "") return null;
 	try {
-		const response = await fetch(`http://127.0.0.1:${active.port}/json/list`, { signal: AbortSignal.timeout(1500) });
+		const url = new URL(wsUrl);
+		return `${url.protocol === "wss:" ? "https:" : "http:"}//${url.host}${url.pathname.replace(/\/+$/, "")}`;
+	} catch {
+		return null;
+	}
+}
+/**
+* Where to ask "which page is in front". A local launch gives a loopback
+* DevTools port, a remote attach gives only a WebSocket URL — both end up at
+* the same /json/list, which is why one code path below serves both.
+*/
+function devtoolsBase(browser) {
+	if (browser === null) return null;
+	if (browser.port !== null) return `http://127.0.0.1:${browser.port}`;
+	return proxyBase(browser.wsUrl);
+}
+async function activeTargetId() {
+	const base = devtoolsBase(active);
+	if (base === null) return currentStatus.targetId || null;
+	try {
+		const response = await fetch(`${base}/json/list`, { signal: AbortSignal.timeout(1500) });
 		return (response.ok ? await response.json() : []).find((entry) => entry.type === "page")?.id || currentStatus.targetId || null;
 	} catch {
 		return currentStatus.targetId || null;

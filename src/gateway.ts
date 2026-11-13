@@ -29,6 +29,7 @@ import {
   probeEndpoint,
 } from './cdp-targets.ts'
 import { createSubprocessCliIo } from './cdp/cli-link.ts'
+import { resolveTabbitCli } from './cdp/tabbit-cli-link.ts'
 import { setAttachEndpoint, recycleWorker } from './cast-server.ts'
 import { captureTabReport, TAB_REPORT_FILE_PREFIX, type TabAnchorReport } from './tab-report.ts'
 
@@ -205,6 +206,17 @@ export function registerEgoBrowserGateway(
               bundledCli: fileURLToPath(new URL('../runtime/ego-linux/bin/ego-browser.mjs', import.meta.url)),
               // Lightpanda backend — managed-serve extra args for `lightpanda` rows.
               lightpandaArgs: cfg.lightpandaArgs,
+              // Same cold-start gate as triggerCdpRefresh(): leaving this
+              // undefined let an undefined value mean "cold start allowed",
+              // so a panel refresh could pop a browser window that a settings
+              // change would not. Both paths must read the same switch.
+              cliProbeColdStart: cfg.allowProbeColdStart === true,
+              tabbitProbe: (link) => {
+                const cli = resolveTabbitCli(link.cliPath)
+                return cli.found
+                  ? { ok: true, cliPath: cli.cliPath }
+                  : { ok: false, cliPath: cli.cliPath, code: 'tabbit-cli-missing', message: cli.error }
+              },
             })
             const ws = attach.status === 'ready' && attach.wsUrl !== '' ? attach.wsUrl : null
             if (setAttachEndpoint(ws, attach.status === 'ready' ? attach.engine ?? 'unknown' : null)) {

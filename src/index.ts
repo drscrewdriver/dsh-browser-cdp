@@ -30,12 +30,12 @@
  *   EGO_HELP_INDEX / HUMAN_CHECK_PROBE : 工具索引文案 / 人机验证探针
  * 加工具：�?registerActionTools �?reg(t({...}))，并同步 EGO_HELP_INDEX，跑 npm run build�? */
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, appendFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { importLoginCookies } from './login-import.ts'
-import { initCastServer, markEgoToolCall, getLastEgoActivity, onEgoActivity, setAttachEndpoint, recycleWorker, getCliPollStatus, getAttachEndpoint, broadcastCliFrames, getCliTrackAll } from './cast-server.ts'
+import { initCastServer, markEgoToolCall, getLastEgoActivity, onEgoActivity, setAttachEndpoint, recycleWorker, getCliPollStatus, getAttachEndpoint, broadcastCliFrames, broadcastCliSpaces, getCliTrackAll, pushFocus, panelWatcherCount, getWatchCounters } from './cast-server.ts'
 import { CliFramePoller, buildFrameScript, FRAME_SENTINEL } from './cast/cli-frame-poller.ts'
 import { buildEgoNavigateScript, buildEgoSwitchTabScript, buildEgoWindowSizeScript, parsePanelResult, type PanelActionOutcome, type PanelActionRunner } from './cast/panel-actions.ts'
 import { buildEgoAxScript, buildTabbitAxSnippet, composeFallbackReport, parseAxSentinel, type FallbackAxSnapshot } from './cast/fallback-tab-report.ts'
@@ -67,18 +67,20 @@ import {
 import { createSubprocessCliIo, mergeCliOutput, resolveCliBinary, spawnArgvFor, type SpawnShape } from './cdp/cli-link.ts'
 import {
   resolveTabbitCli,
-  runTabbitSnippet,
+  runTabbitSnippet as runTabbitSnippetRaw,
   pollTabbitPending,
   tabbitCreateTask,
   tabbitFinishTask,
   tabbitListTabs,
   tabbitDiagnose,
+  parseTabbitTasks,
   buildNavigateSnippet,
   buildObserveSnippet,
   buildClickSnippet,
   buildFillSnippet,
   buildScreenshotSnippet,
   buildFrameCaptureSnippet,
+  buildMultiFrameSnippet,
   buildJsSnippet,
   buildHttpSnippet,
   buildScriptSnippet,
@@ -86,6 +88,15 @@ import {
   type TabbitTab,
 } from './cdp/tabbit-cli-link.ts'
 import { TABBIT_CLI_SUPPORTED, backendKindOf } from './toolKinds.ts'
+import { createReceiptLedger, describeReceipts, chooseTabbitWindow, TABBIT_RECEIPT_QUOTA, TABBIT_RECYCLE_AT } from './cdp/tabbit-receipts.ts'
+import { planRefreshSync, runRefreshSync, type RefreshSyncDeps, type RefreshSyncKind } from './runtime/refresh-sync.ts'
+import { planCloseTasks, CLOSE_SCRATCH_TASK } from './runtime/close-plan.ts'
+import { bumpFrame, bumpProbe, bumpTick, bumpQueue, noteStatsError, resetStats, snapshotStats } from './runtime/stats.ts'
+import { createRunQueue } from './cast/run-queue.ts'
+import { createProbeScheduler } from './runtime/probe-scheduler.ts'
+import { defaultFocusStore, focusIdFrom } from './runtime/focus.ts'
+import { runtimeOfLink } from './runtime/backend-runtime.ts'
+import { setTabbitExecutor } from './runtime/tabbit-runtime.ts'
 import { assembleSystemOneBody, buildJudgeRuntime, describeJudge, sendJudge } from './jev/client.ts'
 import { makeJudgeEffects } from './jev/effects.ts'
 import { runAttempt } from './jev/attempt.ts'
@@ -393,49 +404,43 @@ export function createSessionSpaceTracker(
 
 // ── serialization ───────────────────────────────────────────────────────────
 /**
- * The bundled runtime host is a single persistent browser shared by every tool call;
- * concurrent tool executions would race on the same task space / tabs. All
- * bcdp_* executions are therefore serialized through one in-process lock. This
- * guards against concurrent tool calls within this plugin instance; separate
- * harness sessions sharing the same browser remain unsupported (host-level).
+ * The bundled runtime host is a single persistent browser shared by every tool
+ * call; concurrent tool executions would race on the same task space / tabs. All
+ * bcdp_* executions are therefore serialized through ONE queue lane.
+ *
+ * The lane is shared with the automatic sources (tab inventory, frame capture),
+ * which run at `opportunistic` priority: they are dropped while a tool call owns
+ * the lane instead of queueing behind it. Before this, the pollers did not take
+ * the lock at all — they only LOOKED at it — so a 2.6 s capture and a tool call
+ * could hit the same browser concurrently.
  */
-let egoLockChain: Promise<unknown> = Promise.resolve()
+const BACKEND_LANE = 'backend'
+const backendQueue = createRunQueue({
+  onEvent: (_key, event) => bumpQueue(event),
+})
 /**
  * How many bcdp_* executions are currently inside the lock body (0 = idle).
  * The CLI frame poller reads this via `egoLockBusy()` to skip a tick while a
  * real tool call owns the browser — a passive observer must never contend with
- * an action. Incremented the moment the queued `fn` starts, decremented when its
- * result settles, so a chained-but-not-yet-run call does not falsely read busy.
+ * an action. Incremented the moment the queued job starts, decremented when its
+ * body settles, so a queued-but-not-yet-run call does not falsely read busy.
  */
 let egoLockDepth = 0
 export function egoLockBusy(): boolean {
   return egoLockDepth > 0
 }
 function withEgoLock<T>(fn: () => Promise<T> | T): Promise<T> {
-  const runBody = (): Promise<T> | T => {
-    egoLockDepth += 1
-    let r: Promise<T> | T
-    try {
-      r = fn()
-    } catch (err) {
-      egoLockDepth -= 1
-      throw err
-    }
-    if (r && typeof (r as Promise<T>).then === 'function') {
-      return (r as Promise<T>).then(
-        (v) => { egoLockDepth -= 1; return v },
-        (e) => { egoLockDepth -= 1; throw e },
-      )
-    }
-    egoLockDepth -= 1
-    return r as T
-  }
-  const run = egoLockChain.then(runBody, runBody) as Promise<T>
-  egoLockChain = run.then(
-    () => undefined,
-    () => undefined,
-  )
-  return run
+  return backendQueue.run({
+    key: BACKEND_LANE,
+    run: async () => {
+      egoLockDepth += 1
+      try {
+        return await fn()
+      } finally {
+        egoLockDepth -= 1
+      }
+    },
+  })
 }
 
 // ── environment self-adaptation ──────────────────────────────────────────────
@@ -739,9 +744,16 @@ export function decideCdpAttach(cfg: Partial<ResolvedConfig>): AttachDecision {
     // Config is the source of truth for the remote switch — the cache copy can
     // lag one refresh behind a toggle.
     remoteDisabled: cfg?.remoteEnabled === false,
-    // The decision table needs the EFFECTIVE kind (activation or priority
-    // fallback), never a kind left over in the cache by a previous owner.
-    ...(effective ? { linkKind: effective.link.kind } : {}),
+    // The decision table reads runtime FACTS (does this channel own its
+    // browser? does it hand over an endpoint to inject?), never a kind: the
+    // effective channel decides, and a stale cache row from a previous owner
+    // must not.
+    ...(effective
+      ? {
+          ownsBrowser: runtimeOfLink(effective.link)?.ownsUserBrowser === true,
+          injectsEndpoint: runtimeOfLink(effective.link)?.injectsEndpoint === true,
+        }
+      : {}),
     // M0.9 launcher (stage 2b) is wired: an authorized fallback launches a
     // managed local browser inside refreshAttach (async path), so the sync
     // decision table just needs to know the capability exists.
@@ -1262,10 +1274,11 @@ export function buildEgoToolArgv(
   runtimeArgs: string,
 ): string[] {
   const extraCliArgs = filterArgs(runtimeArgs, EGO_CLI_BLOCKED)
-  // Only an `ego-cli` link that proved the flag works has a non-empty sdkPath
-  // (see the R-1 guard in cdp-targets); empty always means "do not inject".
+  // Only the ego-cli runtime ever writes a non-empty sdkPath (and only when its
+  // probe proved the flag works — see the R-1 guard). The empty check is the
+  // whole rule, so this no longer re-derives the channel kind here.
   const sdkArgs =
-    attach.linkKind === EGO_CLI_KIND && (attach.sdkPath ?? '') !== ''
+    (attach.sdkPath ?? '') !== ''
       ? ['--sdk-path', attach.sdkPath as string]
       : []
   return [...prefix, 'nodejs', ...sdkArgs, ...extraCliArgs]
@@ -1275,8 +1288,10 @@ async function runEgoScript(subprocess: SubprocessService, script: string, exec:
   // HARD GUARD: if tabbit-cli is the active link, never spawn ego runtime.
   // This prevents Chrome launch via any code path (worker, probe, frame poller).
   const eff = resolveEffectiveLink(cfg.links, cfg.activeTargetId)
-  if (eff?.link.kind === TABBIT_CLI_KIND) {
-    return { ok: false, error: 'tabbit-cli is active: ego runtime launch blocked (no Chrome fallback)', stdout: '', stderr: '' }
+  // Capability: a channel that does NOT drive the ego runtime must never cause
+  // one to be spawned (its browser belongs to someone else).
+  if (runtimeOfLink(eff?.link)?.channel.egoRuntime === false) {
+    return { ok: false, error: 'the activated CLI channel does not use the ego runtime (no Chrome fallback)', stdout: '', stderr: '' }
   }
   let handle
   try {
@@ -1448,6 +1463,8 @@ export interface TabbitSpaceRow {
   title: string
   active: boolean
   lastActive: number
+  /** Which browser window this tab belongs to (panel shows a W1/W2 badge). */
+  windowId?: number
 }
 
 /**
@@ -1458,15 +1475,24 @@ export interface TabbitSpaceRow {
  * nothing to @-quote. Rows use the CLI's `tabId` as targetId so a quote can be
  * traced back to the exact tab.
  */
-export function tabbitSpaceRows(): { tabs: TabbitSpaceRow[]; updatedAt: number; complete: boolean } {
+export function tabbitSpaceRows(scope: 'window' | 'all' = 'all'): { tabs: TabbitSpaceRow[]; updatedAt: number; complete: boolean } {
   const updatedAt = _tabbitTabCache.updatedAt
+  // The strip lists EVERY window's tabs by default ("最全"): a user with two
+  // Tabbit windows was being shown one window and reading it as "tabs missing".
+  // Window scoping still decides WHICH tab gets captured / activated — see
+  // _tabbitWindowId — it just no longer hides rows.
+  const scoped = scope === 'all' || _tabbitWindowId === 0
+    ? _tabbitTabCache.tabs
+    : _tabbitTabCache.tabs.filter((t) => (t.windowId ?? 0) === _tabbitWindowId)
+  const rows = scoped.length > 0 ? scoped : _tabbitTabCache.tabs
   return {
-    tabs: _tabbitTabCache.tabs.map((t) => ({
+    tabs: rows.map((t) => ({
       targetId: String(t.tabId),
       url: t.url || '',
       title: t.title || '',
       active: t.active === true,
       lastActive: updatedAt,
+      windowId: t.windowId ?? 0,
     })),
     updatedAt,
     complete: _tabbitTabCache.complete,
@@ -1507,8 +1533,9 @@ function codedError(code: string, message: string): Error {
 function makeFallbackTabReport(ctx: EgoContext, cfg: EgoRuntimeConfig): (input: { targetId: string; urlHint: string; titleHint: string }) => Promise<TabAnchorReport> {
   return async (input) => {
     const { effective } = effectiveChannel(cfg)
-    const kind = effective?.link.kind
-    if (kind === TABBIT_CLI_KIND) {
+    // Tabbit is the only channel without the ego runtime AND with its own AX
+    // snippet, so the capability answers the question the kind used to.
+    if (runtimeOfLink(effective?.link)?.channel.egoRuntime === false) {
       const cli = resolveTabbitCli((effective?.link as { cliPath?: string } | undefined)?.cliPath)
       if (!cli.found) throw codedError('cli-not-found', `tabbit-cli not found: ${cli.error}`)
       const tabId = Number(input.targetId)
@@ -1536,7 +1563,7 @@ function makeFallbackTabReport(ctx: EgoContext, cfg: EgoRuntimeConfig): (input: 
       }
       return composeFallbackReport({ route: 'tabbit-cli', targetId: input.targetId, snapshot }) as TabAnchorReport
     }
-    if (kind === EGO_CLI_KIND) {
+    if (runtimeOfLink(effective?.link)?.channel.frames === 'ego-cli-poll') {
       const space = resolveCliPanelSpace(cfg)
       if (space === null) throw codedError('attach-not-ready', 'no agent browser space yet — open a page with a bcdp_* tool first')
       const result = await withEgoLock(() => runEgoScript(ctx.subprocess, buildEgoAxScript(j(space)), {}, cfg))
@@ -1720,6 +1747,19 @@ const commonOutputSchema = {
  * Read structurally (`exec.agent` is typed `unknown` in this plugin's own
  * seam); a call with no initiating agent simply leaves the open unscoped.
  */
+/**
+ * Move the operation focus to whatever tab the tool just reported.
+ *
+ * Deliberately best-effort: a tool that does not carry a target id simply does
+ * not move anything, and a worker that answers `focus-stale` clears it rather
+ * than pinning a dead row (see pushFocus in cast-server).
+ */
+function noteToolFocus(value: unknown): void {
+  const targetId = focusIdFrom(value)
+  if (targetId === null) return
+  void pushFocus(targetId, 'agent').catch(() => null)
+}
+
 function callingSessionId(exec: ToolExec | undefined): string | undefined {
   const agent = exec?.agent as { session?: { id?: unknown } } | undefined
   const id = agent?.session?.id
@@ -1743,6 +1783,93 @@ interface EgoToolOptions {
  * @internal
  */
 const _tabbitTabCache: { tabs: TabbitTab[]; total: number; complete: boolean; updatedAt: number } = { tabs: [], total: 0, complete: false, updatedAt: 0 }
+/**
+ * Which browser WINDOW the panel shows.
+ *
+ * Tabbit reports every tab of every window. Two windows that happen to hold the
+ * same two pages then look like DUPLICATED tabs in the strip (“全模式双重” bug).
+ * The agent works in one window, so the strip follows that window: the one
+ * holding the tab the agent last drove, else the browser's focused window.
+ * 0 = unscoped (fall back to every tab).
+ */
+let _tabbitWindowId = 0
+
+/**
+ * Task name the PANEL owns when no tool call has established one.
+ *
+ * Screenshots used to be gated on the conversation: no `bcdp_*` → no task →
+ * `no-owner` → empty frame forever. The panel now adopts this name as soon as
+ * somebody watches it, and tool calls reuse whatever owner already exists — so
+ * frames and tools still share exactly one tabbit task.
+ */
+const TABBIT_PANEL_TASK = 'dsh-panel'
+/** Upper bound on pages one task may own; each extra page slows every call. */
+const TABBIT_MAX_OWNED_PAGES = 2
+/** Last close attempt, echoed in the stats snapshot: the panel's × is verified by
+ * INVENTORY, not by the receipt status (page.close() kills the receipt). */
+let lastClose: { tabId: number; task: string; state: string; status: string; closedByReceipt: boolean; stillThere: boolean; ms: number; at: number } | null = null
+/** A close is in flight: the poller must yield the executor or the receipt queues. */
+let _closeInFlight = false
+/** On-demand capture single-flight (see captureTabbitTab). */
+let _tabbitShotInFlight = false
+/**
+ * tabId → task that OWNS it, refreshed from `diagnose`.
+ *
+ * Ownership is per task and `--tab` must run as the owner: a tab owned by
+ * `dsh-panel` answers `TAB_OWNERSHIP_CONFLICT` to any other task, which is why
+ * both close AND capture failed while the panel task held every tab. Cached for a
+ * few seconds because `diagnose` is a process spawn and the tick runs every 3 s.
+ */
+let _tabbitOwnerCache: { at: number; owners: Map<number, string> } = { at: 0, owners: new Map() }
+
+/**
+ * Which task owns `tabId`, cached for 20 s.
+ *
+ * `--tab` must run as the owner or tabbit answers `TAB_OWNERSHIP_CONFLICT` — the
+ * single reason both the panel's × and its per-tab capture silently died while
+ * `dsh-panel` held every tab.
+ */
+async function tabbitOwnerOf(ctx: EgoContext, cliPath: string, tabId: number): Promise<string> {
+  const now = Date.now()
+  if (now - _tabbitOwnerCache.at > 20_000) {
+    try {
+      const diag = await tabbitDiagnose(ctx.subprocess, cliPath)
+      const owners = new Map<number, string>()
+      for (const task of parseTabbitTasks(diag.raw)) {
+        for (const id of task.ownedTabIds) owners.set(id, task.taskName)
+      }
+      _tabbitOwnerCache = { at: now, owners }
+    } catch {
+      // Keep the previous map and push the TTL out so we do not retry every tick.
+      _tabbitOwnerCache = { at: now, owners: _tabbitOwnerCache.owners }
+    }
+  }
+  return _tabbitOwnerCache.owners.get(tabId) ?? ''
+}
+
+/**
+ * Keep the panel task's ownership at ONE page.
+ *
+ * Every `nodejs --tab <id>` ADDS the tab to the task's owned set, and tabbit waits
+ * for ALL owned pages to attach before running the snippet. A panel that captured
+ * its way through nine tabs therefore hit `PAGE_ATTACHMENT_TIMEOUT` after 30 s on
+ * every single call — measured: "Timed out waiting for 9 owned Playwright Pages".
+ * `finish` (keep) releases them without closing anything, so the next capture
+ * re-acquires exactly the tab it needs (108 ms in the same test).
+ */
+async function releaseOverOwnedPanelTask(ctx: EgoContext, cliPath: string): Promise<void> {
+  if (_tabbitLastTaskName !== TABBIT_PANEL_TASK) return
+  const owned = [..._tabbitOwnerCache.owners.values()].filter((name) => name === TABBIT_PANEL_TASK).length
+  // Cap at 6, not 1: one `context.pages()` call captures every owned page, so a
+  // larger owned set is exactly what gives background tabs their pictures. Six is
+  // the old ego-route上限 per round, and beyond it every call waits for one more
+  // page to attach (that is what produced PAGE_ATTACHMENT_TIMEOUT with nine).
+  if (owned <= TABBIT_MAX_OWNED_PAGES) return
+  await tabbitFinishTask(ctx.subprocess, cliPath, TABBIT_PANEL_TASK, false).catch(() => undefined)
+  _tabbitOwnerCache = { at: 0, owners: new Map() }
+}
+/** When the last panel watcher disappeared (0 = someone is watching). */
+let _tabbitWatcherGoneAt = 0
 
 /**
  * The last tab ID the agent actively operated on (set by navigate/acquire).
@@ -1762,6 +1889,94 @@ let _tabbitLastTaskName: string = ''
  * Returns {ok, ...data} matching toolPayload contract, or null to fall through
  * to the ego path (e.g. non-tabbit links, unsupported tools).
  */
+/**
+ * The per-task receipt budget (measured: 1024, and a full task fails EVERY
+ * `nodejs` run with empty stdout). Tracked locally because we create exactly
+ * one receipt per run; asked nowhere else because that would cost another
+ * subprocess. Recycled at 80% so the caller never sees the wall.
+ */
+const tabbitReceipts = createReceiptLedger()
+/** Set inside apply() so a recycle can also drop the frame poller's local rows. */
+let tabbitOnRecycle: (() => void) | null = null
+
+/** Tab ids and rows belong to the finished task; nothing from it survives. */
+function forgetTabbitTaskState(): void {
+  _tabbitTabCache.tabs = []
+  _tabbitTabCache.total = 0
+  _tabbitTabCache.complete = false
+  _tabbitTabCache.updatedAt = 0
+  _tabbitWindowId = 0
+  _tabbitLastActiveTabId = null
+  try { tabbitOnRecycle?.() } catch { /* ignore */ }
+}
+
+/**
+ * Hand the task back (tabs retained: `finish` without `--discard`) and forget
+ * it. The next `nodejs` run recreates the task on demand — measured to work,
+ * which is what makes this a caller-invisible operation.
+ */
+async function recycleTabbitTask(subprocess: SubprocessService, cliPath: string, taskName: string): Promise<boolean> {
+  try {
+    await tabbitFinishTask(subprocess, cliPath, taskName, false)
+  } catch {
+    return false
+  }
+  tabbitReceipts.reset(taskName)
+  tabbitReceipts.noteRecycle()
+  forgetTabbitTaskState()
+  return true
+}
+
+/**
+ * Every tabbit run goes through here.
+ *
+ * The frame poller used to burn the whole budget on its own (one receipt every
+ * 3 s, ~51 min per tab), so the WATCH PANEL starved the TOOL PATH and nothing
+ * could heal: the CLI keeps receipts and the old code never recycled. Now the
+ * budget is counted, recycled before the wall, and retried once when the wall
+ * is already hit.
+ */
+async function runTabbitSnippet(
+  subprocess: SubprocessService,
+  jsCode: string,
+  opts: Parameters<typeof runTabbitSnippetRaw>[2],
+): Promise<Awaited<ReturnType<typeof runTabbitSnippetRaw>>> {
+  const task = opts.taskName
+  if (tabbitReceipts.needsRecycle(task)) {
+    // Proactive: recycle BEFORE the wall so this call does not fail at all.
+    const recycled = await recycleTabbitTask(subprocess, opts.cliPath, task)
+    if (recycled) ctx_logTabbitRecycleHint(task, 'proactive')
+  }
+  tabbitReceipts.note(task)
+  let out = await runTabbitSnippetRaw(subprocess, jsCode, opts)
+  if (out.receipt.ok) return out
+  const empty = out.receipt.error?.code === 'EMPTY_OUTPUT'
+  const used = tabbitReceipts.count(task)
+  if (empty && used + 1 >= TABBIT_RECYCLE_AT) {
+    if (await recycleTabbitTask(subprocess, opts.cliPath, task)) {
+      tabbitReceipts.note(task)
+      out = await runTabbitSnippetRaw(subprocess, jsCode, { ...opts, requestId: `${opts.requestId}-r` })
+      if (out.receipt.ok) return out
+    }
+  }
+  if (!empty) return out
+  return {
+    ...out,
+    receipt: {
+      ...out.receipt,
+      error: {
+        code: 'tabbit-task-stalled',
+        message: `${out.receipt.error?.message ?? 'no stdout'} (task receipts ${used}/${TABBIT_RECEIPT_QUOTA}; finish+recreate attempted — if this persists, close the agent page with bcdp_space op=close)`,
+      },
+    },
+  }
+}
+
+/** Logged once per recycle, through the only logger this module can reach. */
+function ctx_logTabbitRecycleHint(task: string, why: string): void {
+  process.stderr.write(`[dsh-browser-cdp] tabbit task recycled (${why}): ${task} — receipts ${TABBIT_RECEIPT_QUOTA} budget, ${tabbitReceipts.recycles()} recycle(s)\n`)
+}
+
 async function tryTabbitExecute(
   ctx: EgoContext,
   cfg: EgoRuntimeConfig,
@@ -1770,7 +1985,7 @@ async function tryTabbitExecute(
   taskName: string,
 ): Promise<unknown | null> {
   const { effective } = effectiveChannel(cfg)
-  if (!effective || effective.link.kind !== TABBIT_CLI_KIND) return null
+  if (!effective || runtimeOfLink(effective.link)?.channel.egoRuntime !== false) return null
   const cli = resolveTabbitCli((effective.link as any).cliPath)
   if (!cli.found) return { ok: false, text: `tabbit-cli not found: ${cli.error}` }
   const sub = ctx.subprocess
@@ -2086,16 +2301,18 @@ function defineEgoTool(ctx: EgoContext, cfg: EgoRuntimeConfig, opts: EgoToolOpti
           const blocked = opts.gate(args)
           if (blocked !== null && blocked !== '') return { ok: false, text: blocked }
         }
-        // P0-3 / Phase 3: Tabbit backend dispatch — HARD LOCK.
-        // If the activated link is tabbit-cli, NEVER fall through to ego/Chrome.
+        // P0-3 / Phase 3: the OPERATION face belongs to the runtime. A channel
+        // that implements `exec` owns its own protocol and must NEVER fall
+        // through to the ego/Chrome path.
         {
           const effLink = resolveEffectiveLink(cfg.links, cfg.activeTargetId)
-          if (effLink?.link.kind === TABBIT_CLI_KIND) {
-            const tabName = `dsh-${sessionSpaceToken(callingSessionId(exec) ?? '')}`
-            const tabResult = await tryTabbitExecute(ctx, cfg, opts.name, args, tabName)
-            // tabResult is always non-null when tabbit is active (default case returns error).
-            // If somehow null, return explicit block rather than leak to ego.
-            return tabResult ?? { ok: false, text: `tabbit-cli is the active backend but tool "${opts.name}" dispatch failed unexpectedly. Not falling back to ego.` }
+          const ownerRuntime = runtimeOfLink(effLink?.link)
+          if (ownerRuntime?.exec) {
+            const tabName = _tabbitLastTaskName || `dsh-${sessionSpaceToken(callingSessionId(exec) ?? '')}`
+            const tabResult = await ownerRuntime.exec({ tool: opts.name, args, task: tabName })
+            // A non-null result means the channel answered; null would be a host
+            // wiring bug, and leaking to ego would drive someone else's browser.
+            return tabResult ?? { ok: false, text: `the activated backend owns this channel but tool "${opts.name}" dispatch failed unexpectedly. Not falling back to ego.` }
           }
         }
         // Stale-space recovery (browser restart wiped the space table) is
@@ -2108,11 +2325,17 @@ function defineEgoTool(ctx: EgoContext, cfg: EgoRuntimeConfig, opts: EgoToolOpti
           if (!result.ok) throw new Error(recoveredFrom ? `${result.error}\n${recoveredFrom}` : result.error)
           if (result.value && typeof result.value === 'object') (result.value as Record<string, unknown>).recoveredFrom = recoveredFrom
           if (typeof opts.afterExecute === 'function') opts.afterExecute(args, result.value)
+          // The operation face just drove this tab: move the focus now, so the
+          // panel follows without waiting for a click or the next spaces poll.
+          noteToolFocus(result.value)
           return toolPayload(result)
         }
         const result = await runWithStaleSpaceRetry(ctx, cfg, exec, () => opts.buildScript(args))
         if (!result.ok) throw new Error(result.error)
         if (typeof opts.afterExecute === 'function') opts.afterExecute(args, result.value)
+        // The operation face just drove this tab: move the focus now, so the
+        // panel follows without waiting for a click or the next spaces poll.
+        noteToolFocus(result.value)
         // Value is JSON.parse output of our own payload �?fits the tool JSON contract.
         return toolPayload(result)
       }),
@@ -2468,6 +2691,10 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
       }
     }
   }
+  // The operation face is owned by the runtime that declares it: the tabbit
+  // channel implements `exec`, so every call site asks "who owns this link"
+  // instead of "is it tabbit?". The body still needs this half's ctx/cfg.
+  setTabbitExecutor((req) => tryTabbitExecute(ctx, cfg, req.tool, req.args, req.task))
   registerEgoStatus(ctx, cfg, reg, tierView)
   registerAuthFlush(ctx, cfg, reg)
   registerLoginImport(ctx, cfg, reg)
@@ -2520,34 +2747,334 @@ bridge.onChange(() => tiers.reapply())
   })
   ctx.effect?.(() => () => cliPoller.stop())
 
-  // Tabbit tab inventory poller: 3s interval, only active when tabbit-cli is the effective link.
-  // Writes to module-level _tabbitTabCache for instant reads by tool handlers.
-  const tabbitTabTimer = setInterval(async () => {
-    const eff = resolveEffectiveLink(cfg.links, cfg.activeTargetId)
-    if (eff?.link.kind !== TABBIT_CLI_KIND) return
-    const cli = resolveTabbitCli((eff.link as any).cliPath)
-    if (!cli.found) return
+  /** Read-only inventory broadcast shared by ⟳ sync and the pre-tool alignment. */
+  const tabbitSyncDeps = (cliPath: string): RefreshSyncDeps => ({
+    listTabs: async () => {
+      const name = _tabbitLastTaskName || 'dsh-panel-read'
+      const res = await tabbitListTabs(ctx.subprocess, cliPath, name)
+      if (!res || res.tabs.length === 0) return null
+      const nextWindow = chooseTabbitWindow(res.tabs, _tabbitLastActiveTabId, res.focusedWindowId)
+      if (nextWindow !== _tabbitWindowId) {
+        _tabbitWindowId = nextWindow
+        _tabbitGoodRows = []
+        _tabbitGoodRowsAt = 0
+      }
+      Object.assign(_tabbitTabCache, res, { updatedAt: Date.now() })
+      bumpTick('ran')
+      return res
+    },
+    captureFrame: async () => {
+      const before = snapshotStats().frame.total
+      await tabbitFrameTick()
+      return { ok: snapshotStats().frame.total > before, bytes: 0 }
+    },
+    rememberTask: () => { /* adoption is not offered; see refresh-sync.ts */ },
+    publish: () => {
+      // Explicit refresh / pre-tool alignment: list EVERY window's tabs ("最全").
+      // The 3 s poller keeps the window-scoped view, which is what kills the
+      // duplicated-pill effect during normal watching.
+      const rows = tabbitSpaceRows('all').tabs
+      if (rows.length === 0) return
+      _tabbitGoodRows = rows
+      _tabbitGoodRowsAt = Date.now()
+      broadcastCliSpaces(rows)
+    },
+    pickActive: (rows) => (_tabbitLastActiveTabId !== null
+      ? String(_tabbitLastActiveTabId)
+      : rows.find((row) => row.active)?.targetId ?? rows[0]?.targetId ?? ''),
+  })
+
+  /**
+   * "Align the panel to the browser BEFORE the LLM acts."
+   *
+   * The tool call itself is what changes the browser, so the strip must not lag by
+   * a whole action: each `bcdp_*` starts with a read-only inventory pass (one
+   * `tabs` process, no receipts, no ownership), so the panel already shows the tab
+   * set the call is about to work on. Fire-and-forget: tool latency must not wait
+   * for it.
+   */
+  /**
+   * \"Is anyone watching the panel?\" — the gate for every automatic source.
+   *
+   * `DSH_BCDP_FAKE_WATCHER=1` is a TEST HOOK (off by default): the host otherwise
+   * cannot observe its own frame throughput without an authenticated panel
+   * websocket, and that is exactly what 60s acceptance runs need. It only widens
+   * the gate; it starts no browser and captures nothing by itself.
+   */
+  const watchersActive = (): boolean =>
+    panelWatcherCount() > 0 || process.env.DSH_BCDP_FAKE_WATCHER === '1'
+  const fakeWatcher = process.env.DSH_BCDP_FAKE_WATCHER === '1'
+  if (fakeWatcher) {
+    ctx.logger?.warn?.('dsh-browser-cdp: DSH_BCDP_FAKE_WATCHER=1 — treating the panel as watched (test hook)')
+  }
+
+  /**
+   * Snapshot of the automatic sources, refreshed every 30 s while anyone watches.
+   *
+   * Written to `~/.dsh/bcdp-panel-stats.json` because the web API needs a session
+   * token that expires, and the app's stdout is truncated after boot — two reasons
+   * \"frame rate\" and \"tab coverage\" could not be measured from outside.
+   */
+  let lastSnapshotAt = 0
+  const writeStatsSnapshot = (): void => {
+    const now = Date.now()
+    if (now - lastSnapshotAt < 30_000) return
+    lastSnapshotAt = now
     try {
-      const taskName = `dsh-${sessionSpaceToken('poll')}`
-      const result = await tabbitListTabs(ctx.subprocess, cli.cliPath, taskName)
-      // 一次失败/空清单绝不清空缓存：面板的 tab 行与 `--tab` 目标都来自这里，
-      // 被空结果覆写后 broadcastCliFrames 会退到合成单行（targetId 对不上按 tabId
-      // 绑定的图），画面就变成「闪一下又空」。保留上一份可用清单，下一轮自然更正。
-      if (result.tabs.length > 0) {
-        Object.assign(_tabbitTabCache, result, { updatedAt: Date.now() })
-      } else if (_tabbitTabCache.tabs.length > 0) {
+      const snap = snapshotStats()
+      const rows = tabbitSpaceRows()
+      const covered = [..._tabbitFrameCovered.entries()]
+        .map(([id, at]) => ({ targetId: String(id), at }))
+        .sort((a, b) => b.at - a.at)
+        .slice(0, 40)
+      const payload = {
+        at: new Date(now).toISOString(),
+        link: (resolveEffectiveLink(cfg.links, cfg.activeTargetId)?.link.kind ?? '') as string,
+        task: _tabbitLastTaskName,
+        fakeWatcher,
+        tabs: rows.tabs.length,
+        tabsWithWindow: rows.tabs.filter((t) => (t.windowId ?? 0) > 0).length,
+        // Tabs that CAN be captured: tabbit's own start page cannot be acquired at
+        // all, so coverage has to be measured against this denominator.
+        tabsCapturable: rows.tabs.filter((t) => !/^(about:|chrome:|edge:|devtools:|data:)/.test(t.url || '') && !/\/newtab$/.test(t.url || '')).length,
+        frame: snap.frame,
+        tick: snap.tick,
+        watch: getWatchCounters(),
+        close: lastClose,
+        coveredLast30min: covered.map((c) => c.targetId),
+        receipts: describeReceipts(tabbitReceipts, _tabbitLastTaskName),
+      }
+      appendFileSync(join(homedir(), '.dsh', 'bcdp-panel-stats.json'), `${JSON.stringify(payload)}\n`)
+    } catch { /* diagnostics must never break the poller */ }
+  }
+
+  const preToolAlign = (): void => {
+    // Nobody is looking: don't spawn a `tabs` process for an invisible panel.
+    // Same discipline as the frame poller (no watchers → no work), and it keeps
+    // "a refused tool call never touches the CLI" true.
+    if (!watchersActive()) return
+    const eff = resolveEffectiveLink(cfg.links, cfg.activeTargetId)
+    if (!eff || runtimeOfLink(eff.link)?.channel.tabbitInventory !== true) return
+    const cli = resolveTabbitCli((eff.link as { cliPath?: string } | undefined)?.cliPath)
+    if (!cli.found) return
+    void runRefreshSync(
+      { list: true, frame: false, adopt: false, reason: 'pre-tool-align' },
+      tabbitSyncDeps(cli.cliPath),
+    ).catch(() => { /* alignment is advisory */ })
+  }
+  // Same seam the tier pulse uses: markEgoToolCall() runs at the TOP of every
+  // tool body, i.e. before the action — exactly where the strip has to be fresh.
+  {
+    const offAlign = onEgoActivity(() => { preToolAlign() })
+    ctx.effect?.(() => offAlign)
+  }
+
+  /**
+   * One on-demand capture of a specific tab (the panel's "刷新页面" / tab click).
+   *
+   * A tab that was never captured used to stay "暂无截图" forever, because frames
+   * only ever followed the ACTIVE tab. Two details matter:
+   *  - without a live task the capture has to create one (that is how tabbit
+   *    works); we use a scratch name and `finish` it right after, so ownership is
+   *    released and the next tool task can still acquire the tab;
+   *  - the frame is broadcast before that release, so the picture stays.
+   */
+  const captureTabbitTab = async (tabId: number): Promise<{ ok: boolean; url: string; title: string; bytes: number }> => {
+    const eff = resolveEffectiveLink(cfg.links, cfg.activeTargetId)
+    if (!eff || runtimeOfLink(eff.link)?.channel.tabbitInventory !== true) {
+      return { ok: false, url: '', title: '', bytes: 0 }
+    }
+    const cli = resolveTabbitCli((eff.link as { cliPath?: string } | undefined)?.cliPath)
+    if (!cli.found) return { ok: false, url: '', title: '', bytes: 0 }
+    // Single-flight: a burst of tab clicks must not stack N capture processes on
+    // the executor (each one is up to an 8 s CLI call). Later callers get the
+    // frame from the broadcast that is already in flight.
+    if (_tabbitShotInFlight) return { ok: false, url: '', title: '', bytes: 0 }
+    _tabbitShotInFlight = true
+    const ownTask = _tabbitLastTaskName !== ''
+    // Ownership first: a tab held by another task answers TAB_OWNERSHIP_CONFLICT,
+    // so the capture has to run as whoever owns it (usually `dsh-panel`).
+    const ownerTask = await tabbitOwnerOf(ctx, cli.cliPath, tabId)
+    // …and the panel task must not hoard pages, or tabbit waits for every one of
+    // them before attaching (PAGE_ATTACHMENT_TIMEOUT).
+    await releaseOverOwnedPanelTask(ctx, cli.cliPath)
+    const taskName = ownerTask || (ownTask ? _tabbitLastTaskName : CLOSE_SCRATCH_TASK)
+    const scratchCreated = taskName === CLOSE_SCRATCH_TASK && ownerTask === ''
+    const outPath = tabbitFramePathFor(tabId)
+    try {
+      // On-demand capture keeps the OLD, generous deadline: a user who clicked is
+      // willing to wait, and a cold background tab can easily need >3.5 s (the
+      // polling deadline) for its first paint.
+      const { receipt } = await runTabbitSnippet(ctx.subprocess, buildFrameCaptureSnippet(outPath, undefined, 8000), {
+        cliPath: cli.cliPath,
+        taskName,
+        requestId: `shot-${Date.now()}-${tabId}`,
+        tabId,
+      })
+      const data = receipt.data as { path?: string; url?: string; title?: string; skipped?: string } | undefined
+      if (!receipt.ok || typeof data?.path !== 'string') {
+        return { ok: false, url: data?.url ?? '', title: data?.title ?? '', bytes: 0 }
+      }
+      const png = readFileSync(data.path)
+      broadcastCliFrames(
+        [{ targetId: String(tabId), png, fmt: 'jpeg', url: data.url ?? '', title: data.title ?? '' }],
+        tabbitSpaceRows().tabs,
+        Date.now(),
+      )
+      return { ok: true, url: data.url ?? '', title: data.title ?? '', bytes: png.length }
+    } catch {
+      return { ok: false, url: '', title: '', bytes: 0 }
+    } finally {
+      _tabbitShotInFlight = false
+      if (scratchCreated) {
+        // Release the scratch task: keep (not --discard), so the tab survives.
+        await tabbitFinishTask(ctx.subprocess, cli.cliPath, taskName, false).catch(() => undefined)
+      }
+    }
+  }
+
+  const captureOnDemand = async (targetId: string): Promise<Record<string, unknown>> => {
+    const tabId = Number(targetId)
+    if (!Number.isFinite(tabId) || tabId <= 0) return { ok: false, reason: 'bad-target' }
+    const shot = await captureTabbitTab(tabId)
+    return { ok: shot.ok, action: 'capture', targetId, bytes: shot.bytes, url: shot.url, title: shot.title }
+  }
+
+  /**
+   * POST /api/bcdp/sync — what the panel's ⟳ should mean: "show me the active
+   * object now", without waiting for a tool call. The header button never had a
+   * handler, so a restart left the panel empty until the agent happened to run a
+   * `bcdp_*` — which is exactly the complaint this answers.
+   *
+   * Per channel (see runtime/refresh-sync.ts for the measured CLI semantics):
+   *  - cdp: re-run the attach pass, so the worker re-reads spaces;
+   *  - tabbit: read-only `tabs --task` (no task, no ownership, no browser launch)
+   *    → the strip appears immediately; a frame only when a task already exists,
+   *    because adopting needs the real `dsh-<session>` name we do not have here;
+   *  - ego-cli / lightpanda: probe only, gated by `allowProbeColdStart`.
+   */
+  const syncOnRefresh = async (): Promise<Record<string, unknown>> => {
+    const eff = resolveEffectiveLink(cfg.links, cfg.activeTargetId)
+    const kind = (eff?.link?.kind ?? '') as RefreshSyncKind
+    const plan = planRefreshSync({
+      kind,
+      hasTask: _tabbitLastTaskName !== '',
+      allowColdStart: cfg.allowProbeColdStart === true,
+    })
+    if (plan.reason === 'worker-attach' || plan.reason === 'probe-only') {
+      const ready = await runCdpRefreshPass()
+      return { ok: true, action: plan.reason === 'worker-attach' ? 'attach' : 'probe', ready, reason: plan.reason }
+    }
+    if (kind !== 'tabbit-cli' || !eff) return { ok: false, reason: plan.reason }
+    const cli = resolveTabbitCli((eff.link as { cliPath?: string } | undefined)?.cliPath)
+    if (!cli.found) return { ok: false, reason: 'tabbit-cli-missing', error: cli.error }
+    const result = await runRefreshSync(plan, tabbitSyncDeps(cli.cliPath))
+    return { ok: true, action: 'tabbit-sync', ...result }
+  }
+
+  // Tabbit tab inventory poller: 3s interval, one pass in flight at a time.
+  // Two hard lessons are baked into this shape:
+  //  - Tab ownership is PER TASK. A fixed `dsh-<token('poll')>` task invented an
+  //    owner nobody had, so the inventory could describe SOMEONE ELSE's tabs
+  //    while the agent's own stayed invisible — and the ids it produced did not
+  //    match the frames captured under `_tabbitLastTaskName`.
+  //  - `tabbitListTabs` allows a 10s grace while the tick is 3s: without a gate,
+  //    up to four `tabs` processes stack against the same executor. The run queue
+  //    is that gate now (opportunistic: a busy lane drops the tick).
+  const tabbitTabTimer = setInterval(async () => {
+    bumpTick('scheduled')
+    const eff = resolveEffectiveLink(cfg.links, cfg.activeTargetId)
+    if (runtimeOfLink(eff?.link)?.channel.tabbitInventory !== true || !eff) return
+    // Same budget discipline as the frame poller: an inventory nobody reads is
+    // still a subprocess every 3 s. (It creates no receipt, but it costs a spawn
+    // and takes the lane away from tool calls.)
+    if (!watchersActive()) {
+      bumpTick('no-watchers')
+      // Give up a PANEL-owned task after a minute of nobody watching: holding the
+      // user's tab is a real side effect, so it must not outlive the audience.
+      if (_tabbitLastTaskName === TABBIT_PANEL_TASK) {
+        if (_tabbitWatcherGoneAt === 0) _tabbitWatcherGoneAt = Date.now()
+        if (Date.now() - _tabbitWatcherGoneAt > 60_000) {
+          _tabbitWatcherGoneAt = 0
+          const cliX = resolveTabbitCli((eff.link as any).cliPath)
+          _tabbitLastTaskName = ''
+          if (cliX.found) void tabbitFinishTask(ctx.subprocess, cliX.cliPath, TABBIT_PANEL_TASK, false).catch(() => undefined)
+        }
+      }
+      return
+    }
+    _tabbitWatcherGoneAt = 0
+    // Someone is watching: refresh the out-of-band health snapshot (30 s cadence).
+    writeStatsSnapshot()
+    const cli = resolveTabbitCli((eff.link as any).cliPath)
+    if (!cli.found) { bumpTick('no-cli'); return }
+    // No owner yet: the panel itself takes one instead of waiting for a tool call.
+    //
+    // This is the decoupling the user asked for — screenshots used to require a
+    // `bcdp_*` to establish the task, so a freshly restarted panel had no picture
+    // until the conversation did something. A watcher is enough consent: one
+    // read-only `tabs` needs no task, and the first capture creates `dsh-panel`
+    // on the tab the user is looking at. Tool calls adopt the same name
+    // afterwards, so there is still exactly ONE owner.
+    if (_tabbitLastTaskName === '' && watchersActive()) {
+      _tabbitLastTaskName = TABBIT_PANEL_TASK
+      bumpTick('adopted')
+    }
+    const ownerTask = _tabbitLastTaskName
+    if (ownerTask === '') { bumpTick('no-owner'); return }
+    // Opportunistic: the queue drops this tick when a tool call (or a frame
+    // capture) already owns the lane, which is why the old in-flight flag and
+    // the `egoLockBusy()` peek are gone — they only made the race smaller.
+    let result: Awaited<ReturnType<typeof tabbitListTabs>> | null = null
+    try {
+      result = await backendQueue.latest({
+        key: BACKEND_LANE,
+        run: () => tabbitListTabs(ctx.subprocess, cli.cliPath, ownerTask),
+      })
+    } catch {
+      bumpTick('error')
+      return
+    }
+    if (result === null) { bumpTick('dropped-busy'); return }
+    // A failed/empty answer must never clear the cache: the panel's tab rows
+    // and every `--tab` target come from here, so an empty overwrite sends
+    // broadcastCliFrames back to a synthetic single row whose targetId the
+    // frames (bound by tabId) cannot match — the panel then flickers once and
+    // goes blank. Keep the last good list; the next tick corrects it.
+    if (result.tabs.length > 0) {
+      // Pick the window the agent lives in (see chooseTabbitWindow): its own tab
+      // first, else the focused window, else the first tab's window. A window
+      // switch invalidates the cached rows so the strip rebuilds instead of
+      // mixing two windows' tabs.
+      const nextWindow = chooseTabbitWindow(result.tabs, _tabbitLastActiveTabId, result.focusedWindowId)
+      if (nextWindow !== _tabbitWindowId) {
+        _tabbitWindowId = nextWindow
+        _tabbitGoodRows = []
+        _tabbitGoodRowsAt = 0
+      }
+      Object.assign(_tabbitTabCache, result, { updatedAt: Date.now() })
+      bumpTick('ran')
+      // ONE job per cycle: the capture used to be its own 3 s `latest()` job on the
+      // same lane, and the two starved each other forever (measured: frame
+      // dropped-busy 100%, ok 0, receipts 0/1024). Run it here, in the same lane
+      // slot, after the inventory is fresh — that is what makes a frame possible.
+      try {
+        await tabbitFrameTick()
+      } catch { /* frame failures are counted inside the tick */ }
+    } else {
+      bumpTick('empty')
+      if (_tabbitTabCache.tabs.length > 0) {
         ctx.logger?.info?.('dsh-browser-cdp: tabbit inventory returned empty; keeping the previous list')
       }
-    } catch { /* best-effort, never crash the timer */ }
+    }
   }, 3000)
   ctx.effect?.(() => () => clearInterval(tabbitTabTimer))
 
-  // Tabbit frame poller: captures screenshot of the agent's active tab every 3s for the observation window.
+  // Tabbit frame poller: captures the agent's active tab every 3s for the
+  // observation window. The run queue is the single-flight gate now: a tick that
+  // arrives while a tool call (or the inventory pass) owns the lane is dropped,
+  // because a frame captured then would describe a page that is already moving.
   let tabbitFrameSeq = 0
-  // One tick in flight at a time: a capture of a heavy page takes ~2.6 s while
-  // the interval is 3 s, so without this guard ticks stack up and each one
-  // spawns another tabbit-cli process against the same tab.
-  let tabbitFrameInFlight = false
   // Last skip reason logged, so a persistent skip (blank page / stuck capture)
   // prints once instead of every 3 s.
   let tabbitFrameSkipLogged = ''
@@ -2556,28 +3083,56 @@ bridge.onChange(() => tiers.reapply())
   // overwrite the first before the host read it.
   const tabbitFramePathFor = (tabId: number | string): string =>
     join(tmpdir(), `dsh-browser-cdp-frame-${process.pid}-${String(tabId)}.jpg`)
-  /** Round-robin cursor: 3s ticks → active tab every tick, one background tab extra. */
+  /** Round-robin cursor: superseded by _tabbitFrameCovered (kept for the 仅激活 path). */
   let tabbitFrameRR = 0
+  /** tabId → last successful capture. Drives coverage (oldest-first) in 全模式. */
+  const _tabbitFrameCovered = new Map<number, number>()
   /** 上一份非空的 tab 清单：瞬时拉不到列表时用它撑住面板，避免退到合成单行。 */
   let _tabbitGoodRows: TabbitSpaceRow[] = []
   let _tabbitGoodRowsAt = 0
-  const tabbitFrameTimer = setInterval(async () => {
+  // Receipt-budget guard for the observation face (see tabbit-receipts.ts):
+  // every captured frame is one `nodejs` receipt out of the SAME 1024 budget the
+  // tool calls draw on. Measured incident: the poller alone filled it in ~51 min
+  // and every bcdp_* call then died with empty stdout.
+  let tabbitFrameNextAt = 0
+  let tabbitFrameStreak = 0
+  let tabbitFrameDigest = ''
+  // A recycle finishes + recreates the task, so every row/tab id we remember is
+  // stale by definition. Drop them, or the panel keeps binding frames to ids
+  // that no longer exist (the "flicker once then blank" failure).
+  tabbitOnRecycle = () => {
+    tabbitFrameNextAt = 0
+    tabbitFrameStreak = 0
+    tabbitFrameDigest = ''
+    _tabbitGoodRows = []
+    _tabbitGoodRowsAt = 0
+  }
+  const tabbitFrameTick = async (): Promise<void> => {
     const eff = resolveEffectiveLink(cfg.links, cfg.activeTargetId)
-    if (eff?.link.kind !== TABBIT_CLI_KIND) return
+    // Counted exits: a silent `return` here made "the tick never ran" look like
+    // "the lane dropped it" for three debugging rounds.
+    if (runtimeOfLink(eff?.link)?.channel.frames !== 'tabbit-poll' || !eff) { bumpFrame('not-tabbit'); return }
+    // Nobody is watching the panel: don't spend the shared receipt budget on
+    // pictures nobody will see (this is the single biggest saver — ~1 receipt
+    // every 3 s used to burn the 1024 wall in about 51 minutes).
+    if (_closeInFlight) { bumpFrame('closing'); return }
+    if (!watchersActive()) { bumpFrame('no-watchers'); return }
+    // Idle backoff: an unchanged page does not need a fresh capture every 3 s.
+    if (Date.now() < tabbitFrameNextAt) { bumpFrame('backoff'); return }
     const cli = resolveTabbitCli((eff.link as any).cliPath)
-    if (!cli.found) return
-    if (egoLockBusy()) return
+    if (!cli.found) { bumpFrame('no-cli'); return }
     // Must use the SAME task name as the tool call (Tabbit ownership is per-task).
-    if (!_tabbitLastTaskName) return // No task yet, skip until first tool call establishes one.
-    if (tabbitFrameInFlight) return
-    tabbitFrameInFlight = true
+    // With panel adoption this is `dsh-panel`; the capture itself creates it.
+    if (!_tabbitLastTaskName) { bumpFrame('no-owner'); return }
     try {
       // `--tab` is REQUIRED. Without it the CLI runs the snippet against the
       // task's DEFAULT page, which is a fresh about:blank: the panel gets
       // nothing and the capture burns the full hard deadline. Target the tab a
-      // tool actually drove, else whatever the inventory flags as active.
-      const activeTab = _tabbitLastActiveTabId ?? _tabbitTabCache.tabs.find((t) => t.active === true)?.tabId
+      // tool actually drove, else whatever the (window-scoped) inventory flags
+      // as active — never a tab from another window.
       const inv = tabbitSpaceRows()
+      const rowActive = inv.tabs.find((row) => row.active === true)?.targetId
+      const activeTab = _tabbitLastActiveTabId ?? (rowActive === undefined ? undefined : Number(rowActive))
       // rows 为空时不能直接丢给广播：那会命中 `lastCliSpaces = null` 分支、退回
       // 合成单行，而图是按真实 tabId 绑定的，两者对不上就是白屏。给 30s 的
       // 「沿用上一份非空清单」窗口，超过才承认真没有 tab。
@@ -2588,7 +3143,7 @@ bridge.onChange(() => tiers.reapply())
       const rows = inv.tabs.length > 0
         ? inv.tabs
         : (Date.now() - _tabbitGoodRowsAt < 30_000 ? _tabbitGoodRows : [])
-      const allMode = getCliTrackAll(cfg.tabTracking === 'all')
+      const allMode = getCliTrackAll(cfg.tabTracking === 'all') || process.env.DSH_BCDP_TRACK_ALL === '1'
       // Capture plan for this tick:
       //  - 仅激活: the active tab only (1 CLI run).
       //  - 全模式: the active tab EVERY tick (it is what the user watches) plus ONE
@@ -2596,20 +3151,23 @@ bridge.onChange(() => tiers.reapply())
       //    background tab still refreshes every N×3s. Capturing all N in one tick
       //    would mean N CLI processes on the same executor and would stall the
       //    panel past its own cadence.
+      // FOCUSED TAB ONLY (user decision): tabbit can only capture owned pages, and
+      // every extra owned page makes EVERY later call wait for one more attach.
+      // So the poller watches the tab the agent is on; the strip still lists all
+      // tabs, and a per-tab frame is fetched on demand when the user clicks one.
       const plan: Array<number | undefined> = [typeof activeTab === 'number' ? activeTab : undefined]
-      if (allMode) {
-        const others = rows
-          .map((r) => Number(r.targetId))
-          .filter((id) => Number.isFinite(id) && id > 0 && id !== activeTab)
-        if (others.length > 0) {
-          plan.push(others[tabbitFrameRR % others.length])
-          tabbitFrameRR += 1
-        }
-      }
       const images: Array<{ targetId: string; png: Buffer; fmt: 'jpeg'; url: string; title: string }> = []
       let sawSkip = ''
       let sawNoPath: unknown = null
-      for (const tabId of plan) {
+      // 全模式: ONE call captures every page the task owns, exactly like the old
+      // ego route's per-tab CDP sessions (no activation, so background tabs get
+      // pictures too). Falls through to the per-tab plan if it yields nothing.
+      // In 全模式 the multi-page pass already covers every OWNED page; running the
+      // per-tab acquisition loop on top of it doubled the calls per cycle and made
+      // the inventory time out (`tick empty` 12/51, frame.ok 18 → 2). Acquisition
+      // happens on demand instead (tab click / 刷新页面 / the panel's own capture),
+      // which grows the owned set without hammering the executor every cycle.
+      for (const tabId of (images.length > 0 ? [] : plan)) {
         const outPath = tabbitFramePathFor(tabId ?? 'active')
         const js = buildFrameCaptureSnippet(outPath)
         // NO `timeoutMs` here: the CLI rejects anything below 60000, and a 60 s
@@ -2618,16 +3176,23 @@ bridge.onChange(() => tiers.reapply())
         // capture returns in ~8 s instead of holding the executor.
         const { receipt } = await runTabbitSnippet(ctx.subprocess, js, {
           cliPath: cli.cliPath,
-          taskName: _tabbitLastTaskName,
+          taskName: await (async () => {
+            if (typeof tabId !== 'number') return _tabbitLastTaskName
+            const owner = await tabbitOwnerOf(ctx, cli.cliPath, tabId)
+            await releaseOverOwnedPanelTask(ctx, cli.cliPath)
+            return owner || _tabbitLastTaskName
+          })(),
           requestId: `frame-${Date.now()}-${tabId ?? 'active'}`,
           ...(typeof tabId === 'number' ? { tabId } : {}),
         })
         const data = receipt.data as { path?: string; url?: string; title?: string; skipped?: string; error?: string } | undefined
         if (receipt.ok && data?.skipped !== undefined) {
           sawSkip = `${data.skipped}:${data.error ?? ''}`
+          bumpFrame('skipped')
           continue
         }
         if (receipt.ok && typeof data?.path === 'string') {
+          _tabbitFrameCovered.set(tabId ?? -1, Date.now())
           images.push({
             targetId: tabId === undefined ? '' : String(tabId),
             png: readFileSync(data.path),
@@ -2660,38 +3225,52 @@ bridge.onChange(() => tiers.reapply())
       }
       tabbitFrameSkipLogged = ''
       tabbitFrameSeq++
+      bumpFrame('ok')
+      // Three identical frames → 10 s, six → 30 s; any change snaps back to 3 s.
+      // A cheap digest is enough: length + head/tail bytes of each image.
+      const digest = images
+        .map((image) => `${image.targetId}:${image.png.length}:${image.png.subarray(0, 8).toString('hex')}:${image.png.subarray(-8).toString('hex')}`)
+        .join('|')
+      if (digest === tabbitFrameDigest) tabbitFrameStreak += 1
+      else { tabbitFrameDigest = digest; tabbitFrameStreak = 0 }
+      tabbitFrameNextAt = tabbitFrameStreak >= 6 ? Date.now() + 12_000 : tabbitFrameStreak >= 3 ? Date.now() + 6_000 : 0
       // One cycle → one `spaces` + one `frame` per captured tab. The rows are the
       // real inventory, so the strip lists every tab and the images bind by id.
       // 但面板跟随的那一行必须是本轮真拍到的 tab，否则客户端会拿它去淘汰
       // frameCache 里刚到的帧（见 rowsWithPrimaryActive）。
+      // De-dup by targetId: the multi-page pass and the per-tab plan can both
+      // produce the same tab (the plan's tab is also owned, hence visible to
+      // `context.pages()`). Keep the FIRST (multi) because it is the newer bytes.
+      {
+        const seen = new Set<string>()
+        for (let i = images.length - 1; i >= 0; i -= 1) {
+          const key = images[i].targetId || `url:${images[i].url}`
+          if (seen.has(key)) images.splice(i, 1); else seen.add(key)
+        }
+      }
       const primaryId = typeof plan[0] === 'number' ? String(plan[0]) : (images[0]?.targetId ?? '')
       broadcastCliFrames(images, rowsWithPrimaryActive(rows, primaryId), Date.now())
     } catch (err) {
       ctx.logger?.warn?.(`dsh-browser-cdp: tabbit frame poller error: ${String((err as Error)?.message ?? err)}`)
-    } finally {
-      tabbitFrameInFlight = false
     }
-  }, 3000)
-  ctx.effect?.(() => () => clearInterval(tabbitFrameTimer))
-  ctx.effect?.(() => () => clearInterval(tabbitFrameTimer))
+  }
+  // The frame capture runs INSIDE the inventory tick (see tabbitTabTimer).
+  //
+  // It used to be its own 3 s `latest()` job on the same `BACKEND_LANE`, and the
+  // two jobs starved each other permanently: measured `frame{total:29,
+  // dropped-busy:29, ok:0}` with `receipts 0/1024` — not one capture ever started,
+  // while the inventory tick ran every time. One lane, one job per cycle.
 
-  const triggerCdpRefresh = (() => {
-    let inFlight = false
-    let pending = false
-    /** Last ws handed to the worker; a differ means the browser was relaunched. */
-    let lastAttachWs: string | null = null
-    /** Last channel owner (id|reason); a differ is logged so takeovers are visible. */
-    let lastOwnerKey: string | null = null
-    /** True when this pass actually moved the resolved endpoint. */
+  // One attach pass. The SCHEDULING (debounce / min interval / shared result /
+  // latest-wins) lives in src/runtime/probe-scheduler.ts — it used to be inline
+  // here, which is why its rules could not be unit-tested.
+  /** Last ws handed to the worker; a differ means the browser was relaunched. */
+  let lastAttachWs: string | null = null
+  /** Last channel owner (id|reason); a differ is logged so takeovers are visible. */
+  let lastOwnerKey: string | null = null
+  const runCdpRefreshPass = async (): Promise<boolean> => {
     let changed = false
-    const run = async (): Promise<boolean> => {
-      if (inFlight) {
-        pending = true
-        return changed
-      }
-      inFlight = true
-      changed = false
-      try {
+    try {
         const resolved = resolveConfig(bridge.source() as RawConfig)
         // Re-confirm the top-priority channel FIRST: activation if usable,
         // else the first enabled link in sequence order. Every links event
@@ -2727,6 +3306,15 @@ bridge.onChange(() => tiers.reapply())
           // 探测冷启动闸门（默认关）：关 = ego-cli 探测绝不把背后的浏览器拉起来，
           // 挂载/改设置不再弹浏览器窗口；首个真实 bcdp_* 调用才冷启动。
           cliProbeColdStart: resolved.allowProbeColdStart === true,
+          // Tabbit bridge — existence-only probe (never `diagnose`: it may
+          // cold-start the backing browser). A missing CLI becomes an
+          // actionable `unreachable` instead of a blanket `ready`.
+          tabbitProbe: (link) => {
+            const cli = resolveTabbitCli(link.cliPath)
+            return cli.found
+              ? { ok: true, cliPath: cli.cliPath }
+              : { ok: false, cliPath: cli.cliPath, code: 'tabbit-cli-missing', message: cli.error }
+          },
           // Lightpanda backend �?managed-serve extra args for `lightpanda` rows.
           lightpandaArgs: resolved.lightpandaArgs,
           // R7 �?the local ego CLI link probes through the host subprocess
@@ -2750,31 +3338,44 @@ bridge.onChange(() => tiers.reapply())
         // never contends with a live screencast worker.
         const cliFrameActive =
           ws === null &&
-          attach.linkKind === EGO_CLI_KIND &&
+          runtimeOfLink(resolveEffectiveLink(resolved.links, resolved.activeTargetId)?.link)?.channel.frames === 'ego-cli-poll' &&
           attach.status === 'ready' &&
           resolved.cliFramePollEnabled === true
         if (cliFrameActive) cliPoller.start()
         else cliPoller.stop()
       } catch {
         /* best-effort: a failed probe must never break the settings apply */
-      } finally {
-        inFlight = false
-        if (pending) {
-          pending = false
-          void run()
-        }
       }
       return changed
-    }
-    return (): Promise<boolean> => run()
-  })()
+  }
+
+  const triggerCdpRefresh = createProbeScheduler(runCdpRefreshPass, {
+    onPass: (latencyMs) => bumpProbe('run', latencyMs),
+    onError: (error, latencyMs) => {
+      bumpProbe('error', latencyMs)
+      noteStatsError(String((error as Error)?.message ?? error))
+    },
+  })
   triggerCdpRef = triggerCdpRefresh
-  bridge.onChange(() => void triggerCdpRefresh())
+  // Keep the unsubscribe handle: relying on the fiber dying to drop a listener
+  // leaves a stale closure (and a stale `triggerCdpRef`) alive across a hot
+  // remount, which then probes with the PREVIOUS mount's config.
+  const offSettingsChange = bridge.onChange(() => void triggerCdpRefresh())
   // Initial probe so the first bcdp_* call attaches without waiting for a change.
   void triggerCdpRefresh()
   // Drop stale attach state when the plugin unmounts; a fresh mount starts clean.
   ctx.effect?.(() => () => {
+    triggerCdpRefresh.dispose()
+    try { offSettingsChange() } catch { /* ignore */ }
+    // The executor closes over THIS mount's ctx/cfg; leaving it registered would
+    // let a later dispatch run against a disposed context.
+    setTabbitExecutor(null)
+    triggerCdpRef = undefined
     defaultAttachCache.reset()
+    // A target id is a runtime handle: it must not survive the mount that owned
+    // the browser, or the next attach would start by highlighting a dead row.
+    defaultFocusStore.clear()
+    resetStats()
   })
   // Realtime watch-panel host routes (/api/bcdp/*). Guarded: only meaningful
   // when the host exposes an HTTP server (web surface); headless safe-no-op.
@@ -2802,6 +3403,163 @@ bridge.onChange(() => tiers.reapply())
         cliPoller,
         makePanelActions(ctx, cfg),
         () => tabbitSpaceRows(),
+        // Closing a tab on a CLI channel: the panel's × must really close it,
+        // not just drop the row. Tabbit can do it through its own runtime
+        // (`page.close()` on the tab); other CLI channels answer 501.
+        async (targetId: string): Promise<{ ok: boolean; reason: string }> => {
+          const eff = resolveEffectiveLink(cfg.links, cfg.activeTargetId)
+          if (runtimeOfLink(eff?.link)?.channel.tabbitInventory !== true) return { ok: false, reason: 'channel-cannot-close' }
+          const cli = resolveTabbitCli((eff?.link as { cliPath?: string } | undefined)?.cliPath)
+          if (!cli.found) return { ok: false, reason: 'tabbit-cli-missing' }
+          const tabId = Number(targetId)
+          if (!Number.isFinite(tabId) || tabId <= 0) return { ok: false, reason: 'bad-target' }
+          // DISPATCH, DON'T BLOCK. Measured behaviour of tabbit-cli 1.21.21:
+          //
+          //   available → an IDLE task closes a real tab in ~560 ms;
+          //   owned     → `page.close()` under the busy poller queued for 80 s and left
+          //               the tab open; dropping the claim first (`finish` keep, ~47 ms,
+          //               the page is NOT closed) makes it fast again;
+          //   claimed   → only the owning task may close it.
+          //
+          // Even on the fast path the whole chain (inventory + release + close +
+          // verify) can outlive any HTTP deadline the panel can wait for, and every
+          // extra second the user stares at a spinner. So the route DISPATCHES: it
+          // answers 202 `pending`, and the row is removed by the next inventory
+          // broadcast (~5 s) only if the tab is really gone. Nothing is faked — the
+          // spaces list still comes from the browser, not from this handler.
+          const startedAt = Date.now()
+          const withDeadline = async <T>(work: Promise<T>, ms: number, fallback: T): Promise<T> => {
+            return Promise.race([work, new Promise<T>((resolve) => setTimeout(() => resolve(fallback), ms))])
+          }
+          _closeInFlight = true
+          let state = ""
+          let closer = CLOSE_SCRATCH_TASK
+          try {
+            const inv = await withDeadline(tabbitListTabs(ctx.subprocess, cli.cliPath, TABBIT_PANEL_TASK), 3000, null)
+            state = String(inv?.tabs.find((t) => t.tabId === tabId)?.state ?? "")
+            if (state === "owned") {
+              await withDeadline(tabbitFinishTask(ctx.subprocess, cli.cliPath, TABBIT_PANEL_TASK, false), 3000, undefined as never)
+              _tabbitOwnerCache = { at: 0, owners: new Map() }
+            } else if (state === "claimed") {
+              let owner = _tabbitOwnerCache.owners.get(tabId)
+              if (owner === undefined) {
+                const diag = await withDeadline(tabbitDiagnose(ctx.subprocess, cli.cliPath), 3000, null)
+                if (diag) owner = parseTabbitTasks(diag.raw).find((t) => t.ownedTabIds.includes(tabId))?.taskName
+              }
+              if (owner !== undefined && owner !== "") closer = owner
+            }
+          } finally {
+            _closeInFlight = false
+          }
+
+          // Fire the close and return. Verification is the poller's next inventory.
+          void runTabbitSnippet(
+            ctx.subprocess,
+            "await page.close().catch(() => {}); return { closed: page.isClosed() };",
+            { cliPath: cli.cliPath, taskName: closer, requestId: `close-${Date.now()}`, tabId },
+          ).then(async (fired) => {
+            let stillThere = true
+            try {
+              const inv = await tabbitListTabs(ctx.subprocess, cli.cliPath, TABBIT_PANEL_TASK)
+              stillThere = inv.tabs.some((t) => t.tabId === tabId)
+            } catch { /* cannot verify */ }
+            lastClose = {
+              tabId,
+              task: closer,
+              state: state || "unknown",
+              status: String(fired.receipt.status),
+              closedByReceipt: !stillThere,
+              stillThere,
+              ms: Date.now() - startedAt,
+              at: Date.now(),
+            }
+            if (!stillThere) {
+              if (_tabbitLastActiveTabId === tabId) _tabbitLastActiveTabId = null
+              _tabbitTabCache.tabs = _tabbitTabCache.tabs.filter((t) => t.tabId !== tabId)
+              _tabbitTabCache.total = _tabbitTabCache.tabs.length
+              broadcastCliSpaces(tabbitSpaceRows().tabs)
+            } else {
+              ctx.logger?.info?.(`dsh-browser-cdp: close tab ${tabId} via ${closer} did not close (${fired.receipt.status})`)
+            }
+          }).catch(() => undefined)
+
+          lastClose = { tabId, task: closer, state: state || "unknown", status: "dispatched", closedByReceipt: false, stillThere: true, ms: Date.now() - startedAt, at: Date.now() }
+          return { ok: true, reason: "dispatched" }
+        },
+        // Tab activation / reload / goto on the tabbit channel. Without this the
+        // panel's own actions fell through to the ego-cli heredoc runner and
+        // answered 502 (observed in the user's network tab), so the buttons looked
+        // dead even though the host was healthy.
+        async (action: Record<string, unknown>) => {
+          const eff = resolveEffectiveLink(cfg.links, cfg.activeTargetId)
+          if (runtimeOfLink(eff?.link)?.channel.tabbitInventory !== true) return { ok: false, reason: 'unsupported-channel' }
+          const cli = resolveTabbitCli((eff?.link as { cliPath?: string } | undefined)?.cliPath)
+          if (!cli.found) return { ok: false, reason: 'tabbit-cli-missing' }
+          const tabId = Number(action.targetId)
+          if (!Number.isFinite(tabId) || tabId <= 0) return { ok: false, reason: 'bad-target' }
+          // Same queue problem as close: a navigate/reload queued behind the frame
+          // poller never runs (measured 80 s). Yield the executor while we act.
+          _closeInFlight = true
+          const owner = await tabbitOwnerOf(ctx, cli.cliPath, tabId)
+          await releaseOverOwnedPanelTask(ctx, cli.cliPath)
+          const taskName = owner || _tabbitLastTaskName || CLOSE_SCRATCH_TASK
+          const isNavigate = action.type === 'navigate'
+          const url = typeof action.url === 'string' ? action.url : ''
+          // tabbit's own start page cannot be acquired at all (measured: the
+          // acquisition sits `pending` and the task dies with TASK_CLOSED, ~30-80 s).
+          // Refuse it up front instead of poisoning the task.
+          const known = _tabbitTabCache.tabs.find((t) => t.tabId === tabId)
+          const knownUrl = String(known?.url ?? '')
+          if (/^(about:|chrome:|edge:|devtools:|data:)/.test(knownUrl) || /\/newtab$/.test(knownUrl)) {
+            return { ok: false, reason: 'blank-tab', error: '该标签是浏览器自带的新标签页，无法被接管；请切到真实网页再操作' } as any
+          }
+          // CDP, not Playwright: `page.reload()` / `page.goto()` wait for a load
+          // event this runtime never delivers (measured 80 s, status `pending`),
+          // while `Page.reload` over the CDP session answers in 79 ms.
+          const script = isNavigate
+            ? (url !== ''
+                ? `const cdp = await page.context().newCDPSession(page); await cdp.send('Page.navigate', { url: ${JSON.stringify(url)} }); return { ok: true, url: ${JSON.stringify(url)} };`
+                : `const cdp = await page.context().newCDPSession(page); await cdp.send('Page.reload', { ignoreCache: false }); return { ok: true, url: page.url() };`)
+            : `await page.bringToFront(); return { ok: true };`
+          let receiptOut: Awaited<ReturnType<typeof runTabbitSnippet>>['receipt'] | null = null
+          try {
+            const ran = await runTabbitSnippet(ctx.subprocess, script, {
+              cliPath: cli.cliPath,
+              taskName,
+              requestId: `${action.type ?? 'action'}-${Date.now()}`,
+              tabId,
+            })
+            receiptOut = ran.receipt
+          } finally {
+            // ALWAYS released, including every early return above and a throw:
+            // a stuck flag would freeze the frame poller forever.
+            _closeInFlight = false
+          }
+          const receipt = receiptOut!
+          if (!receipt.ok) {
+            // A hung/unattachable call poisons the task for every later capture
+            // (subsequent calls time out waiting for owned pages). Release it so
+            // the next cycle starts from a clean task. `pending` is not in the
+            // receipt union, hence the string compare.
+            const st = String(receipt.status)
+            if (st === 'pending' || st === 'running' || st === 'queued' || st === 'interrupted') {
+              await tabbitFinishTask(ctx.subprocess, cli.cliPath, taskName, false).catch(() => undefined)
+              _tabbitOwnerCache = { at: 0, owners: new Map() }
+            }
+            return { ok: false, reason: `tabbit-${st}` }
+          }
+          // A reload/goto leaves the tab without a frame until something captures
+          // it — the poller follows the ACTIVE tab, so capture it here.
+          if (isNavigate) {
+            _tabbitLastActiveTabId = tabId
+            void captureTabbitTab(tabId)
+          }
+          return { ok: true, url: (receipt.data as { url?: string } | undefined)?.url ?? '' }
+        },
+        // Panel ⟳ — see syncOnRefresh above.
+        syncOnRefresh,
+        // Panel "刷新页面" / tab click — one frame of THAT tab, on demand.
+        captureOnDemand,
       )
     } catch (err) {
       ctx.logger?.warn?.(
@@ -2873,10 +3631,10 @@ bridge.onChange(() => tiers.reapply())
           // the user's own daily instance, not an agent-owned one. The command
           // is currently an unknown no-op on the native CLI, but "fixing" it
           // would kill the user's browser �?an explicit non-goal, not a TODO.
-          const linkKind = effectiveChannel(cfg).effective?.link.kind
-          if (linkKind === EGO_CLI_KIND || linkKind === TABBIT_CLI_KIND) {
+          const reaperLink = effectiveChannel(cfg).effective?.link
+          if (runtimeOfLink(reaperLink)?.ownsUserBrowser === true) {
             reapedFor = last
-            ctx.logger?.info?.(`dsh-browser-cdp: idle reaper skipped: ${linkKind} owns the user\'s browser (never --stop it)`)
+            ctx.logger?.info?.(`dsh-browser-cdp: idle reaper skipped: ${reaperLink?.kind} owns the user\'s browser (never --stop it)`)
             return
           }
           // T2.14 �?a locally launched managed browser reaps by pid, not CLI.
@@ -2940,8 +3698,8 @@ bridge.onChange(() => tiers.reapply())
     try {
       // R4/F3 �?teardown must not stop an `ego-cli` link's browser either: it
       // is the user's own ego lite instance and outlives this plugin.
-      if (effectiveChannel(cfg).effective?.link.kind === EGO_CLI_KIND || effectiveChannel(cfg).effective?.link.kind === TABBIT_CLI_KIND) {
-        ctx.logger?.info?.('dsh-browser-cdp: teardown skipped --stop: user-owned browser (ego-cli/tabbit-cli)')
+      if (runtimeOfLink(effectiveChannel(cfg).effective?.link)?.ownsUserBrowser === true) {
+        ctx.logger?.info?.('dsh-browser-cdp: teardown skipped --stop: the activated channel owns the user\'s browser (CLI / managed serve)')
         return
       }
       const handle = ctx.subprocess.spawn({
@@ -2984,8 +3742,13 @@ function registerEgoStatus(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool: T
     defineTool({
       name: 'bcdp_status',
       description:
-        'Drive the shared CDP browser (ego runtime): probe the CLI, and unlock the rest of the bcdp_* tools — under lazy injection only this tool is resident, so call it first for any browsing task (open a page, fill a form, screenshot, read, or attach your own Chrome/Edge over CDP). A bcdp_* tool missing from your list is sealed by tiering, not broken.',
-      parameters: {},
+        'Drive the shared CDP browser (ego runtime): unlock the rest of the bcdp_* tools — under lazy injection only this tool is resident, so call it first for any browsing task (open a page, fill a form, screenshot, read, or attach your own Chrome/Edge over CDP). A bcdp_* tool missing from your list is sealed by tiering, not broken.',
+      // Readiness rides in the body, not a description: this tool is the ONLY
+      // resident one, so every character here is paid on every turn (the
+      // ego-surface budget test is the guard). `refresh` is self-describing.
+      parameters: {
+        refresh: { type: 'boolean' },
+      },
       output: {
         schema: {
           type: 'object',
@@ -3010,6 +3773,9 @@ function registerEgoStatus(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool: T
               },
             },
             guidance: { type: 'string' },
+            // Cache fast path: this answer cost no spawn. The verdict itself rides
+            // in `raw` so the always-resident tool adds ONE property, not three.
+            cached: { type: 'boolean' },
             facades: {
               type: 'object',
               additionalProperties: false,
@@ -3028,7 +3794,7 @@ function registerEgoStatus(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool: T
       // Measured ~300ms, so 15s is already a generous ceiling. Do NOT raise it
       // for browser cold-start �?that concern does not apply to this probe.
       timeoutMs: 15_000,
-      execute: async (_args: Record<string, unknown>, exec: ToolExec) => {
+      execute: async (args: Record<string, unknown>, exec: ToolExec) => {
         // Per-session pulse: pass callingSessionId so sessionScopedPulse can
         // advance only this session's depth. Falls back to process-level when
         // sessionId is undefined (non-agent caller or feature off).
@@ -3039,6 +3805,41 @@ function registerEgoStatus(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool: T
         // and it skips every tick (panel stays blank). Naming the session here
         // makes pollerObserves resolve to dsh-agent-<sid8> immediately.
         cfg.spaceTracker.setCurrentSession(callingSessionId(exec), resolveEffectiveLink(cfg.links, cfg.activeTargetId)?.link.id ?? '')
+        const wantsRefresh = args.refresh === true
+        // Cache fast path. This tool is the always-resident, cheap entry point,
+        // so it must not spawn a probe on every call: one live pass costs a
+        // subprocess (~300 ms on the CDP/harness route, up to 20 s on tabbit's
+        // `diagnose`) while holding the ego lock — which is what made "just
+        // check status" expensive enough that every restart felt like it needed
+        // a warm-up round trip. The attach cache is re-probed on mount, on each
+        // settings change and via refresh:true, so a terminal state is
+        // authoritative between those events.
+        const cachedAttach = effectiveChannel(cfg).attach
+        const cachedTerminal =
+          cachedAttach.status === 'ready' || cachedAttach.status === 'unreachable' ||
+          cachedAttach.status === 'no-active' || cachedAttach.status === 'local'
+        if (!wantsRefresh && cachedTerminal) {
+          const face = tiers.surface()
+          const kind = backendKindOf(resolveEffectiveLink(cfg.links, cfg.activeTargetId)?.link?.kind)
+          return {
+            ok: true,
+            available: cachedAttach.status === 'ready',
+            path: cachedAttach.cliPath ?? cfg.egoBin,
+            cached: true,
+            // `raw` is already declared, so the cached verdict rides there
+            // instead of buying two more output properties on every turn.
+            raw: cachedAttach.code === ''
+              ? `${cachedAttach.status}${cachedAttach.message === '' ? '' : `: ${cachedAttach.message}`}`
+              : `${cachedAttach.status}: ${cachedAttach.code}: ${cachedAttach.message}`,
+            backendKind: kind,
+            toolFace: { live: face.live.length, sealed: face.sealed.length },
+            ...(kind === 'tabbit-cli' ? { guidance: TABBIT_SEALED_GUIDANCE } : {}),
+          }
+        }
+        // Explicit refresh (or nothing probed yet): re-probe FIRST so the live
+        // check below reports the new state instead of the old one, then fall
+        // through to the existing per-channel probe.
+        if (wantsRefresh) await cfg.refreshAttach?.()
         return withEgoLock(async () => {
           // 注入面与通道类型先算一次：两个返回分支都要带上——probe 失败时模型
           // 同样需要知道「工具不在列表」是 kind 收窄，不是插件坏了。
@@ -3052,10 +3853,10 @@ function registerEgoStatus(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool: T
           // tabbit 为激活链路时，内置运行时的 facade 探针答的不是这个问题（那条
           // 运行时根本没被驱动）：就绪与否必须由 tabbit-cli diagnose 回答，否则
           // available 会从错的通道上来。
-          const effLinkStatus = resolveEffectiveLink(cfg.links, cfg.activeTargetId)
-          if (effLinkStatus?.link.kind === TABBIT_CLI_KIND) {
-            const tabName = `dsh-${sessionSpaceToken(callingSessionId(exec) ?? '')}`
-            const probe = await tryTabbitExecute(ctx, cfg, 'bcdp_status', {}, tabName)
+          const statusRuntime = runtimeOfLink(resolveEffectiveLink(cfg.links, cfg.activeTargetId)?.link)
+          if (statusRuntime?.exec) {
+            const tabName = _tabbitLastTaskName || `dsh-${sessionSpaceToken(callingSessionId(exec) ?? '')}`
+            const probe = await statusRuntime.exec({ tool: 'bcdp_status', args: {}, task: tabName })
             return { ...(probe as object), ...faceFields }
           }
           try {
@@ -3496,7 +4297,12 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
           `const __existing = __tabs.find(t => t.url.split('#')[0] === ${j(
             u.split('#')[0],
           )})\n` +
-          `const tab = __existing ? await browser.switchTab(__existing.targetId) : await page.goto(${j(
+          // Only switch when the tab is NOT already the active one: `switchTab`
+          // is activate + setPreferredTarget, so calling it on an already-active
+          // tab raises the real window on Windows for no reason (#96).
+          `const tab = __existing\n` +
+          `  ? (__existing.active === true ? __existing : await browser.switchTab(__existing.targetId))\n` +
+          `  : await page.goto(${j(
             u,
           )}, { wait: ${bool(args.wait, true)}, timeout: ${num(
             args.timeout,
@@ -4456,7 +5262,43 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
             ` active=${tiers.active() ? 'yes' : 'no'} �?live ${s.live.length} / sealed ${s.sealed.length}`,
           )
         }
+        // Automatic sources: the panel's failure mode is "nothing happens and
+        // nobody can say why", so the doctor quotes the counters and names the
+        // most common skip reason instead of leaving the user with a still
+        // picture. `consistent: false` means a timer forgot a terminal reason.
+        {
+          const stats = snapshotStats() as {
+            probe?: { passes?: number; lastLatencyMs?: number }
+            tick?: { scheduled?: number; ran?: number; dropped?: number; byReason?: Record<string, number>; consistent?: boolean }
+            frame?: { total?: number }
+            lastError?: string
+          }
+          const skip = Object.entries(stats.tick?.byReason ?? {})
+            .filter(([reason]) => reason !== 'ran' && reason !== 'scheduled')
+            .sort((a, b) => b[1] - a[1])[0]
+          lines.push(
+            `auto sources: probe=${stats.probe?.passes ?? 0} run(s), last ${stats.probe?.lastLatencyMs ?? 0}ms` +
+            ` | ticks ${stats.tick?.ran ?? 0}/${stats.tick?.scheduled ?? 0} ran, dropped=${stats.tick?.dropped ?? 0}` +
+            (skip ? ` (top skip: ${skip[0]}×${skip[1]})` : '') +
+            ` | frames=${stats.frame?.total ?? 0}` +
+            (stats.tick?.consistent === false ? ' ⚠ tick counters inconsistent' : '') +
+            (stats.lastError ? ` | last error: ${stats.lastError}` : ''),
+          )
+        }
         lines.push(scopeProbeLine())
+        // Tabbit receipt budget: the wall is total (every `nodejs` run answers
+        // with empty stdout), so the doctor must show how close we are and
+        // whether we already recycled this session.
+        lines.push(`tabbit receipts: ${describeReceipts(tabbitReceipts, _tabbitLastTaskName)}`)
+        // Frame health: "ok" alone is useless — what matters is how much the lane
+        // threw away (dropped-busy) and how much the CLI skipped (blank/timeout).
+        {
+          const snap = snapshotStats()
+          const reasons = snap.frame.byReason
+          lines.push(
+            `frame: ok=${reasons.ok ?? 0} skipped=${reasons.skipped ?? 0} dropped-busy=${reasons['dropped-busy'] ?? 0} backoff=${reasons.backoff ?? 0} no-owner=${reasons['no-owner'] ?? 0}`,
+          )
+        }
         // vendored runtime
         lines.push(`egoBin: ${cfg.egoBin}`)
         try { lines.push(`egoBin exists: ${existsSync(cfg.egoBin)}`) } catch { lines.push('egoBin exists: n/a') }
@@ -4677,9 +5519,10 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
           // tabbit 为激活链路时硬锁，绝不回落到 ego。
           {
             const effLink = resolveEffectiveLink(cfg.links, cfg.activeTargetId)
-            if (effLink?.link.kind === TABBIT_CLI_KIND) {
-              const tabName = `dsh-${sessionSpaceToken(callingSessionId(exec) ?? '')}`
-              const tabResult = await tryTabbitExecute(ctx, cfg, 'bcdp_script', args, tabName)
+            const scriptRuntime = runtimeOfLink(effLink?.link)
+            if (scriptRuntime?.exec) {
+              const tabName = _tabbitLastTaskName || `dsh-${sessionSpaceToken(callingSessionId(exec) ?? '')}`
+              const tabResult = await scriptRuntime.exec({ tool: 'bcdp_script', args, task: tabName })
               return tabResult ?? {
                 ok: false,
                 text: 'tabbit-cli is the active backend but bcdp_script dispatch failed unexpectedly. Not falling back to ego.',
@@ -4826,7 +5669,12 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
     if (attach.wsUrl === '') {
       return (
         'no live browser: the activated link has no CDP endpoint yet. ' +
-        'Run bcdp_status (or bcdp_doctor) to attach, then retry. ' +
+        // The attach pass is driven by mount / settings changes / death, not by
+        // a tool call, so "run status first" was never the real requirement —
+        // naming the automatic path keeps the model from burning a round trip
+        // on a warm-up that already happened.
+        'The plugin probes it automatically on mount and on settings changes; retry in a moment, ' +
+        'or call bcdp_status with refresh:true to force a probe. ' +
         `(attach status=${attach.status}${attach.code === '' ? '' : `, code=${attach.code}`})`
       )
     }

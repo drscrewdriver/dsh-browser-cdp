@@ -25,3 +25,8 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
+      # The runtime reads lib/ and bin/, not src/. A committed artifact that no
+      # longer matches its source means "install the tarball and run old code",
+      # and nothing else in this workflow would notice.
+      - name: artifacts are in sync with src
+        run: git diff --exit-code -- lib bin

@@ -1,3 +1,7 @@
+## [1.9.17] - 2026-11-13 — Reaktive Erfassung: Status aus dem Cache, Tab-Fokus vom Capture getrennt
+
+Kurzfassung (Details und Zwischenversionen in `CHANGELOG.md`): `bcdp_status` antwortet aus dem Attach-Cache (`refresh:true` erzwingt eine echte Prüfung), damit „Status prüfen“ keinen Prozess startet; die Attach-Prüfung ist entprellt und teilt ein laufendes Ergebnis; `tabbit-cli diagnose` läuft NICHT beim Mounten (gemessen: es startet den Browser); der Tab-Fokus hat jetzt drei getrennte Eigentümer (Operator/Agent, Panel, Frame-Capture), sodass das Panel auch bei entferntem CDP der aktuellen Registerkarte folgt (DevTools-Basis aus der WebSocket-URL abgeleitet, stille Degradation ohne `/json/*`); alle Aufrufe an ein Backend laufen über eine Warteschlange.
+
 ## [0.18.0] - 2026-09-29 — DSH-0.2.0-rc.1-Linie (compat/0.2.0: reine Metadaten-Anpassung, null Codeänderungen)
 
 ### Neu

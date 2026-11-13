@@ -32,8 +32,10 @@ ego-browser/
   docs/ARCH.md          # 本文件
 ```
 
-**关键约定**：`lib/` 是唯一权威源。**不要**再建 `src/`、不要用 tsc 编译覆盖 lib
-（v0.6.0 已删除 src 和 tsconfig，`npm run build` 只做语法校验）。
+**关键约定**：`src/` 是唯一权威源，`lib/`、`bin/` 是 `npm run build`（tsdown，见
+`tsdown.config.ts`）的产物，随提交一起入库——运行时只读产物（`package.json:main`、
+`dsh-plugin.json` 的 `facets.host.entry`），所以**改 src 必须 build 并一起提交**，
+否则装包后跑的是旧代码。CI 用 `git diff --exit-code -- lib bin` 守这条线。
 
 ---
 

@@ -5,6 +5,7 @@ import { homedir, platform } from 'node:os'
 import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
 import type { AddressInfo } from 'node:net'
+import { proxyBase } from '../cdp/proxy-base.ts'
 import { WebSocket } from 'ws'
 import { CdpClient } from './cdp-client.ts'
 import { TargetSessions, CdpCaptureBackend } from './capture-cdp.ts'
@@ -140,6 +141,15 @@ function ensurePickChannel(): PickChannel | null {
   return pickChannel
 }
 let currentStatus: Record<string, unknown> = { backend: 'cdp', state: 'idle', targetId: null, generation: 0, watchers: 0 }
+/**
+ * The tab the OPERATION side owns (`POST /api/focus`), or null when nobody owns
+ * one yet. Deliberately NOT the capture lease: `currentStatus.targetId` answers
+ * "what is being screencast", which is a consequence of a watch, not a choice
+ * the user made. Keeping them apart is what stops the panel highlight from
+ * snapping back after a tab click (see src/runtime/focus.ts).
+ */
+let focusTargetId: string | null = null
+let focusAt = 0
 let videoInit: { generation: number; mime: string; buffer: Buffer } | null = null
 
 function normalizeConfig(input: Record<string, unknown>): CastConfig {
@@ -308,28 +318,107 @@ async function listTargets(): Promise<Array<{ targetId: string; url: string; tit
   return (result.targetInfos || []).filter((target) => target.type === 'page')
 }
 
-async function activeTargetId(): Promise<string | null> {
-  if (!active?.port) return (currentStatus.targetId as string | null) || null
+/**
+ * Where to ask "which page is in front". One code path serves both launches:
+ * a local launcher gives a loopback DevTools port, a remote attach gives only a
+ * WebSocket URL (and possibly a proxy that speaks `/json/*`).
+ */
+async function devtoolsBase(browser: Pick<ActiveBrowser, 'port' | 'wsUrl'> | null): Promise<{ base: string; remote: boolean } | null> {
+  if (browser === null) return null
+  if (browser.port !== null) return { base: `http://127.0.0.1:${browser.port}`, remote: false }
+  const base = proxyBase(browser.wsUrl)
+  return base === null ? null : { base, remote: true }
+}
+
+/**
+ * Remote foreground observation, cached.
+ *
+ * Two things must be cheap here because this runs on the 1s spaces tick: the
+ * success answer is reused for a second, and a proxy that does NOT serve
+ * `/json/*` is remembered for a while instead of being re-asked every tick
+ * (a 404 every second would be noise in the logs for the whole session).
+ */
+const proxyObserveCache: { at: number; id: string | null; failedUntil: number; base: string } = { at: 0, id: null, failedUntil: 0, base: '' }
+
+/**
+ * Which tab is "current", and WHY.
+ *
+ * This used to be one expression with three competing sources, which is how the
+ * panel ended up disagreeing with itself:
+ *   - `currentStatus.targetId` — the tab being CAPTURED (a watch lease). Using
+ *     it as "active" left every row `active:false` until a watch started, and
+ *     the panel (which renders active rows only) then never started one: a
+ *     deadlock, not a glitch.
+ *   - `/json/list` first page — the FOREGROUND tab. Correct for a local launch
+ *     (the user really is switching tabs in that window) and, through the proxy
+ *     path, for a remote one too; a proxy that cannot answer is "no
+ *     observation", never an error.
+ *   - the panel's own selection — belongs to the view focus, not here.
+ *
+ * Order: explicit host focus (validated against the live list) → foreground
+ * observation (local port, else remote proxy) → none. `known` lets the caller
+ * pass the target list it already fetched, so a closed tab cannot keep the
+ * highlight.
+ */
+async function activeTargetInfo(known?: readonly string[]): Promise<{ id: string | null; source: 'focus' | 'foreground' | 'foreground-remote' | 'none' }> {
+  const inKnown = (id: string): boolean => known === undefined || known.includes(id)
+  if (focusTargetId !== null && inKnown(focusTargetId)) return { id: focusTargetId, source: 'focus' }
+  const target = await devtoolsBase(active)
+  if (target === null) return { id: null, source: 'none' }
+  const now = Date.now()
+  if (target.remote && now < proxyObserveCache.failedUntil) return { id: null, source: 'none' }
+  if (target.remote && proxyObserveCache.base === target.base && now - proxyObserveCache.at < 1000) {
+    return proxyObserveCache.id === null ? { id: null, source: 'none' } : { id: proxyObserveCache.id, source: 'foreground-remote' }
+  }
   try {
-    const response = await fetch(`http://127.0.0.1:${active.port}/json/list`, { signal: AbortSignal.timeout(1500) })
-    const list = response.ok ? await response.json() as Array<{ id?: string; type?: string }> : []
-    return list.find((entry) => entry.type === 'page')?.id || (currentStatus.targetId as string | null) || null
-  } catch { return (currentStatus.targetId as string | null) || null }
+    const response = await fetch(`${target.base}/json/list`, { signal: AbortSignal.timeout(1500) })
+    if (!response.ok) {
+      // Remember the miss: this proxy has no HTTP face, stop asking every tick.
+      if (target.remote) { proxyObserveCache.failedUntil = now + 30_000; proxyObserveCache.base = target.base }
+      return { id: null, source: 'none' }
+    }
+    const list = await response.json() as Array<{ id?: string; type?: string }>
+    const id = list.find((entry) => entry.type === 'page')?.id ?? null
+    if (target.remote) {
+      proxyObserveCache.at = now
+      proxyObserveCache.id = id
+      proxyObserveCache.base = target.base
+      proxyObserveCache.failedUntil = 0
+    }
+    if (id !== null && inKnown(id)) return { id, source: target.remote ? 'foreground-remote' : 'foreground' }
+  } catch {
+    if (target.remote) { proxyObserveCache.failedUntil = now + 30_000; proxyObserveCache.base = target.base }
+  }
+  return { id: null, source: 'none' }
+}
+
+/** String-only view of `activeTargetInfo` for the single-target routes. */
+async function activeTargetId(): Promise<string | null> {
+  return (await activeTargetInfo()).id
 }
 
 async function snapshotSpaces(): Promise<Array<Record<string, unknown>>> {
+  // Bind the live browser once: the module-level `active` may be replaced by a
+  // reconnect between two awaits, and this snapshot must describe one connection.
+  const browser = active
+  if (browser === null) return []
   const targets = await listTargets()
-  const activeId = await activeTargetId()
+  const ids = targets.map((target) => target.targetId)
+  const activeInfo = await activeTargetInfo(ids)
+  const activeId = activeInfo.id
+  // The capture lease travels separately: the panel outlines `active` while the
+  // watch keeps screencasting `capturing` (they are allowed to differ).
+  const capturingId = currentStatus.targetId as string | null
   const spaces: Array<Record<string, unknown>> = []
   for (const target of targets.slice(0, 30)) {
     const frame = frameCache.get(target.targetId)
-    const session = active!.sessions.get(target.targetId)
+    const session = browser.sessions.get(target.targetId)
     const cached = probeCache.get(target.targetId)
     if (!cached || Date.now() - cached.at > 5000) {
-      active!.sessions.call(target.targetId, 'Runtime.evaluate', { expression: HUMAN_PROBE_JS, returnByValue: true, awaitPromise: false }, 3000)
-        .then((result) => { const r = result as { result?: { value?: unknown } }; probeCache.set(target.targetId, { at: Date.now(), human: r.result?.value || null }) }).catch(() => { /* ignore */ })
+      browser.sessions.call(target.targetId, 'Runtime.evaluate', { expression: HUMAN_PROBE_JS, returnByValue: true, awaitPromise: false }, 3000)
+        .then((result: unknown) => { const r = result as { result?: { value?: unknown } }; probeCache.set(target.targetId, { at: Date.now(), human: r.result?.value || null }) }).catch(() => { /* ignore */ })
     }
-    spaces.push({ targetId: target.targetId, url: target.url, title: target.title, active: target.targetId === activeId, lastActive: frame?.lastActive || 0, viewportW: frame?.viewportW || session?.viewportW, viewportH: frame?.viewportH || session?.viewportH, humanCheck: cached?.human || null })
+    spaces.push({ targetId: target.targetId, url: target.url, title: target.title, active: target.targetId === activeId, activeSource: target.targetId === activeId ? activeInfo.source : '', capturing: target.targetId === capturingId, lastActive: frame?.lastActive || 0, viewportW: frame?.viewportW || session?.viewportW, viewportH: frame?.viewportH || session?.viewportH, humanCheck: cached?.human || null })
   }
   spaces.sort((a, b) => Number(b.active) - Number(a.active) || (b.lastActive as number) - (a.lastActive as number))
   return spaces
@@ -527,7 +616,38 @@ async function main(): Promise<void> {
           return sendJson(res, 503, { ok: false, code: 'marks-failed', error: (error as Error).message || String(error) })
         }
       }
-      if (req.method === 'POST' && url.pathname === '/api/close') { const { targetId } = await readJson(req); if (!active || !targetId) return sendJson(res, 400, { ok: false, error: 'targetId required' }); await active.cdp.call('Target.closeTarget', { targetId }); return sendJson(res, 200, { ok: true }) }
+      // POST /api/focus — the host owns "which tab is current". Body:
+      // { targetId }. An id that is no longer live answers `focus-stale` so the
+      // host can drop it instead of highlighting a tab that is gone; an empty id
+      // clears the focus. This route never activates anything: activating is a
+      // side effect of a deliberate user action (switch-tab), and doing it from
+      // a sync path is what makes Windows raise the window on every poll.
+      if (req.method === 'POST' && url.pathname === '/api/focus') {
+        if (!active) return sendJson(res, 409, { ok: false, error: 'no live browser' })
+        const body = await readJson(req)
+        const targetId = typeof body?.targetId === 'string' ? body.targetId.trim() : ''
+        if (targetId === '') {
+          focusTargetId = null
+          return sendJson(res, 200, { ok: true, cleared: true })
+        }
+        const ids = (await listTargets()).map((target) => target.targetId)
+        if (!ids.includes(targetId)) {
+          return sendJson(res, 409, { ok: false, code: 'focus-stale', error: 'that target is gone', targetId })
+        }
+        focusTargetId = targetId
+        focusAt = Date.now()
+        return sendJson(res, 200, { ok: true, targetId })
+      }
+      if (req.method === 'POST' && url.pathname === '/api/close') {
+        const body = await readJson(req)
+        const targetId = typeof body?.targetId === 'string' ? body.targetId : ''
+        if (!active || !targetId) return sendJson(res, 400, { ok: false, error: 'targetId required' })
+        await active.cdp.call('Target.closeTarget', { targetId })
+        // A closed tab must not keep owning the focus, or every later snapshot
+        // would either highlight nothing or highlight the wrong row.
+        if (focusTargetId === targetId) focusTargetId = null
+        return sendJson(res, 200, { ok: true })
+      }
       // POST /api/switch-tab — make one tab the browser's active target. Unlike
       // the passive frame capture, a user clicking a tab in the panel MEANS
       // "show me that tab", so activating it is the intended side effect; the
@@ -538,6 +658,10 @@ async function main(): Promise<void> {
         if (!active || targetId === '') return sendJson(res, 400, { ok: false, error: 'targetId required' })
         try {
           await active.cdp.call('Target.activateTarget', { targetId })
+          // Remember the choice: this is the one place where activating and
+          // focusing are the same intent (the operator asked for it).
+          focusTargetId = targetId
+          focusAt = Date.now()
           return sendJson(res, 200, { ok: true, targetId })
         } catch (error) {
           return sendJson(res, 502, { ok: false, error: (error as Error).message || String(error) })

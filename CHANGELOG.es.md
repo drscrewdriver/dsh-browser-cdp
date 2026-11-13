@@ -1,3 +1,7 @@
+## [1.9.17] - 2026-11-13 — Sondeo reactivo: estado desde caché, foco de pestaña separado de la captura
+
+Resumen (detalle y versiones intermedias en `CHANGELOG.md`): `bcdp_status` responde desde la caché de conexión (`refresh:true` fuerza un sondeo real), para que «comprobar estado» no arranque un proceso; el sondeo de conexión tiene debounce y comparte el resultado en curso; `tabbit-cli diagnose` NO se ejecuta al montar (medido: arranca el navegador); el foco de pestaña tiene ahora tres propietarios distintos (operador/agente, panel, captura de fotogramas), así el panel sigue la pestaña actual también con CDP remoto (base DevTools derivada de la URL WebSocket, degradación silenciosa sin `/json/*`); todas las llamadas a un backend pasan por una única cola.
+
 ## [0.18.0] - 2026-09-29 — Línea DSH 0.2.0-rc.1 (compat/0.2.0: adaptación puramente de metadata, cero cambios de código)
 
 ### Añadidos

@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { fileURLToPath } from "node:url";
 import { apply } from "../src/index.ts";
+import { defaultAttachCache } from "../src/cdp-targets.ts";
 
 /**
  * Tabbit 后端的分派级验证：不真跑浏览器，而是给 `apply()` 喂一个假宿主，
@@ -389,15 +390,23 @@ describe("bcdp_status reports the channel and the injection face", () => {
     expect(String(value.guidance)).toContain("bcdp_js");
   });
 
-  it("answers availability from tabbit-cli diagnose, not from the ego facade probe", async () => {
-    // 真机跑时发现：tabbit 激活时 status 若走内置运行时探针，available 答的
-    // 是一条根本没被驱动的通道。现在它必须走 diagnose。
-    const { run, calls } = mountTabbit();
-    const { value } = await run("bcdp_status", {});
-    const diagCall = calls.find((c) => c.argv.includes("diagnose"));
-    expect(diagCall, "expected a tabbit-cli diagnose call").toBeDefined();
-    expect(value).toMatchObject({ backend: "tabbit-cli", available: true });
-    expect(value).not.toHaveProperty("facades");
+  it("answers from the attach cache without spawning; refresh:true forces a live probe", async () => {
+    // 语义变更（1.9.17）：status 是常驻的**廉价**入口，不能每次调用都起一个子进程
+    // （tabbit 路 `diagnose` 的 grace 是 20s，且在 ego 锁里持锁）。就绪判定改由
+    // mount / 设置变更 / refresh:true 驱动，所以这里钉的是「默认不 spawn」。
+    const cached = mountTabbit();
+    defaultAttachCache.patch({ status: "ready", targetId: "tb", code: "", message: "", resolvedAt: Date.now() });
+    const first = await cached.run("bcdp_status", {});
+    expect(cached.calls.some((c) => c.argv.includes("diagnose"))).toBe(false);
+    expect(first.value).toMatchObject({ cached: true, available: true });
+    expect(String(first.value.raw)).toContain("ready");
+
+    // 显式刷新才回到真机探测：tabbit 通道的就绪由 diagnose 回答，而不是 ego facade。
+    const fresh = mountTabbit();
+    const second = await fresh.run("bcdp_status", { refresh: true });
+    expect(fresh.calls.some((c) => c.argv.includes("diagnose"))).toBe(true);
+    expect(second.value).toMatchObject({ backend: "tabbit-cli", available: true });
+    expect(second.value).not.toHaveProperty("facades");
   });
 
   it("toolFace matches the tools actually registered on the host", async () => {

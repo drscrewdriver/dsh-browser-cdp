@@ -1,3 +1,88 @@
+## 1.9.22 (2026-11-13)
+
+**面板 ↻ 现在真的会同步「当前激活对象」——而且是零副作用。**
+
+排查发现：头部刷新按钮 `#dsh-ego-refresh` 早在 1.9.x 就有 DOM 和 `refreshBtn` 引用，但**从来没挂过 click 监听**——所以重启后点它什么也不会发生，面板要等一次 `bcdp_*` 才出内容。
+
+- **新增 `POST /api/bcdp/sync`**（`EGO_SYNC_ROUTE`），宿主按通道分流（`src/runtime/refresh-sync.ts`）：
+  - `cdp`：重跑 attach pass，worker 重新读 spaces；
+  - `tabbit-cli`：跑**只读** `tabs --task`（实测：该命令对任意不存在的 task 名也返回完整清单，不建 task、不认领、浏览器关着也不拉起）→ 行清单立刻上屏；有活 task 时顺带拍一帧；
+  - `ego-cli` / `lightpanda`：只重探就绪，仍受 `allowProbeColdStart` 门禁。
+- **为什么不顺手把帧也拍了**：`nodejs --tab <id>` 确实会自动建 task 并认领那颗 tab（实测 158ms，`acquisition.tabIds` 命中），但 task 名是 `dsh-<sessionToken>`，刷新处理器拿不到 session id；用猜的名字建 task 会**割裂归属**（面板 task 占了 tab，下一个工具 task 就抢不到）。所以刷新只做只读同步，画面随首次工具调用到位。
+- **客户端**：↻ 点击 → `POST /api/bcdp/sync` → 再读 spaces；`StatsSnapshot` 补上正式返回类型（不再 `Record<string, unknown>`）。
+
+真机实测（宿主刚重启、无 task、无工具调用）：
+
+```
+POST /api/bcdp/sync → {"ok":true,"action":"tabbit-sync","listed":3,"framed":false,"adopted":false,"reason":"list-only-needs-task"}
+GET  /api/bcdp/spaces → ok=true rows=1 link=tabbit-cli  (305298915, active=true, https://www.baidu.com/)
+```
+
+## 1.9.21 (2026-11-13)
+
+**tab 条强制换行 + × 乐观关闭 + 版本徽标（用于分辨 renderer 是否加载了新包）。**
+
+- `renderTabs()` 逐项写 **inline style**（`flexWrap=wrap`、`overflowX=hidden`、`maxHeight=92px`，pill `flex:0 1 auto`），不再单靠样式表——宿主的样式表或旧缓存都能把它覆盖掉。
+- `×` 改为**乐观移除**：先 `tab.remove()` 给反馈，再 POST `/api/bcdp/close`，700ms 后 refresh 对账（关失败行会回来）。
+- 面板标题旁新增 **版本徽标** `v1.9.22`：一眼看出 renderer 加载的是哪份客户端切包。
+
+## 1.9.20 (2026-11-13)
+
+**1.9.19 的窗口收窄没生效的真因：`??` 链停在 0 上；同时把「关 tab」变成面板即时可见。**
+
+- **真因**：这个 tabbit-cli 版本里 `tabs` 的 `focusedWindowId` 返回 **null**，解析后归为 `0`；而 `0` 不是 nullish，所以 `a ?? b ?? c` 链在 `0` 处就停了 —— `_tabbitWindowId` 永远是 0，行清单压根没收窄。改用 `||` 链，并把选择逻辑抽成 `chooseTabbitWindow()` 加单测（含 `focusedWindowId=0` 这条回归用例）。
+- **关 tab 后即时消失**：之前只有帧广播会带 `spaces`，而帧广播在没图时（空白页/截屏跳过）直接 return，行就会挂着。新增 `broadcastCliSpaces()`，tabbit 关闭成功后立刻推一次只含 `spaces` 的事件，并同步 `lastCliSpaces`。
+- 实测：`page.close()` 在该 CLI 上真的关 tab（4 → 3，回执 `closedPages` 带具体 tab），所以 × 现在是真关，不再是只删行。
+
+## 1.9.19 (2026-11-13)
+
+**面板 Tab 条：不再把两个窗口的 tab 当成重复项；tab 条自动换行；× 真的关 tab。**
+
+现场现象（用户截图）：全模式下出现四条「新标签页 / 百度一下 / 新标签页 / 百度一下」，看起来像双份；同时面板拍的是 about:newtab 而不是当前的百度页。
+
+- **根因：Tabbit 汇报的是「所有窗口的所有 tab」。** 用户开了两个 Tabbit 窗口，每个窗口里都是 newtab + 百度，于是 strip 里就是一对一对的。现在 `tabs` 子命令的 `focusedWindowId` 被保留，新增 `_tabbitWindowId`：优先跟**agent 自己那个 tab 所在的窗口**，否则跟浏览器焦点窗口；行清单（`tabbitSpaceRows`）按它收窄，帧轮询的 fallback 也从「全量里的 active」改成「收窄后的 active」——不再可能拿另一个窗口的 tab 去拍。
+- **为什么之前会拍成 newtab：** 帧轮询在 `--tab` 目标缺失时会落回 task 的默认页（新 task 刚建就是一个 about:blank）。窗口收窄后，active 行只会在本窗口内产生，不会是另一个窗口的 newtab。
+- **tab 条换行**：`#dsh-ego-tabs` 改为 `flex-wrap:wrap` + `overflow-x:hidden` + `max-height:92px`（超出才纵向滚），pill 改为 `flex:0 1 auto`、标题省略号 150px。四个 tab 不再需要横滚才能看全。
+- **× 在 CLI 通道真的关 tab**：`/api/bcdp/close` 在无 worker（tabbit/ego-cli）时不再直接 400，而是走宿主注入的 `closeCliTab`；tabbit 用 `page.close()`（带 `--tab`）关闭，成功后当场从缓存里删行、清 `_tabbitLastActiveTabId`。其他 CLI 通道返回 501 并附原因，不再假装成功。
+
+## 1.9.18 (2026-11-13)
+
+**观察面不再吃操作面的配额：Tabbit receipt 预算账本 + 主动回收 + 无人看时不烧。**
+
+实测背景（tabbit-cli 1.21.21）：单个 task 只接受 **1024 条 receipt**，满了之后**每一次 `nodejs` 都返回空 stdout**，插件只能报 `tabbit-cli produced no stdout`，且 CLI 只进不出（`receipts.delete` 零命中）。而帧轮询每 3 s 一条 `frame-<ts>-<tab>`、约 **51 分钟**把单 tab 的配额烧光 —— 于是**看板把工具路径饿死了**：面板开着、agent 闲置时，下一次 `bcdp_*` 全部失败。
+
+- **配额账本**（`src/cdp/tabbit-receipts.ts`）：一次 `nodejs` 一条，按 task 本地计数；不向 CLI 查询（那会每 tick 多一个子进程）。
+- **主动回收**：到 **80%（819 条）** 就 `finish`（不带 `--discard`，保留 tab）并 `reset` 账本，下一次 `nodejs` 由 tabbit 按需重建 task —— 调用方无感。
+- **撞墙也能自愈**：`EMPTY_OUTPUT` 且计数越线 → 回收一次 + 重试一次；仍失败才归类 `tabbit-task-stalled`，并在错误文案里带上 `receipts n/1024` 与“用 `bcdp_space op=close` 收尾”的指引。
+- **重建后清状态**：`_tabbitTabCache` / `_tabbitLastActiveTabId` / 帧轮询的 good-rows 全部作废 —— 否则会拿旧 tab id 去绑新任务的行，表现就是“闪一下又变白”。
+- **无人看就不烧**：`cast-server` 导出 `panelWatcherCount()`；面板 SSE 订阅为 0 时，帧轮询与盘存轮询直接跳过（`no-watchers`），这是省得最多的一条。
+- **静止降频**：连续 3 帧相同 → 10 s，6 帧相同 → 30 s；画面一变立刻回 3 s（用长度 + 首尾字节的轻量摘要判定）。
+- **医生可见**：`bcdp_doctor` 新增 `tabbit receipts: n/1024 used, m left, recycles=k`。
+
+## 1.9.17 (2026-11-13)
+
+**「重启后必须先调一次 status」的根因：把「连接就绪」和「工具面解锁」两件事压在同一个工具上；顺带拆开争抢「当前 tab」的三个写者。**
+
+- **`bcdp_status` 改为读 attach 缓存 + `refresh:true` 强制探测**。真实成本决定了这是个必须先修的点：CDP 路要起一个 subprocess heredoc（典型 ~300 ms），tabbit 路要跑 `diagnose`（grace 20 s）**且在 ego 锁内持锁**——一次「先看看状态」会把整条工具链堵住。就绪判定本来就由 mount / 设置变更 / 显式刷新驱动，工具只该读结果。
+  常驻面字符数反降（441 ≤ 600 预算），schema 总预算测试仍绿。
+- **attach 探测：300 ms trailing 去抖 + 1 s 最小间隔 + 同 link 单飞共享 Promise**。表单逐字段 onChange 以前会真的探 N 次（inFlight 时只置 pending、随后重跑），现在一次变更风暴只探一次，并发调用者共享同一个 Promise。卸载时清掉待触发的定时器。
+- **tabbit 就绪不再是假 `ready`**：原来 `refreshAttach` 的 tabbit 分支只 `patch({status:'ready'})`，CLI 根本不存在也报就绪。现在由宿主导入的 `tabbitProbe` 回答，缺失 CLI 给 `tabbit-cli-missing`。探针**只查 CLI 存在性**——`tabbit-cli diagnose` 的 spawn 注释写着它会冷启动浏览器，挂载期不能碰（待真机确认后再议）。
+- **tabbit 盘存定时器补闸 + 修正 owner**：10 s grace / 3 s 周期的组合原本可叠 3–4 个 `tabs` 进程，且用的是虚构 task `dsh-<token('poll')>` ——按 task 隔离的 tab 归属下，它看到的是「别人」的清单，tabId 与出帧用的 `_tabbitLastTaskName` 对不上。现在串行化、查 `egoLockBusy`、无 owner 直接跳过并计数。
+- **修 gateway 的冷启动旁路**：`gateway.ts` 的 `cdp-refresh` 没传 `cliProbeColdStart`，undefined 被当成「允许冷启动」——面板点一次刷新会把浏览器弹出来，而改设置不会。两条路径现在读同一个开关。
+- **「当前 tab」三个写者拆成三个焦点**（本版结构改动）：`TargetFocus`（host 内存，`src/runtime/focus.ts`，唯一写者是工具分派与 switch-tab）/ `ViewFocus`（面板自己的 `selectedTabId`）/ `captureTargetId`（worker 的 watch 租约）。worker 新增 `POST /api/focus`（脏 id 回 `focus-stale`，关 tab 自动清），`spaces` 增补 `activeSource` 与 `capturing`。
+- **远程 CDP 面板永久空态的死锁解开**：`activeTargetId()` 原来在无本地 DevTools 端口时直接返回 `currentStatus.targetId`（watch 前恒 null → 全行 active:false），而面板只渲染 active 行、空态又不发起 watch。现在顺序是「显式焦点 → 前景观测 → 无」；前景观测本地走 `127.0.0.1:<port>/json/list`，远程由 WebSocket URL 推导 `/json/list` 基址（`src/cdp/proxy-base.ts`），代理不提供该路径时**静默降级并记住 30s**，不会每秒重打。客户端空态也退到首行而不是终态。上游 PR #12 的 `lastActivatedTargetId` 由 FocusStore 取代，#13 的 base 推导被吸收为「只观测、不决定焦点」。
+- **工程闸门**：CI 加 `git diff --exit-code -- lib bin`（运行时不读 src，过期产物以前能绿）；`.map` 出 git；修 `docs/ARCH.md` 的「lib 是唯一权威源」与 `cliFramePollEnabled` 的 5s→3s 文档漂移。
+- **新增** `src/runtime/stats.ts` + `GET /api/bcdp/stats`：probe/tick/frame/queue 计数与 `scheduled == ran + dropped` 不变量，回答「自动机制还在干活吗」。
+
+### 端点对象化（结构）
+
+- **一 link 一 runtime**：`src/runtime/backend-runtime.ts` 提供 `BackendRuntime`（`probe` / 可选 `exec` / 能力位 `localOnly`、`ownsUserBrowser`、`usesCdpWorker`、`injectsEndpoint`、`channel`）与 `runtimeOf/runtimeOfLink` 注册表；cdp / ego-cli / lightpanda / tabbit 四份实现各自一个文件。原先散布在 `refreshAttach`、`decideAttach`、工具分派、`isCliCaptureChannel`、各定时器里的 kind 梯子全部收成一个查表。
+- **`decideAttach` 不再比 kind**：改读 `ownsBrowser` + `injectsEndpoint`。lightpanda 的「自己拥有 serve 但仍注入 wsUrl」这种边缘差异现在是能力位的事实，不再是特例分支。
+- **操作面也归 runtime**：新增可选 `exec`，tabbit 通道通过 `setTabbitExecutor` 注入宿主实现，三处分派点改问「谁拥有这条 link」，不再问「是不是 tabbit」。
+- **单一串行域**：`withEgoLock` 改为建在 `src/cast/run-queue.ts` 上（`must-run` FIFO），两个 tabbit 定时器改为 `opportunistic`（繁忙时直接丢，不排队）。原先定时器只“看”锁不“取”锁，一次 2.6s 截屏与一次工具调用会并发打同一个浏览器；现在同一条 lane 上不存在并发，也不存在丢工具调用。
+- **顺手修**：`bcdp_navigate` 命中同 URL tab 时不再无条件 `switchTab`（Windows 有头会白抬一次窗口）；`bridge.onChange` 的退订句柄与 `triggerCdpRef` 在卸载时清掉，热重挂载不再带着上一次 mount 的闭包去探测；`setTabbitExecutor(null)` 同批清掉。
+- **测试**：新增 `runtime-registry`（四实现 × 能力位 × 错 kind 拒绝）、`run-queue`（FIFO / latest-wins / 截止中止 / 深度）、`focus-store`（单写者与 stale），`cdp-targets` 补 tabbit 探针三例。
+
 ## 1.9.16 (2026-11-12)
 
 **修复 `bcdp_snapshot` 的死开关：`maxChars` 补进工具 schema 声明。**

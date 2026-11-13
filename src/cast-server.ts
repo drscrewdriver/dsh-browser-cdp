@@ -13,13 +13,20 @@
  * "no live browser right now" instead of erroring.
  */
 import { fileURLToPath } from 'node:url'
+import { appendFileSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import { request, type ClientRequest, type IncomingMessage, type ServerResponse } from 'node:http'
 import type { EgoContext, RegisterRouteOptions, ResolvedConfig, WebServerLike } from './types.ts'
 import type { SettingsBridge } from './settings.ts'
 import type { FfmpegInstallationManager, FfmpegStatus } from './ffmpeg-installation.ts'
 import type { LoginImportOptions, LoginImportReport } from './login-import.ts'
 import { EGO_LINUX_CDP_URL, EGO_CLI_KIND, TABBIT_CLI_KIND, resolveEffectiveLink } from './cdp-targets.ts'
+import { runtimeOfLink } from './runtime/backend-runtime.ts'
 import { BCDP_CDP_ENGINE } from './cdp/capabilities.ts'
+import { snapshotStats } from './runtime/stats.ts'
+import { defaultFocusStore, type TargetFocus } from './runtime/focus.ts'
+import { CLIENT_BUILD } from './client/build.ts'
 import type { CliFramePoller } from './cast/cli-frame-poller.ts'
 import type { PanelActionRunner } from './cast/panel-actions.ts'
 
@@ -119,6 +126,34 @@ export const EGO_WATCH_START_ROUTE = '/api/bcdp/watch/start'
 export const EGO_WATCH_SWITCH_ROUTE = '/api/bcdp/watch/switch'
 export const EGO_WATCH_STOP_ROUTE = '/api/bcdp/watch/stop'
 export const EGO_WATCH_STATUS_ROUTE = '/api/bcdp/watch/status'
+/** Operation focus: which tab the next tool call drives (host-owned). */
+export const EGO_FOCUS_ROUTE = '/api/bcdp/focus'
+/** Host-local counters for the automatic sources (probe / tick / frame / queue). */
+export const EGO_STATS_ROUTE = '/api/bcdp/stats'
+/**
+ * "Sync the active object now" — the panel's ⟳.
+ *
+ * Clicking it must not require a tool call: after a host restart the tab strip can
+ * be filled from a read-only inventory (tabbit) or a fresh attach pass (cdp).
+ */
+export const EGO_SYNC_ROUTE = '/api/bcdp/sync'
+/**
+ * Client → host handshake: "this is the build I am running".
+ *
+ * The renderer can keep a cached bundle across host upgrades (the module URL's
+ * revision does not track file contents), so "did my UI fix ship?" was
+ * unanswerable from the outside. The client reports its build here; the host logs
+ * it (visible in the app log without any auth) and echoes it in /api/bcdp/stats.
+ */
+export const EGO_HELLO_ROUTE = '/api/bcdp/hello'
+/**
+ * One frame of ONE tab, on demand.
+ *
+ * Frames used to follow only the active tab, so any other tab sat on "暂无截图"
+ * forever no matter what the user clicked. This is the per-object counterpart of
+ * the 3 s polls.
+ */
+export const EGO_CAPTURE_ROUTE = '/api/bcdp/capture'
 export const EGO_VIDEO_ROUTE = '/api/bcdp/video'
 export const EGO_VIDEO_STATUS_ROUTE = '/api/bcdp/video/status'
 // ego-cli degraded frame source: serves the newest CLI-captured viewport PNG to
@@ -136,6 +171,23 @@ export const CLI_FRAME_TARGET_ID = '__cli_frame__'
 //  that loop is now gone.) Process-local; resets to 0 on host restart,
 // which is fine — the auto-open is a one-shot per session anyway.
 let toolCallCount = 0
+/**
+ * `/api/bcdp/watch/*` accounting.
+ *
+ * `refused` counts the CLI-channel answers. It is the cheapest proof that the
+ * 1728-request 409 storm is gone: the old client stopped retrying as soon as the
+ * route answered 200, and the new client never asks at all.
+ */
+let watchCalls = 0
+let watchRefused = 0
+export function getWatchCounters(): { calls: number; refused: number } {
+  return { calls: watchCalls, refused: watchRefused }
+}
+/** Last build the panel reported via /api/bcdp/hello (+ when). Out-of-band proof
+ * of which client bundle is actually running; also echoed in /api/bcdp/stats. */
+let lastClientBuild = ''
+let lastClientAt = 0
+let reportedClientBuild = ''
 const sseClients = new Set<ServerResponse>()
 
 /** Timestamp of the last bcdp_* tool call — the idle reaper's activity signal. */
@@ -210,6 +262,9 @@ export interface CliSpaceRow {
   title: string
   active: boolean
   lastActive: number
+  /** Browser window the tab lives in. Two windows with the same pages look like
+   * duplicated rows; the panel shows a W1/W2 badge instead of hiding one. */
+  windowId?: number
 }
 
 export function broadcastCliFrame(
@@ -251,6 +306,83 @@ export function broadcastCliFrames(images: CliFrameImage[], spaces?: CliSpaceRow
 }
 /** Tab inventory supplied by the newest frame broadcast (null = synthetic row). */
 let lastCliSpaces: CliSpaceRow[] | null = null
+/**
+ * Push a SPACES-ONLY update to the panel.
+ *
+ * Frame broadcasts are the usual carrier, but they early-return when there is
+ * no image (blank page, capture skipped). Structural changes — a tab closed, a
+ * task recycled — must still reach the strip immediately instead of waiting for
+ * the next successful capture.
+ */
+export function broadcastCliSpaces(rows: CliSpaceRow[]): void {
+  lastCliSpaces = rows.length > 0 ? rows : null
+  if (sseClients.size === 0) return
+  const chunk = `event: spaces\ndata: ${JSON.stringify(rows)}\n\n`
+  for (const client of sseClients) {
+    try { client.write(chunk) } catch { /* dropped by its own close handler */ }
+  }
+}
+
+/**
+ * How many panels are currently subscribed to the CLI-channel SSE stream.
+ *
+ * The automatic sources read this: a frame nobody will ever see must not spend
+ * the backend's shared budget (Tabbit: one `nodejs` receipt per capture, 1024
+ * per task — measured to starve the tool path in ~51 minutes of polling).
+ */
+export function panelWatcherCount(): number {
+  return sseClients.size
+}
+
+/**
+ * Push the operation focus to every panel client.
+ *
+ * One event, one owner: the panel never has to infer "which row is current"
+ * from the spaces ordering anymore — and a CLI channel (no worker, no CDP) can
+ * carry the same event, which is why it lives here instead of in the worker.
+ */
+export function broadcastFocus(focus: TargetFocus | null): void {
+  if (sseClients.size === 0) return
+  const payload = focus === null ? null : { targetId: focus.targetId, source: focus.source, at: focus.at }
+  const chunk = `event: focus\ndata: ${JSON.stringify(payload)}\n\n`
+  for (const client of sseClients) {
+    try { client.write(chunk) } catch { /* a dead client is dropped by its own close handler */ }
+  }
+}
+
+/**
+ * The worker half of a focus write, injected by initCastServer (it owns
+ * ensureWorker/proxyPost). Null in a headless host or on a CLI channel.
+ */
+let focusPusher: ((targetId: string) => Promise<{ status: number; body: unknown } | null>) | null = null
+export function setFocusPusher(fn: typeof focusPusher): void {
+  focusPusher = fn
+}
+
+/**
+ * Record `targetId` as the operation focus and tell everyone who cares.
+ *
+ * The store is written FIRST (the panel highlight must not wait on a socket),
+ * then the worker is told; a worker answering `focus-stale` clears it, because a
+ * tab that is gone must not stay highlighted. `targetId === ''` clears.
+ *
+ * This is the single entry point for BOTH producers: an operator click and a
+ * tool result that reports the tab it just drove.
+ */
+export async function pushFocus(targetId: string, source: TargetFocus['source'] = 'agent'): Promise<TargetFocus | null> {
+  const id = String(targetId ?? '').trim()
+  const focus = defaultFocusStore.set(id, source)
+  broadcastFocus(focus)
+  if (id !== '' && focusPusher !== null) {
+    const result = await focusPusher(id).catch(() => null)
+    if (result !== null && result.status >= 400) {
+      const cleared = defaultFocusStore.set('', 'agent')
+      broadcastFocus(cleared)
+      return cleared
+    }
+  }
+  return focus
+}
 /** Newest capture cycle, replayed by the 1s hold timer in initCastServer. */
 let lastCliFrames: CliFrameImage[] | null = null
 /** Wall-clock of the last broadcast/replay; the hold timer only fills >1s gaps. */
@@ -667,8 +799,11 @@ function workerEnv(): NodeJS.ProcessEnv {
  * `cdpMode=local`（受管本地启动）也没有远端 endpoint，但那里 worker 才是正确数据源。
  */
 export function isCliCaptureChannel(cfg: Pick<ResolvedConfig, 'links' | 'activeTargetId'>): boolean {
-  const kind = resolveEffectiveLink(cfg.links, cfg.activeTargetId)?.link.kind
-  return kind === EGO_CLI_KIND || kind === TABBIT_CLI_KIND
+  const link = resolveEffectiveLink(cfg.links, cfg.activeTargetId)?.link
+  // Capability, not kind: "does this channel's frames come from a host poller"
+  // is the actual question, and a new CLI channel answers it once here instead
+  // of being added to this function.
+  return runtimeOfLink(link)?.usesCdpWorker === false
 }
 
 /** Ensure a single ego-cast worker is running (idempotent). Launches it via
@@ -776,8 +911,44 @@ export function initCastServer(
   cliPoller: CliFramePoller | null = null,
   panelActions: PanelActionRunner | null = null,
   tabbitSpaces: (() => { tabs: Array<{ targetId: string; url: string; title: string; active: boolean; lastActive: number }>; updatedAt: number; complete: boolean }) | null = null,
+  /**
+   * CLI channels have no worker, so `/api/bcdp/close` cannot proxy. The host
+   * injects how to close a tab there (tabbit: `page.close()` under the task that
+   * OWNS the tab). `reason` is surfaced to the panel: a silent 501 is exactly why
+   * the × looked dead.
+   */
+  closeCliTab: (targetId: string) => Promise<{ ok: boolean; reason: string }> = async () => ({ ok: false, reason: 'not-supported' }),
+  /**
+   * Channel-native page actions (tab-click activation, reload, goto).
+   *
+   * The `panelActions` runner is ego-cli heredoc code and answers 502 on tabbit,
+   * which is what made the panel's 刷新页面 / tab click look dead there. The host
+   * injects this one instead; returning `null` means "this channel cannot".
+   */
+  pageAction: ((action: Record<string, unknown>) => Promise<{ ok: boolean; reason?: string }>) | null = null,
+  /**
+   * Backs `POST /api/bcdp/sync`. The host owns both channel branches (attach pass
+   * for cdp, read-only inventory for tabbit), so the route is a thin forwarder.
+   */
+  syncOnRefresh: () => Promise<Record<string, unknown>> = async () => ({
+    ok: false,
+    error: 'refresh sync not supported by this host build',
+  }),
+  /** Backs `POST /api/bcdp/capture` for channels without a worker. */
+  captureOnDemand: (targetId: string) => Promise<Record<string, unknown>> = async () => ({
+    ok: false,
+    error: 'on-demand capture not supported by this host build',
+  }),
 ): void {
   const ensureWorker = makeEnsureWorker(ctx, cfg, ffmpegManager)
+  // Point the shared focus writer at this server's worker. A CLI channel has no
+  // worker (ensureWorker returns null for it), which is exactly right: those
+  // channels sync the focus over SSE only.
+  setFocusPusher(async (targetId) => {
+    const port = await ensureWorker()
+    if (port === null) return null
+    return proxyPost(port, '/api/focus', { targetId })
+  })
   const pushConfig = makePushConfig(ensureWorker, ffmpegManager)
   activeCliPoller = cliPoller
   // Identity of the connection target the panel is currently viewing. The
@@ -947,21 +1118,43 @@ export function initCastServer(
   const disposeCliFrame = server.register({
     kind: 'exact',
     path: EGO_CLI_FRAME_ROUTE,
-    handler: async (_req: unknown, resRaw: unknown) => {
+    handler: async (reqRaw: unknown, resRaw: unknown) => {
+      const req = reqRaw as IncomingMessage
       const res = resRaw as ServerResponse
-      const frame = cliPoller && cliPoller.isRunning() ? cliPoller.getFrame() : null
-      if (!frame) {
+      const url = new URL(req.url ?? '/', 'http://127.0.0.1')
+      const want = url.searchParams.get('targetId') ?? ''
+      const pollerFrame = cliPoller && cliPoller.isRunning() ? cliPoller.getFrame() : null
+      let body: Buffer | null = pollerFrame?.png ?? null
+      let contentType = 'image/png'
+      let seq = String(pollerFrame?.seq ?? 0)
+      let servedTarget = ''
+      // tabbit frames never reach `cliPoller` — they are broadcast per tab and land
+      // in `lastCliFrames`. Serving only the poller left every tabbit panel on 204
+      // ("有图也不显示"), so fall back to the broadcast ring: exact target when
+      // asked, otherwise the newest frame of the last cycle.
+      if (body === null && lastCliFrames !== null && lastCliFrames.length > 0) {
+        const exact = want === '' ? undefined : lastCliFrames.find((img) => img.targetId === want)
+        const pick = exact ?? lastCliFrames[0]
+        if (pick !== undefined) {
+          body = pick.png
+          contentType = pick.fmt === 'jpeg' ? 'image/jpeg' : 'image/png'
+          seq = String(lastCliFrameAt)
+          servedTarget = pick.targetId
+        }
+      }
+      if (body === null) {
         res.statusCode = 204
         res.end()
         return
       }
       res.writeHead(200, {
-        'content-type': 'image/png',
-        'content-length': frame.png.length,
+        'content-type': contentType,
+        'content-length': body.length,
         'cache-control': 'no-store',
-        'x-cli-frame-seq': String(frame.seq),
+        'x-cli-frame-seq': seq,
+        'x-cli-frame-target': servedTarget,
       })
-      res.end(frame.png)
+      res.end(body)
     },
   })
 
@@ -983,6 +1176,81 @@ export function initCastServer(
     },
   })
 
+  // POST /api/bcdp/capture — one frame of ONE tab (panel: 刷新页面 / tab click).
+  // Worker channels: activating the tab is what makes the screencast produce a
+  // frame for it, so switch there and report `deferred`. CLI channels: the host
+  // runs a single capture for that tab id.
+  const disposeCapture = server.register({
+    kind: 'exact',
+    path: EGO_CAPTURE_ROUTE,
+    handler: async (reqRaw: unknown, resRaw: unknown) => {
+      const req = reqRaw as IncomingMessage
+      const res = resRaw as ServerResponse
+      const body = await readJsonBody(req).catch(() => ({}) as Record<string, unknown>)
+      const targetId = typeof body.targetId === 'string' ? body.targetId : ''
+      if (!targetId) return sendJson(res, 400, { ok: false, error: 'targetId required' })
+      const port = await ensureWorker()
+      if (port === null) {
+        try {
+          const out = await captureOnDemand(targetId)
+          return sendJson(res, out.ok === true ? 200 : 502, out)
+        } catch (err) {
+          return sendJson(res, 500, { ok: false, error: `${(err as Error)?.message ?? err}`.slice(0, 200) })
+        }
+      }
+      const sw = await proxyPost(port, '/api/switch-tab', { targetId })
+      return sendJson(res, 200, { ok: true, action: 'activate', deferred: true, switch: sw?.status ?? null })
+    },
+  })
+
+  // POST /api/bcdp/sync — panel ⟳: pull the active object in without a tool call.
+  const disposeSync = server.register({
+    kind: 'exact',
+    path: EGO_SYNC_ROUTE,
+    handler: async (_req: unknown, resRaw: unknown) => {
+      const res = resRaw as ServerResponse
+      try {
+        const out = await syncOnRefresh()
+        return sendJson(res, out.ok === true ? 200 : 409, out)
+      } catch (err) {
+        return sendJson(res, 500, { ok: false, error: `${(err as Error)?.message ?? err}`.slice(0, 200) })
+      }
+    },
+  })
+
+  // POST /api/bcdp/hello — the panel reports which client build it is running.
+  const disposeHello = server.register({
+    kind: 'exact',
+    path: EGO_HELLO_ROUTE,
+    handler: async (reqRaw: unknown, resRaw: unknown) => {
+      const req = reqRaw as IncomingMessage
+      const res = resRaw as ServerResponse
+      const body = await readJsonBody(req).catch(() => ({}) as Record<string, unknown>)
+      const build = typeof body.build === 'string' ? body.build : ''
+      lastClientBuild = build
+      lastClientAt = Date.now()
+      // Log once per build: this line is the out-of-band proof of which bundle the
+      // renderer actually runs (readable from the app log, no auth needed).
+      if (build !== '' && build !== reportedClientBuild) {
+        reportedClientBuild = build
+        ctx.logger?.info?.(`dsh-browser-cdp: panel client build ${build} (host ${CLIENT_BUILD})`)
+        // Also on raw stdout: the host logger can be buffered/dropped, and this
+        // single line is what tells support which bundle the renderer really runs.
+        try {
+          process.stdout.write(`[bcdp] panel client build ${build} (host ${CLIENT_BUILD})\n`)
+        } catch { /* stdout may be closed in some hosts */ }
+        // …and in a small file: the only channel that survives a detached stdout,
+        // an expired web token and a renderer we cannot inspect. One line per
+        // build, appended, so it is also a history of what loaded when.
+        try {
+          const dir = join(homedir(), '.dsh')
+          appendFileSync(join(dir, 'bcdp-panel-build.log'), `${new Date().toISOString()} panel=${build} host=${CLIENT_BUILD}\n`)
+        } catch { /* read-only home: the two channels above still apply */ }
+      }
+      return sendJson(res, 200, { ok: true, hostBuild: CLIENT_BUILD, matches: build === CLIENT_BUILD })
+    },
+  })
+
   // POST /api/bcdp/close — close a browser tab by targetId.
   const disposeClose = server.register({
     kind: 'exact',
@@ -990,12 +1258,33 @@ export function initCastServer(
     handler: async (reqRaw: unknown, resRaw: unknown) => {
       const req = reqRaw as IncomingMessage
       const res = resRaw as ServerResponse
-      const port = await ensureWorker()
-      if (port === null) return sendJson(res, 400, { ok: false, error: 'no live agent browser' })
-      // Collect the request body (small JSON: { targetId }).
       const body = await readJsonBody(req).catch(() => ({}) as Record<string, unknown>)
       const targetId = typeof body.targetId === 'string' ? body.targetId : ''
       if (!targetId) return sendJson(res, 400, { ok: false, error: 'targetId required' })
+      const port = await ensureWorker()
+      if (port === null) {
+        // CLI channel: the tab is closed through its own runtime, not the worker.
+        //
+        // Bounded on purpose. The panel fires this from a click handler, and an
+        // unbounded await left the request `pending` forever (measured: two rows
+        // stuck in the network tab, no response ever). A close that cannot answer
+        // in 8 s is reported as a timeout instead of hanging the UI.
+        const out = await Promise.race([
+          closeCliTab(targetId),
+          new Promise<{ ok: boolean; reason: string }>((resolve) => {
+            setTimeout(() => resolve({ ok: false, reason: 'close-timeout' }), 8000)
+          }),
+        ])
+        // 202 = dispatched. The panel must not wait on the browser: the row is
+        // removed by the next inventory broadcast if the tab is really gone, and
+        // stays put otherwise. 200 is reserved for a verified close.
+        if (out.ok && out.reason === 'dispatched') {
+          return sendJson(res, 202, { ok: true, pending: true, targetId })
+        }
+        return sendJson(res, out.ok ? 200 : (out.reason === 'close-timeout' ? 504 : 409), out.ok
+          ? { ok: true, closed: true, targetId }
+          : { ok: false, error: 'close failed', reason: out.reason })
+      }
       const result = await proxyPost(port, '/api/close', { targetId })
       if (!result) return sendJson(res, 502, { ok: false, error: 'close worker unavailable' })
       return sendJson(res, result.status, result.body)
@@ -1133,13 +1422,48 @@ export function initCastServer(
       }
       const port = await ensureWorker()
       if (port === null) {
+        if (pageAction !== null) {
+          const out = await pageAction({ type: 'switch', ...body })
+          if (out.ok === true) {
+            broadcastFocus(defaultFocusStore.set(String(body.targetId), 'operator'))
+            return sendJson(res, 200, { ...out, ok: true, action: 'switch' })
+          }
+          if (out.reason !== 'unsupported-channel') {
+            return sendJson(res, 502, { ok: false, error: 'switch failed', reason: out.reason })
+          }
+        }
         if (panelActions === null) return sendJson(res, 409, { ok: false, error: 'no live agent browser' })
         const out = await panelActions.switchTab(body)
+        if (out.ok === true) broadcastFocus(defaultFocusStore.set(String(body.targetId), 'operator'))
         return sendJson(res, out.ok === true ? 200 : 502, out)
       }
       const result = await proxyPost(port, '/api/switch-tab', body)
       if (!result) return sendJson(res, 502, { ok: false, error: 'switch-tab worker unavailable' })
+      // The operator picked this tab: record it once, so the next spaces snapshot
+      // highlights it without having to infer anything from ordering.
+      if (result.status < 400) broadcastFocus(defaultFocusStore.set(String(body.targetId), 'operator'))
       return sendJson(res, result.status, result.body)
+    },
+  })
+
+  // POST /api/bcdp/focus { targetId, source? } — set or clear the OPERATION
+  // focus. Two things this deliberately does NOT do: activate the target (a
+  // sync path must never raise a window) and outlive the process (a target id
+  // is a runtime handle). An id the worker calls stale is dropped here too, so
+  // the panel stops highlighting a row that is gone.
+  const disposeFocus = server.register({
+    kind: 'exact',
+    path: EGO_FOCUS_ROUTE,
+    handler: async (reqRaw: unknown, resRaw: unknown) => {
+      const req = reqRaw as IncomingMessage
+      const res = resRaw as ServerResponse
+      const body = await readJsonBody(req).catch(() => ({}) as Record<string, unknown>)
+      const targetId = typeof body.targetId === 'string' ? body.targetId.trim() : ''
+      const source = body.source === 'operator' ? 'operator' : 'agent'
+      // Same single path the tool side uses, so "operator clicked" and "agent
+      // drove a tab" cannot diverge in what they store or broadcast.
+      const focus = await pushFocus(targetId, source)
+      return sendJson(res, 200, { ok: true, focus })
     },
   })
 
@@ -1155,6 +1479,13 @@ export function initCastServer(
       const body = await readJsonBody(req).catch(() => ({}) as Record<string, unknown>)
       const port = await ensureWorker()
       if (port === null) {
+        if (pageAction !== null) {
+          const out = await pageAction({ type: 'navigate', ...body })
+          if (out.ok === true) return sendJson(res, 200, { ...out, ok: true, action: 'navigate' })
+          if (out.reason !== 'unsupported-channel') {
+            return sendJson(res, 502, { ok: false, error: 'navigate failed', reason: out.reason })
+          }
+        }
         if (panelActions === null) return sendJson(res, 409, { ok: false, error: 'no live agent browser' })
         const out = await panelActions.navigate(body)
         return sendJson(res, out.ok === true ? 200 : 502, out)
@@ -1223,6 +1554,26 @@ export function initCastServer(
     },
   })
 
+  // Automatic-source counters (probe passes, tab-inventory ticks, frames).
+  // Host-local: it answers "is the machinery still working", which the worker
+  // cannot know (the CLI pollers and the attach probe both live here).
+  const disposeStats = server.register({
+    kind: 'exact',
+    path: EGO_STATS_ROUTE,
+    handler: async (_req: unknown, resRaw: unknown) => {
+      const res = resRaw as ServerResponse
+      // `clientBuild` lets a running renderer compare against its own constant and
+      // reload once when the host was upgraded but the cached bundle was not.
+      return sendJson(res, 200, {
+        ok: true,
+        clientBuild: CLIENT_BUILD,
+        panelBuild: lastClientBuild,
+        panelBuildAt: lastClientAt,
+        stats: snapshotStats(),
+      })
+    },
+  })
+
   const watchRoutes: (() => void)[] = [
     [EGO_WATCH_START_ROUTE, '/api/watch/start'],
     [EGO_WATCH_SWITCH_ROUTE, '/api/watch/switch'],
@@ -1232,10 +1583,30 @@ export function initCastServer(
     handler: async (reqRaw: unknown, resRaw: unknown) => {
       const req = reqRaw as IncomingMessage
       const res = resRaw as ServerResponse
+      const body = await readJsonBody(req).catch(() => ({})) as Record<string, unknown>
+      watchCalls += 1
       const port = await ensureWorker()
-      if (port === null) return sendJson(res, 409, { ok: false, error: 'worker not ready' })
+      if (port === null) {
+        // CLI channels have NO worker by design — frames come from the poller. This
+        // used to answer 409 `worker not ready`, and the panel's retry chain turned
+        // that into a storm (measured: 1728 POSTs, one every few ms). Worse, the 409
+        // also reset the client's capture state, which is why the panel showed
+        // "CDP · idle · 未接管 / no agent browser page" while the strip had tabs.
+        //
+        // Answer like a watch that is simply idle: older clients latch
+        // `watchStarted = ok !== false` and stop retrying, new clients skip watch on
+        // CLI channels entirely.
+        watchRefused += 1
+        return sendJson(res, 200, {
+          ok: true,
+          state: 'idle',
+          backend: 'cli-poll',
+          targetId: typeof body.targetId === 'string' ? body.targetId : '',
+          reason: 'cli channel: frames come from the poller (no CDP screencast)',
+        })
+      }
       const timeoutMs = workerPath === '/api/watch/start' || workerPath === '/api/watch/switch' ? 30000 : 4000
-      const result = await proxyPost(port, workerPath, await readJsonBody(req).catch(() => ({})), timeoutMs)
+      const result = await proxyPost(port, workerPath, body, timeoutMs)
       return result
         ? sendJson(res, result.status, result.body)
         : sendJson(res, 502, { ok: false, error: 'worker request failed' })
@@ -1311,11 +1682,16 @@ export function initCastServer(
     try { disposeFlush() } catch { /* ignore */ }
     try { disposeWindowSize() } catch { /* ignore */ }
     try { disposeSwitchTab() } catch { /* ignore */ }
+    try { disposeFocus() } catch { /* ignore */ }
+    // The pusher closes over this server's worker; leaving it registered would
+    // let a later focus write target a dead port.
+    setFocusPusher(null)
     try { disposeTracking() } catch { /* ignore */ }
     try { disposePanelNavigate() } catch { /* ignore */ }
     try { disposeRaise() } catch { /* ignore */ }
     try { disposeLoginImport() } catch { /* ignore */ }
     try { disposeHealth() } catch { /* ignore */ }
+    try { disposeStats() } catch { /* ignore */ }
     for (const dispose of watchRoutes) try { dispose() } catch { /* ignore */ }
     try { disposeWatchStatus() } catch { /* ignore */ }
     try { disposeVideoStatus() } catch { /* ignore */ }

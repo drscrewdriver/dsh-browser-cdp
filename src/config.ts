@@ -3,6 +3,30 @@ import type { Volatile } from '@deepseek-ai/cosmokit'
 import type { JudgeSettings, LinkBase, RawConfig, ResolvedConfig } from './types.ts'
 import { sanitizeLinks } from './cdp-targets.ts'
 
+// ── 跨代际 volatile 能力守卫（0.1.0-rc.2 → 0.2.x）────────────────────────
+// Config schema 用 `.volatile()` 把字段投影进 0.1.7+ 声明式设置页。`.volatile()`
+// 是 schemastery >=3.18.4 才有的 Schema.prototype 方法（本包 dependencies 已钉
+// ^3.18.4 自带）；但宿主作用域可能把 `@deepseek-ai/schemastery` 解析到 <3.18.4
+// 旧版（§3.7 红线：`z.string(...).volatile is not a function` 装载期崩）。
+// schemastery 是单 Schema.prototype，所有链式方法（description/min/max/union/
+// array…）共用同一原型，故只需一处能力探测：原型缺 volatile 时补一个 no-op
+// （返回 this，即跳过 meta.volatile 标记）——老宿主（Gen-1/Gen-2）本就不做
+// volatile 投影，跳过标记正是其期望语义；Gen-3 上方法已存在，守卫自动空转，
+// 行为零改变。不读宿主版本号，纯能力探测。
+;(() => {
+  try {
+    const proto = Object.getPrototypeOf(z.boolean()) as { volatile?: unknown } | null
+    if (proto && typeof proto.volatile !== 'function') {
+      (proto as { volatile: () => unknown }).volatile = function (this: unknown) {
+        return this
+      }
+    }
+  } catch {
+    // 形状异常（极老/裁剪的 schemastery）：留原样，装载失败交由三代表
+    // installSettingsAuto 路径暴露，绝不在模块顶层抛出阻断 import。
+  }
+})()
+
 // ── 0.1.7 declarative settings ──────────────────────────────────────────────
 // DSH 0.1.7 removed the imperative settings registration (`ctx.settings`
 // section APIs). The Config schema itself IS the settings form now: only the
@@ -15,8 +39,9 @@ import { sanitizeLinks } from './cdp-targets.ts'
 // exposed for editing. Hard red lines (schemastery 3.18.4+): `.volatile()`
 // only on a fixed object path — never inside a union/lazy/transform branch or
 // an enclosing volatile value; the whole `links` array is wrapped, not its
-// rows. `.volatile()` does not exist before 3.18.4, so this build targets
-// DSH 0.1.7-rc.1+ only.
+// rows. On schemastery < 3.18.4 the top guard degrades `.volatile()` to a
+// no-op, so this same build now serves DSH 0.1.0-rc.2+ (Gen-1/2 走
+// installSettingsAuto 的命令式注册, volatile 标记被忽略)。
 
 const backend = z.union(['auto', 'cdp', 'ffmpeg'])
 const profile = z.union(['low', 'balanced', 'high'])
@@ -176,7 +201,7 @@ export const Config = z.object({
   // ego-cli 观察窗降级帧源：无 CDP screencast 时，每 5s 走一次 CLI 截图轮询
   // 供观察窗填充画面区。默认开（本地开销低）；关 = 即使激活行是 ego-cli 也不
   // 轮询，观察窗显示占位提示。热生效，无需重载插件。
-  cliFramePollEnabled: z.boolean().default(true).description('Degraded watch-panel frame source for the local ego-cli link: with no CDP screencast available, capture one viewport screenshot every 5s through the CLI channel and serve it to the panel. On (default): the poller runs while an ego-cli link owns routing. Off: the panel keeps its placeholder and no screenshot subprocess is spawned. Hot-applies without reloading the plugin.').volatile(),
+  cliFramePollEnabled: z.boolean().default(true).description('Degraded watch-panel frame source for the local ego-cli link: with no CDP screencast available, capture one viewport screenshot every 3s through the CLI channel and serve it to the panel. On (default): the poller runs while an ego-cli link owns routing. Off: the panel keeps its placeholder and no screenshot subprocess is spawned. Hot-applies without reloading the plugin.').volatile(),
   localUserDataDir: z.string().description('Profile dir for the locally launched browser. Empty = managed dir; never point at your daily Chrome profile.'),
   // ── Lightpanda backend: managed-serve knob (the row carries its own path) ──
   lightpandaArgs: z.string().description('Extra args appended to a managed `lightpanda serve` argv. --host/--port are managed and cannot be overridden.').volatile(),

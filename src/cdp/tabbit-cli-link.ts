@@ -449,7 +449,7 @@ export async function tabbitListTabs(
   cliPath: string,
   taskName: string,
   stateFilter?: 'available' | 'owned' | 'claimed',
-): Promise<{ tabs: TabbitTab[]; total: number; complete: boolean }> {
+): Promise<{ tabs: TabbitTab[]; total: number; complete: boolean; focusedWindowId: number }> {
   const args = ['tabs', '--task', taskName]
   if (stateFilter) args.push('--state', stateFilter)
   const handle = subprocess.spawn({
@@ -467,13 +467,53 @@ export async function tabbitListTabs(
       tabs: Array.isArray(parsed.tabs) ? parsed.tabs : [],
       total: typeof parsed.total === 'number' ? parsed.total : 0,
       complete: parsed.complete === true,
+      // The CLI reports which WINDOW the user is looking at. Two windows with
+      // the same two pages look like duplicate tabs in the panel unless we scope
+      // to one of them — which is exactly what happened in the field.
+      focusedWindowId: typeof parsed.focusedWindowId === 'number' ? parsed.focusedWindowId : 0,
     }
   } catch {
-    return { tabs: [], total: 0, complete: false }
+    return { tabs: [], total: 0, complete: false, focusedWindowId: 0 }
   }
 }
 
 /** Diagnose: check if tabbit-cli can reach the browser (short timeout, no launch). */
+/** One live task as `diagnose` reports it. */
+export interface TabbitTaskSummary {
+  taskName: string
+  taskId: string
+  ownedTabIds: number[]
+}
+
+/**
+ * Parse `diagnose` into the task→owned-tabs map.
+ *
+ * Needed because tab ownership is PER TASK: a tab owned by `dsh-<session>` (created
+ * by a tool call) cannot be acquired by the panel's `dsh-panel` task, so a close
+ * issued from the panel silently failed. The owner has to be looked up first.
+ * Tolerant by design: any unparseable line is skipped, never thrown.
+ */
+export function parseTabbitTasks(raw: string): TabbitTaskSummary[] {
+  const lines = raw.split('\n').map((line) => line.trim()).filter((line) => line.startsWith('{'))
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    try {
+      const parsed = JSON.parse(lines[i]) as { tasks?: unknown }
+      if (!Array.isArray(parsed.tasks)) continue
+      return parsed.tasks
+        .filter((task): task is Record<string, unknown> => typeof task === 'object' && task !== null)
+        .map((task) => ({
+          taskName: typeof task.taskName === 'string' ? task.taskName : '',
+          taskId: typeof task.taskId === 'string' ? task.taskId : '',
+          ownedTabIds: Array.isArray(task.ownedTabIds)
+            ? task.ownedTabIds.filter((id): id is number => typeof id === 'number')
+            : [],
+        }))
+        .filter((task) => task.taskName !== '')
+    } catch { /* keep looking for a JSON line */ }
+  }
+  return []
+}
+
 export async function tabbitDiagnose(
   subprocess: SubprocessService,
   cliPath: string,
@@ -603,7 +643,7 @@ export function buildScriptSnippet(body: string): string {
  * executor down and kills every other call in that task. A short `Promise.race`
  * inside the snippet keeps a stuck capture from becoming a stuck task.
  */
-export const TABBIT_CAPTURE_DEADLINE_MS = 8000
+export const TABBIT_CAPTURE_DEADLINE_MS = 3500
 
 /** The race-guarded capture expression shared by both snippet builders. */
 function captureWithDeadline(format: 'png' | 'jpeg', quality: number | undefined, deadlineMs: number): string[] {
@@ -681,9 +721,67 @@ export function buildFrameCaptureSnippet(
 }
 
 /**
- * 一个可执行的定位计划。`normalize` 表达的是【时序】要求（动作前必须 await），
- * 这是表达式字符串无法承载的信息——aria-ref 必须先 normalize 才能在 DOM
- * 重渲染后重新解析。
+ * Capture EVERY page the task owns, in ONE call — the tabbit equivalent of the
+ * ego-cli per-tab session trick.
+ *
+ * 1.9.4 got non-focused pictures on the ego route by enumerating tabs and opening a
+ * CDP session per tab (`Target.attachToTarget` → `Page.captureScreenshot`), never
+ * activating anything. Tabbit exposes no `Target.*`, but a Playwright Context does:
+ * `context.pages()` plus `newCDPSession(page)` per page is the same technique.
+ *
+ * Only pages the TASK owns are visible, which is exactly the set we drive — and a
+ * page that was captured before stays owned, so background tabs keep producing
+ * frames without stealing focus.
+ *
+ * Returns one file per page: `{ pages: [{ url, title, path, bytes }] }`.
+ */
+export function buildMultiFrameSnippet(
+  dirPath: string,
+  quality = TABBIT_FRAME_JPEG_QUALITY,
+  deadlineMs = TABBIT_CAPTURE_DEADLINE_MS,
+): string {
+  const dir = JSON.stringify(dirPath)
+  return [
+    `const dir = ${dir};`,
+    `const fs = await import("node:fs");`,
+    `const out = [];`,
+    `const pages = page.context().pages();`,
+    `for (let i = 0; i < pages.length; i += 1) {`,
+    `  const p = pages[i];`,
+    `  let url = "";`,
+    `  try { url = p.url(); } catch { continue; }`,
+    `  if (!url || url === "about:blank") { out.push({ url: url || "", skipped: "blank" }); continue; }`,
+    `  try {`,
+    ...captureWithDeadlineOn('jpeg', quality, deadlineMs, 'p'),
+    `    const buf = Buffer.from(r.data, "base64");`,
+    `    const target = dir + "/" + i + ".jpg";`,
+    `    fs.writeFileSync(target, buf);`,
+    `    out.push({ url, title: await p.title(), path: target, bytes: buf.length });`,
+    `  } catch (e) { out.push({ url, skipped: "capture", error: String(e && e.message || e) }); }`,
+    `}`,
+    `return { pages: out };`,
+  ].join('\n')
+}
+
+/** Same race guard as captureWithDeadline, parameterised by the page variable. */
+function captureWithDeadlineOn(
+  format: 'png' | 'jpeg',
+  quality: number | undefined,
+  deadlineMs: number,
+  pageVar: string,
+): string[] {
+  const opts = quality === undefined ? `{ format: ${JSON.stringify(format)} }` : `{ format: ${JSON.stringify(format)}, quality: ${quality} }`
+  return [
+    `    const session = await ${pageVar}.context().newCDPSession(${pageVar});`,
+    `    const r = await Promise.race([`,
+    `      session.send("Page.captureScreenshot", ${opts}),`,
+    `      new Promise((_, rej) => setTimeout(() => rej(new Error("capture-deadline")), ${deadlineMs})),`,
+    `    ]);`,
+  ]
+}
+
+/**
+ * One executable locator plan.
  */
 export interface LocatorPlan {
   /** Playwright locator 表达式。 */

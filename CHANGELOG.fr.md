@@ -1,3 +1,7 @@
+## [1.9.17] - 2026-11-13 — Sondage réactif : état depuis le cache, focus d'onglet séparé de la capture
+
+Résumé (détail et versions intermédiaires dans `CHANGELOG.md`) : `bcdp_status` répond depuis le cache de connexion (`refresh:true` force un vrai sondage), pour que « vérifier l'état » ne lance pas de processus ; le sondage de connexion est déduplicaté et partage le résultat en cours ; `tabbit-cli diagnose` n'est PAS exécuté au montage (mesuré : il démarre le navigateur) ; le focus d'onglet a désormais trois propriétaires distincts (opérateur/agent, panneau, capture d'image), le panneau suit donc l'onglet courant même en CDP distant (base DevTools dérivée de l'URL WebSocket, dégradation silencieuse sans `/json/*`) ; tous les appels vers un backend passent par une file unique.
+
 ## [0.18.0] - 2026-09-29 — Ligne DSH 0.2.0-rc.1 (compat/0.2.0 : adaptation purement métadonnées, zéro modification de code)
 
 ### Ajouts

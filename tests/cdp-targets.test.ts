@@ -14,6 +14,7 @@ import {
   probeEndpoint,
   decideAttach,
   refreshAttach,
+  runtimeOfLink,
   createAttachCache,
   resolveEffectiveLink,
   attachMatchesLink,
@@ -479,33 +480,33 @@ describe("R7 decideAttach", () => {
     code: "", message: "", allowLocalFallback: false, localLauncherReady: true,
   };
 
-  it("hands a ready ego-cli link straight to the CLI", () => {
-    const out = decideAttach({ ...base, linkKind: EGO_CLI_KIND, message: "local ego CLI ready" });
+  it("hands a ready browser-owning CLI link straight to the CLI", () => {
+    const out = decideAttach({ ...base, ownsBrowser: true, message: "local ego CLI ready" });
     expect(out).toEqual({ kind: "cli", message: "local ego CLI ready" });
   });
 
-  it("refuses cdpMode=remote with an ego-cli link (A18)", () => {
-    const out = decideAttach({ ...base, mode: "remote", linkKind: EGO_CLI_KIND });
+  it("refuses cdpMode=remote with a browser-owning link (A18)", () => {
+    const out = decideAttach({ ...base, mode: "remote", ownsBrowser: true });
     expect(out).toMatchObject({ kind: "error", code: "mode-kind-mismatch" });
   });
 
   it("reports the probe failure instead of pretending to be ready", () => {
-    const out = decideAttach({ ...base, status: "unreachable", linkKind: EGO_CLI_KIND, code: "cli-not-found", message: "no CLI" });
+    const out = decideAttach({ ...base, status: "unreachable", ownsBrowser: true, code: "cli-not-found", message: "no CLI" });
     expect(out).toMatchObject({ kind: "error", code: "cli-not-found", message: "no CLI" });
   });
 
   it("keeps the cli link usable while remoteEnabled is off (A20)", () => {
-    const out = decideAttach({ ...base, linkKind: EGO_CLI_KIND, remoteDisabled: true });
+    const out = decideAttach({ ...base, ownsBrowser: true, remoteDisabled: true });
     expect(out.kind).toBe("cli");
   });
 
   it("leaves cdpMode=local in charge regardless of the active kind", () => {
-    const out = decideAttach({ ...base, mode: "local", linkKind: EGO_CLI_KIND });
+    const out = decideAttach({ ...base, mode: "local", ownsBrowser: true });
     expect(out.kind).toBe("local");
   });
 
   it("still demands an activation for cdp links", () => {
-    const out = decideAttach({ ...base, linkKind: "cdp", hasActive: false });
+    const out = decideAttach({ ...base, hasActive: false });
     expect(out).toMatchObject({ kind: "error", code: "no-active-target" });
   });
 });
@@ -658,7 +659,12 @@ describe("refreshAttach re-derives routing on links events", () => {
       message: attach.message,
       allowLocalFallback: false,
       remoteDisabled: false,
-      ...(effective ? { linkKind: effective.link.kind } : {}),
+      ...(effective
+        ? {
+            ownsBrowser: runtimeOfLink(effective.link)?.ownsUserBrowser === true,
+            injectsEndpoint: runtimeOfLink(effective.link)?.injectsEndpoint === true,
+          }
+        : {}),
       localLauncherReady: true,
     });
   };
@@ -756,5 +762,62 @@ describe("refreshAttach re-derives routing on links events", () => {
     expect(effective.link.kind).toBe("cdp");
     // The scoped-view rule: a cache row for another link is discarded.
     expect(attachMatchesLink({ ...stale, endpoint: "" }, effective.link)).toBe(false);
+  });
+});
+
+/**
+ * A remote attach that cannot be reached must NOT quietly become a local
+ * browser. The one authorized path (allowLocalFallback) is opt-in and stays
+ * opt-in; this pins the default. Behaviourally that means: unreachable endpoint
+ * → `unreachable`, never `endpointSource: 'local-fallback'`.
+ */
+describe("refreshAttach — no silent local fallback", () => {
+  it("keeps a dead remote endpoint dead when allowLocalFallback is off", async () => {
+    const cache = createAttachCache();
+    const out = await refreshAttach({
+      targets: [{ id: "a", kind: "cdp", label: "A", endpoint: "http://127.0.0.1:1", enabled: true, note: "" }],
+      activeTargetId: "a",
+      mode: "auto",
+      cache,
+      fallback: { enabled: false },
+      now: () => 0,
+      // No network in tests: the endpoint simply does not answer.
+      fetchVersion: async () => { throw new Error("ECONNREFUSED") },
+    } as never);
+    expect(out.status).toBe("unreachable");
+    expect(out.endpointSource).not.toBe("local-fallback");
+    expect(out.endpointSource).not.toBe("local-launch");
+    expect(out.wsUrl).toBe("");
+  });
+});
+
+/**
+ * The tabbit branch used to answer `ready` without looking at anything, so a
+ * machine without the CLI looked healthy until the first real tool call failed.
+ */
+describe("refreshAttach — tabbit readiness is an answer, not a constant", () => {
+  type Probe = (link: { cliPath: string }) => { ok: boolean; cliPath?: string; code?: string; message?: string };
+  const refreshTabbit = (probe?: Probe) =>
+    refreshAttach({
+      targets: [{ id: "tb", kind: "tabbit-cli", label: "Tabbit", enabled: true, cliPath: "" } as never],
+      activeTargetId: "tb",
+      mode: "auto",
+      cache: createAttachCache(),
+      ...(probe === undefined ? {} : { tabbitProbe: probe as never }),
+    } as never);
+
+  it("a missing CLI is unreachable with an actionable code", async () => {
+    const out = await refreshTabbit(() => ({ ok: false, code: "tabbit-cli-missing", message: "explicit path not found" }));
+    expect(out).toMatchObject({ status: "unreachable", code: "tabbit-cli-missing", linkKind: "tabbit-cli" });
+  });
+
+  it("a present CLI is ready and carries the resolved path", async () => {
+    const out = await refreshTabbit(() => ({ ok: true, cliPath: "/opt/tabbit-cli" }));
+    expect(out).toMatchObject({ status: "ready", cliPath: "/opt/tabbit-cli" });
+  });
+
+  it("no probe callback keeps the legacy assumption (fixtures that never configure tabbit)", async () => {
+    const out = await refreshTabbit();
+    expect(out.status).toBe("ready");
   });
 });

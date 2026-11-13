@@ -35,6 +35,49 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 var __require = /* @__PURE__ */ createRequire(import.meta.url);
 
 //#endregion
+//#region src/cdp/proxy-base.ts
+/**
+* src/cdp/proxy-base.ts — the HTTP face of a CDP PROXY.
+*
+* A remote attach hands over only a WebSocket URL. Proxies (CloakBrowser and
+* friends) serve `/json/*` under the SAME path the socket lives on, so the
+* DevTools HTTP base is derivable without asking anybody:
+*
+*   wss://host/api/profiles/<id>/cdp  →  https://host/api/profiles/<id>/cdp
+*   ws://host:9222/devtools/browser/x →  http://host:9222/devtools/browser/x
+*
+* Two rules matter: swap the scheme (ws→http, wss→https) and keep the path that
+* the PROXY was mounted under — but DROP a plain DevTools socket path, because
+* for those the HTTP face is the origin itself:
+*
+*   wss://host/api/profiles/x/cdp   → https://host/api/profiles/x/cdp + /json/list
+*   ws://127.0.0.1:9337/devtools/browser/<uuid>
+*                                   → http://127.0.0.1:9337 + /json/list
+*
+* That second case is not hypothetical: appending `/json/list` to the DevTools
+* socket path yields 404, the observation silently degrades, and the panel looks
+* like it has no foreground at all. Unparseable input returns null; this never
+* throws, because it runs inside a 1 s snapshot tick.
+*
+* Lives here (not in the worker) so it can be unit-tested: importing the worker
+* module starts the worker.
+*/
+function proxyBase(wsUrl) {
+	const raw = String(wsUrl ?? "").trim();
+	if (raw === "") return null;
+	try {
+		const url = new URL(raw);
+		if (url.protocol !== "ws:" && url.protocol !== "wss:") return null;
+		const scheme = url.protocol === "wss:" ? "https:" : "http:";
+		const devtoolsAt = url.pathname.indexOf("/devtools/");
+		const path = devtoolsAt >= 0 ? url.pathname.slice(0, devtoolsAt) : url.pathname;
+		return `${scheme}//${url.host}${path.replace(/\/+$/, "")}`;
+	} catch {
+		return null;
+	}
+}
+
+//#endregion
 //#region node_modules/ws/lib/constants.js
 var require_constants = /* @__PURE__ */ __commonJS({ "node_modules/ws/lib/constants.js": ((exports, module) => {
 	const BINARY_TYPES$2 = [
@@ -6501,6 +6544,14 @@ let currentStatus = {
 	generation: 0,
 	watchers: 0
 };
+/**
+* The tab the OPERATION side owns (`POST /api/focus`), or null when nobody owns
+* one yet. Deliberately NOT the capture lease: `currentStatus.targetId` answers
+* "what is being screencast", which is a consequence of a watch, not a choice
+* the user made. Keeping them apart is what stops the panel highlight from
+* snapping back after a tab click (see src/runtime/focus.ts).
+*/
+let focusTargetId = null;
 let videoInit = null;
 function normalizeConfig(input) {
 	const next = { ...castConfig };
@@ -6719,24 +6770,131 @@ async function listTargets() {
 	if (!active) return [];
 	return ((await active.cdp.call("Target.getTargets")).targetInfos || []).filter((target) => target.type === "page");
 }
-async function activeTargetId() {
-	if (!active?.port) return currentStatus.targetId || null;
+/**
+* Where to ask "which page is in front". One code path serves both launches:
+* a local launcher gives a loopback DevTools port, a remote attach gives only a
+* WebSocket URL (and possibly a proxy that speaks `/json/*`).
+*/
+async function devtoolsBase(browser) {
+	if (browser === null) return null;
+	if (browser.port !== null) return {
+		base: `http://127.0.0.1:${browser.port}`,
+		remote: false
+	};
+	const base = proxyBase(browser.wsUrl);
+	return base === null ? null : {
+		base,
+		remote: true
+	};
+}
+/**
+* Remote foreground observation, cached.
+*
+* Two things must be cheap here because this runs on the 1s spaces tick: the
+* success answer is reused for a second, and a proxy that does NOT serve
+* `/json/*` is remembered for a while instead of being re-asked every tick
+* (a 404 every second would be noise in the logs for the whole session).
+*/
+const proxyObserveCache = {
+	at: 0,
+	id: null,
+	failedUntil: 0,
+	base: ""
+};
+/**
+* Which tab is "current", and WHY.
+*
+* This used to be one expression with three competing sources, which is how the
+* panel ended up disagreeing with itself:
+*   - `currentStatus.targetId` — the tab being CAPTURED (a watch lease). Using
+*     it as "active" left every row `active:false` until a watch started, and
+*     the panel (which renders active rows only) then never started one: a
+*     deadlock, not a glitch.
+*   - `/json/list` first page — the FOREGROUND tab. Correct for a local launch
+*     (the user really is switching tabs in that window) and, through the proxy
+*     path, for a remote one too; a proxy that cannot answer is "no
+*     observation", never an error.
+*   - the panel's own selection — belongs to the view focus, not here.
+*
+* Order: explicit host focus (validated against the live list) → foreground
+* observation (local port, else remote proxy) → none. `known` lets the caller
+* pass the target list it already fetched, so a closed tab cannot keep the
+* highlight.
+*/
+async function activeTargetInfo(known) {
+	const inKnown = (id) => known === void 0 || known.includes(id);
+	if (focusTargetId !== null && inKnown(focusTargetId)) return {
+		id: focusTargetId,
+		source: "focus"
+	};
+	const target = await devtoolsBase(active);
+	if (target === null) return {
+		id: null,
+		source: "none"
+	};
+	const now = Date.now();
+	if (target.remote && now < proxyObserveCache.failedUntil) return {
+		id: null,
+		source: "none"
+	};
+	if (target.remote && proxyObserveCache.base === target.base && now - proxyObserveCache.at < 1e3) return proxyObserveCache.id === null ? {
+		id: null,
+		source: "none"
+	} : {
+		id: proxyObserveCache.id,
+		source: "foreground-remote"
+	};
 	try {
-		const response = await fetch(`http://127.0.0.1:${active.port}/json/list`, { signal: AbortSignal.timeout(1500) });
-		return (response.ok ? await response.json() : []).find((entry) => entry.type === "page")?.id || currentStatus.targetId || null;
+		const response = await fetch(`${target.base}/json/list`, { signal: AbortSignal.timeout(1500) });
+		if (!response.ok) {
+			if (target.remote) {
+				proxyObserveCache.failedUntil = now + 3e4;
+				proxyObserveCache.base = target.base;
+			}
+			return {
+				id: null,
+				source: "none"
+			};
+		}
+		const id = (await response.json()).find((entry) => entry.type === "page")?.id ?? null;
+		if (target.remote) {
+			proxyObserveCache.at = now;
+			proxyObserveCache.id = id;
+			proxyObserveCache.base = target.base;
+			proxyObserveCache.failedUntil = 0;
+		}
+		if (id !== null && inKnown(id)) return {
+			id,
+			source: target.remote ? "foreground-remote" : "foreground"
+		};
 	} catch {
-		return currentStatus.targetId || null;
+		if (target.remote) {
+			proxyObserveCache.failedUntil = now + 3e4;
+			proxyObserveCache.base = target.base;
+		}
 	}
+	return {
+		id: null,
+		source: "none"
+	};
+}
+/** String-only view of `activeTargetInfo` for the single-target routes. */
+async function activeTargetId() {
+	return (await activeTargetInfo()).id;
 }
 async function snapshotSpaces() {
+	const browser = active;
+	if (browser === null) return [];
 	const targets = await listTargets();
-	const activeId = await activeTargetId();
+	const activeInfo = await activeTargetInfo(targets.map((target) => target.targetId));
+	const activeId = activeInfo.id;
+	const capturingId = currentStatus.targetId;
 	const spaces = [];
 	for (const target of targets.slice(0, 30)) {
 		const frame = frameCache.get(target.targetId);
-		const session = active.sessions.get(target.targetId);
+		const session = browser.sessions.get(target.targetId);
 		const cached = probeCache.get(target.targetId);
-		if (!cached || Date.now() - cached.at > 5e3) active.sessions.call(target.targetId, "Runtime.evaluate", {
+		if (!cached || Date.now() - cached.at > 5e3) browser.sessions.call(target.targetId, "Runtime.evaluate", {
 			expression: HUMAN_PROBE_JS,
 			returnByValue: true,
 			awaitPromise: false
@@ -6752,6 +6910,8 @@ async function snapshotSpaces() {
 			url: target.url,
 			title: target.title,
 			active: target.targetId === activeId,
+			activeSource: target.targetId === activeId ? activeInfo.source : "",
+			capturing: target.targetId === capturingId,
 			lastActive: frame?.lastActive || 0,
 			viewportW: frame?.viewportW || session?.viewportW,
 			viewportH: frame?.viewportH || session?.viewportH,
@@ -7067,13 +7227,41 @@ async function main() {
 					});
 				}
 			}
+			if (req.method === "POST" && url.pathname === "/api/focus") {
+				if (!active) return sendJson(res, 409, {
+					ok: false,
+					error: "no live browser"
+				});
+				const body = await readJson(req);
+				const targetId = typeof body?.targetId === "string" ? body.targetId.trim() : "";
+				if (targetId === "") {
+					focusTargetId = null;
+					return sendJson(res, 200, {
+						ok: true,
+						cleared: true
+					});
+				}
+				if (!(await listTargets()).map((target) => target.targetId).includes(targetId)) return sendJson(res, 409, {
+					ok: false,
+					code: "focus-stale",
+					error: "that target is gone",
+					targetId
+				});
+				focusTargetId = targetId;
+				return sendJson(res, 200, {
+					ok: true,
+					targetId
+				});
+			}
 			if (req.method === "POST" && url.pathname === "/api/close") {
-				const { targetId } = await readJson(req);
+				const body = await readJson(req);
+				const targetId = typeof body?.targetId === "string" ? body.targetId : "";
 				if (!active || !targetId) return sendJson(res, 400, {
 					ok: false,
 					error: "targetId required"
 				});
 				await active.cdp.call("Target.closeTarget", { targetId });
+				if (focusTargetId === targetId) focusTargetId = null;
 				return sendJson(res, 200, { ok: true });
 			}
 			if (req.method === "POST" && url.pathname === "/api/switch-tab") {
@@ -7085,6 +7273,7 @@ async function main() {
 				});
 				try {
 					await active.cdp.call("Target.activateTarget", { targetId });
+					focusTargetId = targetId;
 					return sendJson(res, 200, {
 						ok: true,
 						targetId

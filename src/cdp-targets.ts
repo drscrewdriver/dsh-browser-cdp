@@ -25,8 +25,14 @@
 import type { BrowserLink, BrowserLinkKind, CdpLink, CdpMode, EgoCliLink, LightpandaLink } from './types.ts'
 import { discoverWebSocketUrl, normalizeEndpoint, type CdpErrorCode } from './cdp/endpoint.ts'
 import { engineOf, type EngineId } from './cdp/capabilities.ts'
-import { launchLocalBrowser, stopLocalBrowser } from './cdp/launcher.ts'
-import { probeCliLink, type CliLinkIo } from './cdp/cli-link.ts'
+import { launchLocalBrowser } from './cdp/launcher.ts'
+import type { CliLinkIo } from './cdp/cli-link.ts'
+// Runtime registry (R1): the per-kind readiness logic lives behind this lookup,
+// so this module keeps exactly ONE place that knows a link kind can differ.
+import { runtimeOf } from './runtime/backend-runtime.ts'
+// Re-exported so hosts/tests can ask the same registry this module dispatches
+// through, without importing the runtime layer directly.
+export { runtimeOf, runtimeOfLink, allRuntimes } from './runtime/backend-runtime.ts'
 
 // M0.1 (endpoint resolution) now lives in `src/cdp/endpoint.ts` — the
 // acceptance criterion for that module is that only `ws` leaves it. It is
@@ -429,6 +435,12 @@ export interface AttachState {
   endpointSource?: 'remote' | 'local' | 'local-launch' | 'local-fallback' | 'cli' | 'cli-launch'
   /** R7 — which kind the activated entry is, so the sync decision table knows. */
   linkKind?: BrowserLinkKind
+  /**
+   * True when this channel owns its browser (local CLI, managed serve). The
+   * attach decision uses it instead of comparing kinds: "owns the browser" is
+   * the property that changes the answer, and it is the runtime's to declare.
+   */
+  ownsBrowser?: boolean
   /** Lightpanda backend — engine of the attached endpoint (badge + doctor + worker env). Absent = unrecognized. */
   engine?: EngineId
   /** R7 — `ego-cli` only: the resolved CLI path / spawn shape, for the doctor. */
@@ -477,8 +489,14 @@ export interface DecideInput {
   allowLocalFallback: boolean
   /** True once the built-in local launcher (M0.9) is wired in. */
   localLauncherReady: boolean
-  /** R7 — kind of the activated entry, when one is activated. */
-  linkKind?: BrowserLinkKind
+  /**
+   * Runtime facts about the activated link (never a link kind). `ownsBrowser`
+   * plus `injectsEndpoint` is enough to answer every branch below, which is why
+   * this table no longer compares kinds.
+   */
+  ownsBrowser?: boolean
+  /** The channel hands over a wsUrl for injection (cdp / managed serve). */
+  injectsEndpoint?: boolean
 }
 
 /**
@@ -497,55 +515,31 @@ export function decideAttach(input: DecideInput): AttachDecision {
   if (input.mode === 'local') {
     return { kind: 'local', message: 'local mode: using local browser control' }
   }
-  // R7 — `remote` names a CDP endpoint literally, so a local CLI link under
-  // that mode is a configuration mismatch. Refusing is better than quietly
-  // driving a different browser than the mode promises.
-  if (input.mode === 'remote' && (input.linkKind === EGO_CLI_KIND || input.linkKind === LP_KIND)) {
+  // `remote` names a NETWORK endpoint literally, so a browser-owning channel
+  // under that mode is a configuration mismatch. Refusing is better than
+  // quietly driving a different browser than the mode promises.
+  if (input.mode === 'remote' && input.ownsBrowser === true) {
     return {
       kind: 'error',
       code: 'mode-kind-mismatch',
-      message:
-        input.linkKind === LP_KIND
-          ? 'cdpMode=remote requires a CDP endpoint link, but the activated link is the local Lightpanda serve. Activate a CDP link, or switch cdpMode to auto.'
-          : 'cdpMode=remote requires a CDP endpoint link, but the activated link is the local ego CLI. Activate a CDP link, or switch cdpMode to auto.',
+      message: 'cdpMode=remote requires a CDP endpoint link, but the activated link owns its browser (a CLI or a managed serve). Activate a CDP link, or switch cdpMode to auto.',
     }
   }
-  // R7 — an activated CLI link bypasses the endpoint table entirely: the CLI
-  // resolves its own browser, and remoteEnabled (a REMOTE switch) does not
-  // apply to it.
-  if (input.hasActive && input.linkKind === EGO_CLI_KIND) {
-    if (input.status === 'ready') return { kind: 'cli', message: input.message || 'local ego CLI ready' }
+  // A browser-owning channel that hands over NOTHING to inject: the CLI drives
+  // its own browser, so `remoteEnabled` (a REMOTE switch) does not apply to it.
+  if (input.hasActive && input.ownsBrowser === true && input.injectsEndpoint !== true) {
+    if (input.status === 'ready') return { kind: 'cli', message: input.message || 'the activated CLI link is ready' }
     if (input.status === 'idle' || input.status === 'probing') {
       return {
         kind: 'error',
         code: 'endpoint-unresolved',
-        message: 'The local ego CLI has not been probed yet. Wait for the probe to finish and retry the call.',
+        message: 'The activated CLI link has not been probed yet. Wait for the probe to finish and retry the call.',
       }
     }
     return {
       kind: 'error',
       code: input.code === '' ? 'cli-probe-failed' : input.code,
-      message: input.message === '' ? 'the local ego CLI is not available' : input.message,
-    }
-  }
-  // Lightpanda backend — an activated managed-serve row owns its local
-  // endpoint just like the CLI: the launcher ensures the serve, the runtime
-  // attaches via injection, and remoteEnabled (a REMOTE switch) does not apply.
-  if (input.hasActive && input.linkKind === LP_KIND) {
-    if (input.status === 'ready' && input.wsUrl !== '') {
-      return { kind: 'inject', wsUrl: input.wsUrl, targetId: '', source: 'remote' }
-    }
-    if (input.status === 'idle' || input.status === 'probing') {
-      return {
-        kind: 'error',
-        code: 'endpoint-unresolved',
-        message: 'The Lightpanda serve has not been probed yet. Wait for the probe to finish and retry the call.',
-      }
-    }
-    return {
-      kind: 'error',
-      code: input.code === '' ? 'lightpanda-not-ready' : input.code,
-      message: input.message === '' ? 'the managed Lightpanda serve is not available' : input.message,
+      message: input.message === '' ? 'the activated CLI link is not available' : input.message,
     }
   }
   if (input.remoteDisabled) {
@@ -653,142 +647,29 @@ export interface RefreshInput {
   cliProbeColdStart?: boolean
   /** Lightpanda backend — extra `lightpanda serve` args (config knob), filtered by the launcher. */
   lightpandaArgs?: string
+  /**
+   * Tabbit bridge — how the host answers "is the tabbit CLI usable right now".
+   *
+   * Injected rather than imported so this module stays host-free: resolving the
+   * CLI touches the filesystem/PATH, which is the host's business. The probe is
+   * **existence-only on purpose** — `tabbit-cli diagnose` may cold-start the
+   * backing browser (its spawn comment says so), so it must not run on mount.
+   * Absent callback = legacy behaviour (assume ready), which keeps fixtures that
+   * never configure a tabbit link unchanged.
+   */
+  tabbitProbe?: (link: Extract<BrowserLink, { kind: typeof TABBIT_CLI_KIND }>) => {
+    ok: boolean
+    cliPath?: string
+    code?: string
+    message?: string
+  }
 }
 
-/**
- * R7 — publish the readiness of an `ego-cli` link.
- *
- * There is no endpoint here and nothing is injected: the CLI owns its browser,
- * so the only question is whether the CLI itself can be launched and driven.
- * A CLI that answers while its backing browser is down still counts as ready —
- * the first real call cold-starts the browser, which is normal for this kind —
- * and is tagged `cli-launch` so the panel can say so instead of claiming a
- * live browser.
+/*
+ * The per-kind probe bodies (ego-cli / lightpanda / tabbit) used to live here.
+ * They now live in src/runtime/<kind>-runtime.ts and are reached through
+ * `runtimeOf(kind)` below — this module no longer switches on a link kind.
  */
-async function refreshCliAttach(
-  input: RefreshInput,
-  cache: AttachCache,
-  suggested: AttachState,
-  link: EgoCliLink,
-  now: () => number,
-): Promise<AttachState> {
-  const base: AttachState = {
-    ...suggested,
-    targetId: link.id,
-    endpoint: '',
-    wsUrl: '',
-    linkKind: EGO_CLI_KIND,
-  }
-  const io = input.cliIo
-  if (!io) {
-    // Explicit, not silent: a host that forgot to hand over the IO must not
-    // look like an unreachable browser.
-    return cache.patch({
-      ...base,
-      status: 'unreachable',
-      code: 'cli-io-missing',
-      message: 'the host did not provide CLI IO for the local ego CLI link',
-      resolvedAt: now(),
-    })
-  }
-  const probe = await probeCliLink({
-    cliPath: link.cliPath,
-    bundled: input.bundledCli ?? '',
-    useSdkPath: link.useSdkPath === true,
-    sdkPath: input.sdkPath ?? '',
-    timeoutMs: input.timeoutMs,
-    coldStart: input.cliProbeColdStart,
-  }, io)
-  if (!probe.ok) {
-    return cache.patch({
-      ...base,
-      status: 'unreachable',
-      code: probe.code,
-      message: probe.message,
-      cliPath: probe.cliPath,
-      cliShape: probe.shape,
-      latencyMs: probe.latencyMs,
-      resolvedAt: now(),
-    })
-  }
-  const coldStart = probe.running === false
-  return cache.patch({
-    ...base,
-    status: 'ready',
-    endpointSource: coldStart ? 'cli-launch' : 'cli',
-    code: '',
-    message: probe.warning ?? (coldStart
-      ? 'local ego CLI reachable; the backing browser is not running yet and will start on the first call'
-      : probe.heredocSkipped === true
-        ? 'local ego CLI ready; heredoc probe skipped (allowProbeColdStart off) — the SDK harness check runs with the first call'
-        : 'local ego CLI ready'),
-    cliPath: probe.cliPath,
-    cliShape: probe.shape,
-    // R1/R-1 — only record the SDK path when the probe actually used it. If the
-    // CLI rejected `--sdk-path` the probe retried with the CLI's own harness and
-    // set `warning`; tool execution has NO such retry, so injecting the flag
-    // then would crash every call — exactly the P0 this change fixes.
-    sdkPath: link.useSdkPath === true && probe.warning === undefined
-      ? (input.sdkPath ?? '')
-      : '',
-    latencyMs: probe.latencyMs,
-    resolvedAt: now(),
-  })
-}
-
-/**
- * Lightpanda backend — ensure the managed serve for an activated `lightpanda`
- * row, then probe its endpoint. The launcher owns launch/reuse/exclusivity
- * (a live managed Chrome loses the singleton slot to the serve and vice
- * versa); `engine` is stamped from the ROW — the source the user picked — and
- * `/json/version`'s `Browser: Lightpanda/…` merely re-confirms it.
- */
-async function refreshLightpandaAttach(
-  input: RefreshInput,
-  cache: AttachCache,
-  suggested: AttachState,
-  link: LightpandaLink,
-  now: () => number,
-): Promise<AttachState> {
-  const base: AttachState = {
-    ...suggested,
-    targetId: link.id,
-    endpoint: '',
-    wsUrl: '',
-    linkKind: LP_KIND,
-  }
-  const launch = await launchLocalBrowser({
-    engine: 'lightpanda',
-    lightpandaPath: link.servePath ?? '',
-    lightpandaArgs: input.lightpandaArgs,
-  }, input.launcherIo as never)
-  if (!launch.ok) {
-    return cache.patch({
-      ...base,
-      status: 'unreachable',
-      code: launch.code,
-      message: launch.message,
-      resolvedAt: now(),
-    })
-  }
-  const probe = await probeEndpoint(launch.endpoint, { timeoutMs: input.timeoutMs, now })
-  return cache.patch({
-    ...base,
-    status: probe.ok && probe.wsUrl ? 'ready' : 'unreachable',
-    endpoint: launch.endpoint,
-    wsUrl: probe.wsUrl ?? '',
-    engine: 'lightpanda',
-    code: probe.ok ? '' : probe.code,
-    message: probe.ok
-      ? launch.reused
-        ? 'lightpanda serve reused'
-        : 'lightpanda serve launched'
-      : `lightpanda serve is up but its endpoint did not answer: ${probe.message}`,
-    latencyMs: probe.latencyMs,
-    resolvedAt: now(),
-    endpointSource: launch.reused ? 'local' : 'local-launch',
-  })
-}
 
 /**
  * Re-probe the activated target and publish the outcome into the cache.
@@ -886,10 +767,24 @@ export async function refreshAttach(input: RefreshInput): Promise<AttachState> {
       resolvedAt: now(),
     })
   }
-  // T2.18 — the remote switch is off: the sequence is INERT but preserved.
-  // R7 — it gates REMOTE attach only, so a local `ego-cli` link is unaffected:
-  // it is not a remote connection and has nothing to probe over the network.
-  if (input.remoteEnabled === false && target.kind !== EGO_CLI_KIND && target.kind !== LP_KIND) {
+  // One lookup replaces the kind ladder that used to live here. The remote
+  // switch gates NETWORK endpoints only: a local CLI or a managed serve is not
+  // a remote connection and has nothing to probe over the wire — that rule now
+  // rides on the runtime's `localOnly` flag instead of a `kind` comparison.
+  const runtime = runtimeOf(target.kind)
+  if (!runtime) {
+    return cache.patch({
+      ...suggested,
+      status: 'unreachable',
+      targetId: target.id,
+      endpoint: '',
+      wsUrl: '',
+      code: 'unknown-link-kind',
+      message: `no runtime is registered for link kind "${String(target.kind)}"`,
+      resolvedAt: now(),
+    })
+  }
+  if (input.remoteEnabled === false && !runtime.localOnly) {
     return cache.patch({
       ...suggested,
       status: 'no-active',
@@ -901,110 +796,5 @@ export async function refreshAttach(input: RefreshInput): Promise<AttachState> {
       resolvedAt: now(),
     })
   }
-
-  // ── R7: `ego-cli` has no endpoint to probe ──────────────────────────────
-  // Readiness comes from the CLI itself, and nothing is injected: the CLI owns
-  // its browser. Handled before the endpoint path so the two kinds never share
-  // a probe branch.
-  if (target.kind === EGO_CLI_KIND) {
-    return refreshCliAttach(input, cache, suggested, target, now)
-  }
-  // ── Lightpanda backend: the managed serve owns its endpoint ─────────────
-  // The launcher ensures the serve is up (launch/reuse), then the probe reads
-  // `/json/version` — `Browser: Lightpanda/…` there re-confirms the engine the
-  // row already declares.
-  if (target.kind === LP_KIND) {
-    return refreshLightpandaAttach(input, cache, suggested, target, now)
-  }
-  // Tabbit-cli uses its own CLI protocol, not a raw CDP endpoint; same as ego-cli,
-  // we never probe an endpoint for it.
-  if (target.kind === TABBIT_CLI_KIND) {
-    cache.patch({ ...suggested, targetId: target.id, status: 'ready', code: '', message: 'tabbit-cli ready' })
-    return cache.get()
-  }
-
-  const sameTarget = previous.targetId === target.id && previous.endpoint === target.endpoint
-  const suggestedProbe: AttachState = {
-    ...suggested,
-    targetId: target.id,
-    endpoint: target.endpoint,
-    status: 'probing',
-    code: '',
-    message: '',
-    wsUrl: sameTarget ? previous.wsUrl : '',
-    latencyMs: sameTarget ? previous.latencyMs : 0,
-  }
-  cache.patch(suggestedProbe)
-  const outcome = await probeEndpoint(target.endpoint, {
-    timeoutMs: input.timeoutMs,
-    now,
-    ...(input.fetchVersion ? { fetchVersion: input.fetchVersion } : {}),
-  })
-  if (outcome.ok && outcome.wsUrl) {
-    return cache.patch({
-      status: 'ready',
-      wsUrl: outcome.wsUrl,
-      engine: outcome.engine,
-      endpointSource: 'remote',
-      code: '',
-      message: '',
-      latencyMs: outcome.latencyMs,
-      resolvedAt: now(),
-    })
-  }
-  // T2.16 — the ONLY path from a dead remote endpoint to a local browser:
-  // explicit allowLocalFallback AND the M0.9 launcher. Launch, then probe the
-  // local endpoint like any other; mark the source so the panel/doctor can
-  // show 「本地启动（远端不可达）」. Reverse fallback is forbidden by design.
-  if (input.fallback?.enabled) {
-    const launch = await launchLocalBrowser({
-      chromePath: input.fallback.chromePath,
-      chromeArgs: input.fallback.chromeArgs,
-      localHeadless: input.fallback.localHeadless,
-      userDataDir: input.fallback.userDataDir,
-    })
-    if (launch.ok) {
-      const localProbe = await probeEndpoint(launch.endpoint, { timeoutMs: input.timeoutMs, now })
-      if (localProbe.ok && localProbe.wsUrl) {
-        return cache.patch({
-          status: 'ready',
-          wsUrl: localProbe.wsUrl,
-          engine: localProbe.engine,
-          endpoint: launch.endpoint,
-          code: '',
-          message: 'local fallback launched (activated endpoint unreachable)',
-          latencyMs: localProbe.latencyMs,
-          resolvedAt: now(),
-          endpointSource: 'local-fallback',
-        })
-      }
-      await stopLocalBrowser()
-      return cache.patch({
-        status: 'unreachable',
-        wsUrl: '',
-        engine: undefined,
-        code: 'local-launch-not-ready',
-        message: `local fallback browser launched but its endpoint did not answer: ${localProbe.message}`,
-        latencyMs: outcome.latencyMs,
-        resolvedAt: now(),
-      })
-    }
-    return cache.patch({
-      status: 'unreachable',
-      wsUrl: '',
-      code: `local-${launch.code}`,
-      message: launch.message,
-      latencyMs: outcome.latencyMs,
-      resolvedAt: now(),
-    })
-  }
-  return cache.patch({
-    status: 'unreachable',
-    wsUrl: '',
-    engine: outcome.ok ? outcome.engine : undefined,
-    code: outcome.code,
-    message: outcome.message,
-    latencyMs: outcome.latencyMs,
-    resolvedAt: now(),
-  })
+  return runtime.probe({ input, cache, suggested, link: target, now })
 }

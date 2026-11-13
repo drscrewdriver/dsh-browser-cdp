@@ -5,6 +5,17 @@ import { addRow, applyProbe, buildCdpRow, buildCliRow, buildLpRow, buildTabbitRo
 import { claimFamilyHostIfOrphaned } from './family-host'
 import { fromRatio, normalizeStored, toRatio, type RatioPos, type Viewport } from './fab-pos'
 import { commitField } from './fam-write'
+import { shouldShowGen1SettingsGear } from './gen1-gate'
+
+/**
+ * Which CLIENT bundle is running, shown next to the panel title.
+ *
+ * The host serves `lib/client.js` at a stable URL, so an Electron renderer can keep
+ * an older copy after an upgrade — and then a shipped CSS/JS fix looks like it
+ * "was never done". One glance at this chip settles that question; the host also
+ * exposes the same constant via /api/bcdp/stats so the panel can self-heal.
+ */
+import { CLIENT_BUILD } from './build'
 
 		// #region CDP browser bridge client: realtime watch-bubble
 		//
@@ -748,17 +759,27 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
   background: rgba(255,255,255,.12); color:#ffd8d5; text-transform:uppercase; letter-spacing:.4px; }
 
 /* ---- tab bar: frosted pills ---- */
-#dsh-ego-tabs { display:flex; gap:6px; padding:9px 12px;
-  border-bottom:1px solid rgba(255,255,255,.08); overflow-x:auto; flex-shrink:0; scrollbar-width:thin; }
+/* Wrap instead of scrolling: with 4+ tabs a horizontal scrollbar hid the tabs
+   the user was looking for, and the scrollbar itself ate a row of space. */
+#dsh-ego-tabs { display:flex; flex-wrap:wrap; align-content:flex-start; gap:6px; padding:9px 12px;
+  border-bottom:1px solid rgba(255,255,255,.08); overflow-x:hidden; overflow-y:auto; max-height:92px;
+  flex-shrink:0; scrollbar-width:thin; }
 #dsh-ego-tabs:empty { display:none; }
 .dsh-ego-tab {
-  display:inline-flex; align-items:center; gap:6px; max-width:176px; white-space:nowrap;
-  padding:5px 12px; border-radius: 999px; cursor:pointer; font-size:11.5px; flex-shrink:0;
+  display:inline-flex; align-items:center; gap:6px; max-width:100%; min-width:0; white-space:nowrap;
+  padding:5px 12px; border-radius: 999px; cursor:pointer; font-size:11.5px; flex:0 1 auto;
   border:1px solid rgba(255,255,255,.1);
   background: rgba(72,72,74,.45); color:#aeaeb2;
   transition: background .15s ease, color .15s ease, border-color .15s ease;
 }
-.dsh-ego-tab > .dsh-ego-tabtxt { overflow:hidden; text-overflow:ellipsis; }
+.dsh-ego-tab > .dsh-ego-tabtxt { overflow:hidden; text-overflow:ellipsis; max-width:150px; }
+/* Which browser window a pill belongs to. Two Tabbit windows with the same pages
+   used to read as duplicated tabs; a W1/W2 badge explains them instead of hiding. */
+.dsh-ego-tab .dsh-ego-tabwin { flex-shrink:0; font-size:9.5px; line-height:14px; padding:0 3px;
+  border-radius:4px; border:1px solid currentColor; opacity:.55; letter-spacing:.2px; }
+/* Transient failure text inside the strip (close refused, capture failed). */
+.dsh-ego-taberr { flex-shrink:0; font-size:10.5px; line-height:16px; padding:0 6px; border-radius:999px;
+  color:#ff453a; border:1px solid rgba(255,69,58,.45); background: rgba(255,69,58,.12); }
 .dsh-ego-tab:hover { color:#f5f5f7; background: rgba(72,72,74,.65); }
 .dsh-ego-tab.active {
   background: #0a84ff; color:#fff; border-color: transparent;
@@ -1046,6 +1067,91 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 			}, 'dsh-browser-cdp: plugins-page config card')
 		}
 
+		// ── Gen-2（0.1.2/0.1.5）设置页插件卡席位 ──────────────────────────
+		// dsh-family.tab / plugins.bundle.config 都是 0.1.7+ 席位；0.1.2/0.1.5 的
+		// 宿主设置页由 ui-settings-plugins 的 keyed 席位 settings.plugin.item 派发——
+		// key 必须等于卡片所编辑的 settings 命名空间，实际渲染面 = 宿主 served
+		// namespaces（来自 settingsScope.describe）∩ 已注册卡（§3.5 三条件，缺一不
+		// 出现且无报错）。served 本 ns 依赖 host 侧 installSettingsAuto 的 Gen-B
+		// installSection 已在 0.1.2/0.1.5 注册该 ns。数据臂沿用 configForms||桥 两轨。
+		// 在未声明该槽的宿主（Gen-1 无设置页 / Gen-3 已换席位）上，inject 空转不阻塞。
+		function mountLegacySettingsCard(ctx: any) {
+			var forms = typeof ctx.get === 'function' ? ctx.get('configForms') : undefined
+			var scope = forms && typeof forms.get === 'function' ? forms.get('dsh-browser-cdp') : undefined
+			if (!scope) scope = makeBridgeScope()
+			ctx.slots.inject('settings.plugin.item', function () {
+				return ctx.slots.register({
+					name: 'settings.plugin.item',
+					key: 'dsh-browser-cdp',
+					inject: function () { return { scope: scope } },
+				}, FamilySettingsCard)
+			}, 'dsh-browser-cdp: legacy gen-2 settings card')
+		}
+
+		// ── Gen-1（0.1.0/0.1.1）设置齿轮（shell.overlay 浮窗补位）───────────
+		// Gen-1 宿主壳无可达原生设置页（§4 farm 实测齿轮→整卡→改值→落盘全通），
+		// 故在 shell.overlay 挂一枚固定齿轮，点开浮层承载同一张 FamilySettingsCard。
+		// 数据臂只走桥轨（Gen-1 无 configForms，describe/mutate 打自家 webServer）。
+		// 代际门控见 gen1-gate.ts：configForms 或 settings/openSettingsDocument 任一
+		// 存在即判为有原生设置页（gen-2/3），不挂齿轮，避免与原生页重复 UI。
+		// shell.overlay 槽在未声明的宿主上 inject 空转不阻塞（§2：0.1.x 均有此槽）。
+		function mountGen1SettingsGear(ctx: any) {
+			var forms = typeof ctx.get === 'function' ? ctx.get('configForms') : undefined
+			var hasConfigForms = !!(forms && typeof forms.get === 'function')
+			var remote = (typeof ctx.get === 'function' ? ctx.get('remote') : undefined) || ctx.remote
+			var hasOpenDoc = !!(remote && remote.settings && typeof remote.settings.openSettingsDocument === 'function')
+			if (!shouldShowGen1SettingsGear(hasConfigForms, hasOpenDoc)) return
+			var scope = makeBridgeScope()
+			ctx.slots.inject('shell.overlay', function () {
+				return ctx.slots.register({
+					name: 'shell.overlay',
+					id: 'dsh-browser-cdp-settings-gear',
+					inject: function () { return { scope: scope } },
+				}, SettingsGearOverlay)
+			}, 'dsh-browser-cdp: gen-1 settings gear')
+		}
+
+		// 齿轮 + 浮层：React 组件，由宿主 shell.overlay 代挂（复用 FamilySettingsCard）。
+		// bottom 64px 避开宿主底部状态条；背板点击 / ✕ / Esc 关闭。文案随 _egoLocale。
+		function SettingsGearOverlay(props: any) {
+			var scope = props.scope
+			var openState = React.useState(false)
+			var isOpen = openState[0]
+			var setOpen = openState[1]
+			var h = React.createElement
+			var zh = _egoLocale === 'zh'
+			var gearTitle = zh ? 'Agent 浏览器设置' : 'Agent Browser settings'
+			React.useEffect(function () {
+				if (!isOpen) return
+				function onKey(e: any) { if (e && e.key === 'Escape') setOpen(false) }
+				window.addEventListener('keydown', onKey)
+				return function () { window.removeEventListener('keydown', onKey) }
+			}, [isOpen])
+			return h(React.Fragment, null,
+				h('button', { type: 'button', title: gearTitle, 'aria-label': gearTitle,
+					onClick: function () { setOpen(function (v: boolean) { return !v }) },
+					style: { position: 'fixed', right: 16, bottom: 64, zIndex: 2147483000,
+						width: 34, height: 34, borderRadius: '50%', border: '1px solid rgba(0,0,0,.18)',
+						background: 'rgba(255,255,255,.92)', color: '#333', cursor: 'pointer',
+						display: 'flex', alignItems: 'center', justifyContent: 'center',
+						boxShadow: '0 2px 8px rgba(0,0,0,.18)', padding: 0 } },
+					h('span', { style: { fontSize: 18, lineHeight: 1 } }, '\u2699')),
+				isOpen ? h('div', { onClick: function () { setOpen(false) },
+					style: { position: 'fixed', inset: 0, zIndex: 2147483001,
+						background: 'rgba(0,0,0,.35)', display: 'flex',
+						alignItems: 'center', justifyContent: 'center' } },
+					h('div', { onClick: function (e: any) { e.stopPropagation() },
+						style: { width: 'min(720px, 92vw)', maxHeight: '86vh', overflowY: 'auto',
+							background: '#fff', color: '#222', borderRadius: 12,
+							boxShadow: '0 12px 40px rgba(0,0,0,.28)', padding: '16px 18px' } },
+						h('div', { style: { display: 'flex', alignItems: 'center', marginBottom: 12 } },
+							h('strong', { style: { flex: 1 } }, gearTitle),
+							h('button', { type: 'button', 'aria-label': 'close', onClick: function () { setOpen(false) },
+								style: { border: 'none', background: 'transparent', fontSize: 20, cursor: 'pointer', lineHeight: 1 } }, '\u00d7')),
+						h(FamilySettingsCard, { scope: scope })))
+				: null)
+		}
+
 		// 全量设置面：Config 里所有用户可调 volatile 字段按组分块渲染。
 		// kind: bool=checkbox / num=数字 / str=文本 / secret=密码 / sel=下拉。
 		// 文案直接内联 en/zh（跟随 wt 的 _egoLocale），不再膨胀字典键。
@@ -1089,7 +1195,7 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 				{ k: 'githubMirror', kind: 'str', en: ['GitHub download mirror', 'HTTPS base replacing https://github.com for managed downloads'], zh: ['GitHub 下载镜像', '托管下载时替换 https://github.com 的 HTTPS 前缀'] },
 				{ k: 'runtimeArgs', kind: 'str', en: ['Extra runtime args', 'Appended to the vendored runtime argv; next bcdp_* call'], zh: ['运行时附加参数', '追加到托管运行时 argv；下次 bcdp_* 调用生效'] },
 				{ k: 'chromeArgs', kind: 'str', en: ['Extra Chrome args', 'Appended to the Chrome launch argv; next cold start'], zh: ['Chrome 附加启动参数', '追加到 Chrome 启动 argv；下次冷启动生效'] },
-				{ k: 'cliFramePollEnabled', kind: 'bool', en: ['ego-cli fallback frames (5s)', 'With no CDP screencast (local ego-cli link active), capture one screenshot every 5s through the CLI so the watch panel still fills. Off = panel shows a placeholder and no screenshot subprocess is spawned'], zh: ['ego-cli 降级帧（5s 一刷）', '无 CDP screencast（本机 ego-cli 激活）时，每 5s 走一次 CLI 截图填充观察窗画面区。关 = 面板显示占位提示、不拉截图子进程'] },
+				{ k: 'cliFramePollEnabled', kind: 'bool', en: ['ego-cli fallback frames (3s)', 'With no CDP screencast (local ego-cli link active), capture one screenshot every 3s through the CLI so the watch panel still fills. Off = panel shows a placeholder and no screenshot subprocess is spawned'], zh: ['ego-cli 降级帧（3s 一刷）', '无 CDP screencast（本机 ego-cli 激活）时，每 3s 走一次 CLI 截图填充观察窗画面区。关 = 面板显示占位提示、不拉截图子进程'] },
 				{ k: 'tabTracking', kind: 'sel', options: ['active', 'all'], en: ['Tab tracking (CLI routes)', 'active = capture only the browser-active tab; all = capture every tab in the space (one picture each), the active one outlined green'], zh: ['tab 跟踪模式（CLI 路线）', '仅激活 = 只抓浏览器激活的那个 tab；全模式 = space 内每个 tab 各出一张图，激活那个用绿框标出'] },
 			] },
 			{ gk: 'gJudge', en: 'Judgement (JEV / Laya)', zh: '评审（JEV / Laya）', fields: [
@@ -1547,6 +1653,8 @@ h('button', { type: 'button', disabled: !writable || isFull(links) || hasCliLink
 		var mounts: Array<[string, (c: any) => void]> = [
 			['family settings tab', mountFamilySettingsCard],
 			['plugins-page config card', mountPluginsPageCard],
+			['legacy gen-2 settings card', mountLegacySettingsCard],
+			['gen-1 settings gear', mountGen1SettingsGear],
 
 			['picks dock', mountPicksDockCard],
 			['picks badge', mountPicksBadge],
@@ -1597,7 +1705,7 @@ h('button', { type: 'button', disabled: !writable || isFull(links) || hasCliLink
 				panel.innerHTML = `
 					<div id="dsh-ego-head">
 						<span class="dsh-ego-grip" title="${wt('dragHint')}">${ICON_GRIP}</span>
-						<span id="dsh-ego-title">${ICON_GLOBE}<span style="margin-left:6px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${wt('title')}</span></span>
+						<span id="dsh-ego-title">${ICON_GLOBE}<span style="margin-left:6px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${wt('title')}</span><span id="dsh-ego-ver" style="margin-left:6px;font-size:10px;opacity:.5;flex-shrink:0;">v${CLIENT_BUILD}</span></span>
 						<button id="dsh-ego-refresh" class="dsh-ego-iconbtn" title="${wt('refresh')}">${ICON_REFRESH}</button>
 						<button id="dsh-ego-historybtn" class="dsh-ego-iconbtn off" title="${wt('historyShow')}">${ICON_CLOCK}</button>
 						<button id="dsh-ego-close" class="dsh-ego-iconbtn" title="${wt('settingsHide')}">${ICON_CLOSE}</button>
@@ -1636,6 +1744,21 @@ h('button', { type: 'button', disabled: !writable || isFull(links) || hasCliLink
 				const body = panel.querySelector('#dsh-ego-body')
 				const titleEl = panel.querySelector('#dsh-ego-title')
 				const refreshBtn = panel.querySelector('#dsh-ego-refresh')
+				if (refreshBtn !== null) {
+					refreshBtn.addEventListener('click', () => {
+						// Ask the host for a fresh view of the active object (read-only on
+						// tabbit, an attach pass on cdp), then re-read spaces. `refresh`
+						// is declared later in this closure but only runs on click.
+						void (async () => {
+							try {
+								// The answer is advisory (which branch ran, how many tabs); the
+								// panel re-reads spaces right after, so nothing to merge here.
+								await fetch(SYNC_ROUTE, { method: 'POST', cache: 'no-store' })
+							} catch { /* offline: the plain refresh below still runs */ }
+							refresh()
+						})()
+					})
+				}
 				const closeBtn = panel.querySelector('#dsh-ego-close')
 				const historyBtn = panel.querySelector('#dsh-ego-historybtn')
 				const historyEl = panel.querySelector('#dsh-ego-history')
@@ -1649,6 +1772,41 @@ h('button', { type: 'button', disabled: !writable || isFull(links) || hasCliLink
 				const captchaKindEl = panel.querySelector('#dsh-ego-captcha-kind')
 				const captchaHintEl = panel.querySelector('#dsh-ego-captcha-hint')
 				const FLUSH_ROUTE = '/api/bcdp/flush'
+				// Panel ⟳ = "sync the active object now". Until 1.9.22 the header
+				// button had NO handler at all, so after a host restart the panel
+				// stayed empty until a tool call created a task.
+				const SYNC_ROUTE = '/api/bcdp/sync'
+				// Per-object capture: frames used to follow only the ACTIVE tab, so a
+				// tab that was never active stayed on "暂无截图" forever.
+				const CAPTURE_ROUTE = '/api/bcdp/capture'
+				const captureTab = (targetId: string): Promise<Response | null> => fetch(CAPTURE_ROUTE, {
+					method: 'POST',
+					headers: { 'content-type': 'application/json' },
+					cache: 'no-store',
+					body: JSON.stringify({ targetId }),
+				}).catch((): null => null)
+				// Version self-heal. DSH serves plugin modules from a URL whose `rev`
+				// does not change with file contents, so an upgraded host can keep an
+				// old bundle cached. Compare with the host once per mount and reload
+				// exactly once per target build (sessionStorage guard = no loop).
+				// The handshake also LOGS this build on the host: that line is the
+				// out-of-band proof of which bundle the panel really runs.
+				void fetch('/api/bcdp/hello', {
+					method: 'POST',
+					headers: { 'content-type': 'application/json' },
+					cache: 'no-store',
+					body: JSON.stringify({ build: CLIENT_BUILD }),
+				})
+					.then((res) => res.json())
+					.then((data) => {
+						const hostBuild = data && typeof data.hostBuild === 'string' ? data.hostBuild : ''
+						if (hostBuild === '' || hostBuild === CLIENT_BUILD) return
+						const key = 'bcdp:reloaded-for'
+						if (window.sessionStorage.getItem(key) === hostBuild) return
+						window.sessionStorage.setItem(key, hostBuild)
+						window.location.reload()
+					})
+					.catch(() => { /* offline / unauth: stay on this bundle */ })
 
 				// Guide strips that the user can dismiss (×). Once closed in this
 				// panel lifecycle they stay closed, so they never permanently eat
@@ -1789,6 +1947,12 @@ h('button', { type: 'button', disabled: !writable || isFull(links) || hasCliLink
 				const pageMeta = new Map()
 				const watchClientId = 'floating-' + Math.random().toString(36).slice(2)
 				let watchStarted = false, watchTargetId: any = null, watchRenewTimer: any = null, watchStopTimer: any = null, watchRequest: any = null
+				// Watch-loop guards. The old code re-entered syncWatch from an in-flight
+				// request's `finally`, and re-armed a 5 s renew even after a refusal —
+				// measured: 1728 POSTs to /watch/start, every one a 409. `unsupported`
+				// latches the first refusal; `pendingTarget` remembers one switch.
+				let watchUnsupported = false, watchRequestTarget: any = null, watchRequestPendingTarget: any = null
+				let watchRequestPending: any = null
 				let captureBackend = 'cdp', streamGeneration = 0, streamState = 'idle', streamMessage = '', streamMime = 'video/mp4; codecs="avc1.42E01E"', videoCleanup: any = null
 				let streamEngineUnsupported = false
 				const effectiveVisible = () => !panel.hidden
@@ -1813,12 +1977,39 @@ h('button', { type: 'button', disabled: !writable || isFull(links) || hasCliLink
 				}
 				const syncWatch = (targetId: any) => {
 					if (disposed || !effectiveVisible() || !targetId) return
+					// CDP screencast does not exist on CLI channels (tabbit / ego-cli /
+					// lightpanda): frames arrive over the SSE poll instead. Asking
+					// `/watch/start` there returns 409, and the old retry chain turned
+					// that into a request storm (observed: 1728 POSTs, all 409).
+					const kind = panelLink && panelLink.kind ? String(panelLink.kind) : ''
+					if (kind === 'tabbit-cli' || kind === 'ego-cli' || kind === 'lightpanda') return
+					if (watchUnsupported) return
 					if (watchStopTimer) { window.clearTimeout(watchStopTimer); watchStopTimer = null }
 					if (watchStarted && watchTargetId === targetId) return
-					const request = requestWatch(watchStarted ? WATCH_SWITCH_ROUTE : WATCH_START_ROUTE, { clientId: watchClientId, targetId })
-					if (!request) { watchRequest.finally(() => syncWatch(targetId)); return }
-					request.then((status: any) => { watchStarted = status && status.ok !== false; watchTargetId = status?.targetId || targetId; if (watchTargetId !== targetId) { selectedTabId = null; currentActiveId = watchTargetId }; applyCaptureStatus(status); if (!effectiveVisible()) stopWatch(true) }).catch(() => {})
-					if (!watchRenewTimer) watchRenewTimer = window.setInterval(() => { if (effectiveVisible() && watchTargetId) { const renewal = requestWatch(WATCH_START_ROUTE, { clientId: watchClientId, targetId: watchTargetId }); if (renewal) renewal.then(applyCaptureStatus).catch(() => {}) } }, 5000)
+					if (watchRequest) {
+						// One in-flight request at a time; do NOT re-enter on settle —
+						// that loop is what hammered the host.
+						if (watchRequestTarget !== targetId) watchRequestPendingTarget = targetId
+						return
+					}
+					const request = requestWatch(watchStarted ? WATCH_SWITCH_ROUTE : WATCH_START_ROUTE, { clientId: watchClientId, targetId }) as any
+					if (!request) return
+					watchRequestTarget = targetId
+					request.then((status: any) => {
+						// A refusal (409 etc.) means this channel/session cannot stream:
+						// remember it and stop asking instead of retrying every 5 s.
+						if (!status || status.ok === false) { watchUnsupported = true; if (watchRenewTimer) { window.clearInterval(watchRenewTimer); watchRenewTimer = null } return }
+						watchStarted = true
+						watchTargetId = status.targetId || targetId
+						if (watchTargetId !== targetId) { selectedTabId = null; currentActiveId = watchTargetId }
+						applyCaptureStatus(status)
+						if (!effectiveVisible()) stopWatch(true)
+						const pending = watchRequestPendingTarget
+						watchRequestPendingTarget = null
+						if (pending && pending !== watchTargetId) syncWatch(pending)
+					}).catch(() => { watchUnsupported = true })
+					// Renew only something that actually streams.
+					if (!watchRenewTimer) watchRenewTimer = window.setInterval(() => { if (watchStarted && effectiveVisible() && watchTargetId) { const renewal = requestWatch(WATCH_START_ROUTE, { clientId: watchClientId, targetId: watchTargetId }); if (renewal) renewal.then(applyCaptureStatus).catch(() => {}) } }, 5000)
 				}
 				const stopWatch = (immediate: any) => {
 					if (watchRenewTimer) { window.clearInterval(watchRenewTimer); watchRenewTimer = null }
@@ -2028,18 +2219,69 @@ h('button', { type: 'button', disabled: !writable || isFull(links) || hasCliLink
 				// ---- tab bar ----
 				const renderTabs = (spaces: any) => {
 					tabsEl.innerHTML = ''
+					// Enforced inline, not only by the stylesheet: a host sheet (or an older
+					// cached client) can override `#dsh-ego-tabs` rules, and a strip that
+					// cannot wrap hides tabs behind a horizontal scrollbar.
+					const strip = tabsEl as HTMLElement
+					strip.style.display = 'flex'
+					strip.style.flexWrap = 'wrap'
+					strip.style.alignContent = 'flex-start'
+					strip.style.overflowX = 'hidden'
+					strip.style.overflowY = 'auto'
+					strip.style.maxHeight = '92px'
+					// A wrapping flex container only wraps if something CONSTRAINS its
+					// width. Inside a content-sized ancestor the strip is as wide as its
+					// children and happily renders one long row (that is the horizontal
+					// scrollbar the user kept seeing). Pin the width chain here.
+					strip.style.width = '100%'
+					strip.style.maxWidth = '100%'
+					strip.style.minWidth = '0'
+					strip.style.boxSizing = 'border-box'
+					const panelEl = strip.parentElement as HTMLElement | null
+					if (panelEl) {
+						panelEl.style.minWidth = '0'
+						panelEl.style.maxWidth = '100%'
+						panelEl.style.boxSizing = 'border-box'
+					}
 					const list = Array.isArray(spaces) ? spaces : []
 					if (list.length === 0) { if (selectedTabId) selectedTabId = null; return }
+					// Window badges: only when more than one window is in play, numbered by
+					// first appearance (W1, W2) — the raw windowId is meaningless to a user.
+					const winIds: number[] = []
+					for (const s of list) {
+						const id = Number(s && s.windowId) || 0
+						if (!winIds.includes(id)) winIds.push(id)
+					}
+					const winLabel = (raw: any): string => {
+						if (winIds.length < 2) return ''
+						const idx = winIds.indexOf(Number(raw) || 0)
+						return idx >= 0 ? `W${idx + 1}` : ''
+					}
 					for (const s of list) {
 						const tab = document.createElement('div')
 						tab.className = 'dsh-ego-tab'
 						tab.title = s.url || ''
 						;(tab as any).__tid = s.targetId
+						const badge = winLabel(s.windowId)
+						if (badge !== '') {
+							const win = document.createElement('span')
+							win.className = 'dsh-ego-tabwin'
+							win.textContent = badge
+							tab.appendChild(win)
+						}
 						const dot = document.createElement('span')
 						dot.className = 'dsh-ego-tabdot'
 						const txt = document.createElement('span')
 						txt.className = 'dsh-ego-tabtxt'
 						txt.textContent = s.title || (s.url || wt('newTab'))
+						// Inline too: the pill must be able to shrink and wrap, and the title
+						// must ellipsize instead of pushing the strip into a single row.
+						tab.style.flex = '0 1 auto'
+						tab.style.minWidth = '0'
+						tab.style.maxWidth = '100%'
+						txt.style.maxWidth = '150px'
+						txt.style.overflow = 'hidden'
+						txt.style.textOverflow = 'ellipsis'
 						tab.appendChild(dot)
 						tab.appendChild(txt)
 						// Tab close "×": POST to the host close route, then refresh.
@@ -2049,12 +2291,30 @@ h('button', { type: 'button', disabled: !writable || isFull(links) || hasCliLink
 						closeBtn.textContent = '×'
 						closeBtn.addEventListener('click', (e) => {
 							e.stopPropagation()
+							// Optimistic: the row goes NOW, then the host closes the real tab and a
+							// refresh reconciles. Without this the × looked dead whenever the close
+							// route answered slowly (or 501 on a channel that cannot close).
+							tab.remove()
+							if (selectedTabId === s.targetId) { selectedTabId = null; pinned = null }
 							void (async () => {
 								try {
-									await fetch(EGO_CLOSE_ROUTE, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ targetId: s.targetId }) })
-								} catch { /* keep silent */ }
-								if (selectedTabId === s.targetId) { selectedTabId = null; pinned = null }
-							})().then(() => refresh())
+									const res = await fetch(EGO_CLOSE_ROUTE, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ targetId: s.targetId }) })
+									if (!res.ok) {
+										// A silent 501 is why × looked dead: say WHY it failed, inline in the
+										// strip (this scope owns the strip, not the URL line).
+										const body = await res.json().catch((): null => null)
+										const reason = body && typeof body.reason === 'string' ? body.reason : ('http-' + res.status)
+										const err = document.createElement('span')
+										err.className = 'dsh-ego-taberr'
+										err.textContent = '关闭失败：' + reason
+										;(tabsEl as HTMLElement).appendChild(err)
+										window.setTimeout(() => { err.remove() }, 5000)
+									}
+								} catch {
+									/* refresh below restores the row if the close did not happen */
+								}
+								window.setTimeout(() => { void refresh() }, 700)
+							})()
 						})
 						tab.appendChild(closeBtn)
 						if (s.targetId === selectedTabId || (selectedTabId === null && s.targetId === currentActiveId)) tab.classList.add('active')
@@ -2069,6 +2329,11 @@ h('button', { type: 'button', disabled: !writable || isFull(links) || hasCliLink
 							pinned = null
 							renderLiveMain(s, true)
 							syncWatch(s.targetId)
+							// No cached picture for this tab: ask the host for one instead of
+							// showing "暂无截图" until it happens to become active.
+							if (!frameCache.has(s.targetId)) {
+								void captureTab(String(s.targetId)).then(() => window.setTimeout(() => { void refresh() }, 600))
+							}
 							;[...tabsEl.querySelectorAll('.dsh-ego-tab')].forEach(t => t.classList.toggle('active', (t as any).__tid === s.targetId))
 						})
 						tabsEl.appendChild(tab)
@@ -2145,7 +2410,14 @@ h('button', { type: 'button', disabled: !writable || isFull(links) || hasCliLink
 					// 全模式: keep the whole inventory. 仅激活: render one tab (the active one).
 					const incoming = Array.isArray(spaces) ? spaces : []
 					lastList = trackAll ? incoming : incoming.filter((s: any) => s && s.active === true).slice(0, 1)
-					if (lastList.length === 0 && incoming.length === 1) lastList = incoming.slice(0, 1)
+					// "No active row" is NOT "no browser". A freshly attached worker has
+					// no focus yet, and a remote CDP attach has no /json/list to observe,
+					// so every row can legitimately be active:false. Rendering the empty
+					// state there was terminal: this panel renders active rows only, so it
+					// never started the watch that would have filled one in. Fall back to
+					// the first row (the worker sorts by recency) and let the focus event
+					// correct it a moment later.
+					if (lastList.length === 0 && incoming.length > 0) lastList = incoming.slice(0, 1)
 					// Keep pageMeta authoritative for the auto-follow AND for the
 					// viewport-based coordinate mapping. Merge (do not overwrite) so
 					// vw/vh learned from an SSE frame are not lost on the next poll;
@@ -2297,7 +2569,15 @@ h('button', { type: 'button', disabled: !writable || isFull(links) || hasCliLink
 					pageRefreshBtn.title = wt('pageRefreshHint')
 					pageRefreshBtn.textContent = wt('pageRefresh')
 					pageRefreshBtn.addEventListener('click', () => {
-						runPanelAction(pageRefreshBtn, panelNavigate('', true), () => refresh())
+						runPanelAction(pageRefreshBtn, panelNavigate('', true), () => {
+							// A reloaded page has no frame until someone captures it, and the
+							// 3 s poller only follows the ACTIVE tab — so capture THIS tab.
+							if (current && current.targetId) {
+								void captureTab(String(current.targetId)).then(() => window.setTimeout(() => { void refresh() }, 600))
+							} else {
+								refresh()
+							}
+						})
 					})
 					badge.appendChild(pageRefreshBtn)
 					const openUrlBtn = document.createElement('button')
@@ -2416,7 +2696,7 @@ h('button', { type: 'button', disabled: !writable || isFull(links) || hasCliLink
 								// capture reported (`cliFrameTargetId`) — bind it to that row so a
 								// multi-tab strip shows the picture under the right tab.
 								const cliActive = data.spaces.find((s: any) => s && (s.targetId === data.cliFrameTargetId || s.active === true)) || data.spaces[0]
-								if (cliActive) frameCache.set(cliActive.targetId || CLI_FRAME_TARGET_ID, `${CLI_FRAME_ROUTE}?t=${cliActive.lastActive || Date.now()}`)
+								if (cliActive) frameCache.set(cliActive.targetId || CLI_FRAME_TARGET_ID, `${CLI_FRAME_ROUTE}?targetId=${encodeURIComponent(String(cliActive.targetId || ''))}&t=${cliActive.lastActive || Date.now()}`)
 								renderSpaces(data.spaces)
 								return
 							}
@@ -3019,20 +3299,31 @@ clearTimeout((panel as any)._dshHideT)
 }
 
 /* ---- tab strip: frosted pills ---- */
+/* The SIDEBAR strip is a different component from the floating panel's, and it
+   used to scroll horizontally — that is the scrollbar the user kept reporting
+   while every wrap fix landed on the floating panel's strip. Wrap here too, and
+   pin the width chain so the flex container is actually constrained. */
 .dsh-ego-side-tabs {
-  display: flex; gap: 5px; padding: 7px 10px; flex-shrink: 0;
-  border-bottom: 1px solid rgba(128,128,128,.12);
-  overflow-x: auto; scrollbar-width: thin;
+  display: flex; flex-wrap: wrap; align-content: flex-start; gap: 5px; padding: 7px 10px;
+  flex-shrink: 0; border-bottom: 1px solid rgba(128,128,128,.12);
+  overflow-x: hidden; overflow-y: auto; max-height: 96px;
+  scrollbar-width: thin; width: 100%; max-width: 100%; min-width: 0; box-sizing: border-box;
 }
 .dsh-ego-side-tabs:empty { display: none; }
 .dsh-ego-side-tab {
-  display: inline-flex; align-items: center; gap: 5px; max-width: 160px;
+  display: inline-flex; align-items: center; gap: 5px; max-width: 100%; min-width: 0;
   white-space: nowrap; padding: 4px 10px; border-radius: 999px; cursor: pointer;
-  font-size: 11px; flex-shrink: 0;
+  font-size: 11px; flex: 0 1 auto;
   border: 1px solid rgba(128,128,128,.2); background: rgba(128,128,128,.12);
   opacity: .7; transition: background .15s, opacity .15s, border-color .15s;
 }
-.dsh-ego-side-tab > .dsh-ego-side-tabtxt { overflow: hidden; text-overflow: ellipsis; }
+.dsh-ego-side-tab > .dsh-ego-side-tabtxt { overflow: hidden; text-overflow: ellipsis; max-width: 150px; }
+/* Window badge: two Tabbit windows with the same pages otherwise read as
+   duplicated tabs. */
+.dsh-ego-side-tab > .dsh-ego-side-tabwin {
+  flex-shrink: 0; font-size: 9px; line-height: 12px; padding: 0 3px; border-radius: 4px;
+  border: 1px solid currentColor; opacity: .55; letter-spacing: .2px;
+}
 .dsh-ego-side-tab:hover { opacity: 1; background: rgba(128,128,128,.2); }
 .dsh-ego-side-tab.active {
   background: #0a84ff; color: #fff; border-color: transparent; opacity: 1;
@@ -4073,7 +4364,7 @@ clearTimeout((panel as any)._dshHideT)
 					// controller) so the existing cached-branch renders a refreshing <img>.
 					if (data.cliFrameMode === true && Array.isArray(data.spaces)) {
 						var cliActive = data.spaces.find(function (s: any) { return s && (s.targetId === data.cliFrameTargetId || s.active === true) }) || data.spaces[0]
-						if (cliActive) self.frameCache.set(cliActive.targetId || CLI_FRAME_TARGET_ID, CLI_FRAME_ROUTE + '?t=' + (cliActive.lastActive || Date.now()))
+						if (cliActive) self.frameCache.set(cliActive.targetId || CLI_FRAME_TARGET_ID, CLI_FRAME_ROUTE + '?targetId=' + encodeURIComponent(String(cliActive.targetId || '')) + '&t=' + (cliActive.lastActive || Date.now()))
 						self._processSpaces(data.spaces)
 						return
 					}
@@ -4691,7 +4982,11 @@ clearTimeout((panel as any)._dshHideT)
 			var header = h('div', { className: 'dsh-ego-side-head' },
 				h('span', { className: 'dsh-ego-side-title' },
 					h('span', { dangerouslySetInnerHTML: { __html: ICON_GLOBE } }),
-					h('span', { style: { marginLeft: '5px' } }, state.busy ? wt('titleLive') : wt('title'))
+					h('span', { style: { marginLeft: '5px' } }, state.busy ? wt('titleLive') : wt('title')),
+					// Build chip: the only way to tell "did the fix ship?" from a
+					// screenshot (the sidebar panel is a separate component from the
+					// floating one, and both read the same bundle).
+					h('span', { style: { marginLeft: '6px', fontSize: '9.5px', opacity: '.5', flexShrink: '0' } }, 'v' + CLIENT_BUILD)
 				),
 				h('button', {
 					className: 'dsh-ego-side-iconbtn' + (state.busy ? ' spinning' : ''),
@@ -4766,18 +5061,37 @@ clearTimeout((panel as any)._dshHideT)
 			}
 
 			// Tab strip
+			// Window numbering: only when more than one window is present, numbered by first
+			// appearance. Two Tabbit windows with the same pages otherwise read as duplicates.
+			var sideWinIds: number[] = []
+			state.spaces.forEach(function (s: any) {
+				var id = Number(s && s.windowId) || 0
+				if (sideWinIds.indexOf(id) < 0) sideWinIds.push(id)
+			})
+			var sideWinLabel = function (raw: any): string {
+				if (sideWinIds.length < 2) return ''
+				var idx = sideWinIds.indexOf(Number(raw) || 0)
+				return idx >= 0 ? ('W' + (idx + 1)) : ''
+			}
 			var tabsEl = state.spaces.length > 0
-				? h('div', { className: 'dsh-ego-side-tabs' },
+				? h('div', {
+					className: 'dsh-ego-side-tabs',
+					// Inline too: a host stylesheet can win against the class.
+					style: { display: 'flex', flexWrap: 'wrap', alignContent: 'flex-start', overflowX: 'hidden', overflowY: 'auto', maxHeight: '96px', width: '100%', minWidth: '0', boxSizing: 'border-box' },
+				},
 					state.spaces.map(function (s: any) {
 						var isActive = s.targetId === state.selectedTabId || (state.selectedTabId === null && s.targetId === state.currentTargetId)
+						var badge = sideWinLabel(s.windowId)
 						return h('div', {
 							key: s.targetId,
 							className: 'dsh-ego-side-tab' + (isActive ? ' active' : '') + (s.active === true ? ' is-live' : ''),
 							title: s.url || '',
+							style: { flex: '0 1 auto', minWidth: '0', maxWidth: '100%' },
 							onClick: function () { controller.selectTab(s.targetId) },
 						},
+							badge !== '' ? h('span', { className: 'dsh-ego-side-tabwin' }, badge) : null,
 							h('span', { className: 'dsh-ego-side-tabdot' }),
-							h('span', { className: 'dsh-ego-side-tabtxt' }, s.title || s.url || wt('newTab')),
+							h('span', { className: 'dsh-ego-side-tabtxt', style: { maxWidth: '150px', overflow: 'hidden', textOverflow: 'ellipsis' } }, s.title || s.url || wt('newTab')),
 							h('span', {
 								className: 'dsh-ego-side-tabclose',
 								title: wt('closeTab'),
@@ -4787,7 +5101,6 @@ clearTimeout((panel as any)._dshHideT)
 					})
 				)
 				: null
-
 			// Main live view
 			var body
 			var currentSpace = state.currentSpace

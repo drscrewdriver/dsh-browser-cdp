@@ -1,3 +1,7 @@
+## [1.9.17] - 2026-11-13 — Sondaggio reattivo: stato dalla cache, focus della scheda separato dalla cattura
+
+Sintesi (dettagli e versioni intermedie in `CHANGELOG.md`): `bcdp_status` risponde dalla cache di connessione (`refresh:true` forza un sondaggio reale), così «controllare lo stato» non avvia un processo; il sondaggio di connessione è antirimbalzo e condivide il risultato in corso; `tabbit-cli diagnose` NON viene eseguito al mount (misurato: avvia il browser); il focus della scheda ora ha tre proprietari distinti (operatore/agente, pannello, cattura fotogrammi), quindi il pannello segue la scheda corrente anche con CDP remoto (base DevTools derivata dall'URL WebSocket, degrado silenzioso senza `/json/*`); tutte le chiamate verso un backend passano da un'unica coda.
+
 ## [0.18.0] - 2026-09-29 — Linea DSH 0.2.0-rc.1 (compat/0.2.0: adattamento puramente di metadata, zero modifiche al codice)
 
 ### Aggiunte

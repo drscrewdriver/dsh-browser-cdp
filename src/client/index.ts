@@ -1039,7 +1039,7 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 							.some(function (e: any) { return String((e && e.options && e.options.id) || '') === 'dsh-family' })
 					} catch { return false }
 				},
-				function () { return '起子插件设置' },
+				function () { return wt('famTitle') },
 				'[dsh-browser-cdp]',
 				// 接管态内联直挂本卡：own 卡组件 + 现取 scope（configForms/桥 两轨兜底，非空白）。
 				{ id: 'dsh-browser-cdp', component: FamilySettingsCard, inject: function () { return { scope: scope } } },

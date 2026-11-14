@@ -4666,7 +4666,12 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
           const mode = str(args.body, 'none')
           const wantBody = mode === 'text' || mode === 'json'
           return head +
-            `const __res = await page.waitForResponse(${j(u)}, { timeout: ${to} })\n` +
+            // [local patch, see runtime/PATCHES.md] Issue #31: includeBuffered lets
+            // the vendored runtime replay the global event buffer, so a response
+            // that already completed still matches. Without it, the common
+            // "navigate then wait for the response of the page I just loaded"
+            // sequence could never succeed — the request had already fired.
+            `const __res = await page.waitForResponse(${j(u)}, { timeout: ${to}, includeBuffered: true })\n` +
             `${wantBody ? `const __body = ${mode === 'json' ? 'await __res.json().catch(()=>null)' : 'await __res.text().catch(()=>null)'}\n` : ''}` +
             send(`{ ok: true, op: 'response', url: __res.url(), status: __res.status()${wantBody ? ', body: __body' : ''} }`)
         }

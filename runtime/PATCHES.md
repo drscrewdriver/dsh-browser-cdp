@@ -27,6 +27,8 @@
 | `runtime/ego-linux/src/shim.mjs` | `ego` 门面新增 `hideCursor()` / `showCursor()` | issue #96：用户希望在浏览器窗口里保留 agent 光标，但截图 PNG 不要出现它 |
 | `runtime/ego-linux/src/cursor.mjs` | `renderOverlay()` 开头加 `document.contentType` 守卫：非 `text/html` / `application/xhtml+xml` 不注入并清掉旧 host | JSON / 纯文本 / XML / PDF 标签页是整片密集字形，磨砂徽标叠上去被用户当“乱码” |
 | `runtime/ego-linux/src/cursor.mjs` | `#arrow` 规则去掉 `display:block`，可见性统一交给 `svg.shape{display:none}` / `.on{display:block}` | `#arrow` 是 ID 选择器，其 `display:block` 压过 `svg.shape` 的 `display:none`，切到 hand/beam 后箭头与手形重叠在同一点 |
+| `runtime/ego-browser/dist/out/index.js` `networkMatches()` | 字符串 matcher 含 `*` 时走 `globToRegExp`（与 `waitForURL` 同一个 helper），精确 URL 维持 `===` | 文档里的 glob 形式（`**/api/stories`）此前永不匹配：`===` 比字符串，于是 glob 等待全部超时，哪怕事件就在缓冲里 |
+| `runtime/ego-browser/dist/out/index.js` `waitForNetworkMatch()` + `enablePageEvents()` + `acquireNetworkEvents()` | 新增 `replayBufferedNetwork()` / `bufferedWindowStart()` / `describeBufferedMiss()`；`includeBuffered` 先在全局缓冲里回放（窗口从产生上次主框架导航的那个请求起算，因为文档自身的 request/response 早于 `Page.frameNavigated`）；attach 时即 `Network.enable`；等待结束后不再 `Network.disable`；超时且匹配请求由缓存提供时列出 URL 并提示 cache-busting | issue #31：`page.goto()` 之后的文档响应永远等不到（Network 域开启晚于请求发出，且 wait 只看未来事件）；缓存命中的超时又完全不可诊断，只能盲等 |
 | （其余 runtime 文件）| 与 vendoring 时一致 | 无后续本地改动 |
 
 ## 说明

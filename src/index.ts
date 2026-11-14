@@ -1,5 +1,5 @@
 /**
- * ego-browser �?DSH integration plugin for the ego browser
+ * ego-browser — DSH integration plugin for the ego browser
  * (MIT; provenance and third-party notices in THIRD_PARTY_NOTICES.md).
  *
  * ego is a Chromium browser built for AI agents: agents work in isolated
@@ -23,12 +23,12 @@
  *   - a reachable ego browser (the app is macOS-only today; Linux is on
  *     the ego roadmap).
  *
- * == 文件内部结构（改动前先看 docs/ARCH.md�?=
- *   顶部常量     : SENTINEL / HUMAN_CHECK_PROBE / 默认�? *   withEgoLock  : 全插件互斥锁（工具串行，防争浏览器）
+ * == 文件内部结构（改动前先看 docs/ARCH.md—=
+ *   顶部常量     : SENTINEL / HUMAN_CHECK_PROBE / 默认— *   withEgoLock  : 全插件互斥锁（工具串行，防争浏览器）
  *   chrome/env   : Chrome 探测 / 环境自适应
- *   runEgoScript : 脚本执行引擎 + 哨兵解析 + 冷启动重�? *   defineEgoTool: t() 工具封装基座（自动加�?+ 重试�? *   registerActionTools   : 大部�?bcdp_* 工具（用 t() 逐个注册�? *   registerHelpAndDoctor : bcdp_help/doctor/script/captcha
+ *   runEgoScript : 脚本执行引擎 + 哨兵解析 + 冷启动重— *   defineEgoTool: t() 工具封装基座（自动加—+ 重试— *   registerActionTools   : 大部— bcdp_* 工具（用 t() 逐个注册— *   registerHelpAndDoctor : bcdp_help/doctor/script/captcha
  *   EGO_HELP_INDEX / HUMAN_CHECK_PROBE : 工具索引文案 / 人机验证探针
- * 加工具：�?registerActionTools �?reg(t({...}))，并同步 EGO_HELP_INDEX，跑 npm run build�? */
+ * 加工具：— registerActionTools — reg(t({...}))，并同步 EGO_HELP_INDEX，跑 npm run build— */
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { existsSync, readdirSync, readFileSync, appendFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
@@ -111,7 +111,7 @@ import type { EgoContext, JudgeSettings, RawConfig, ResolvedConfig, SubprocessSe
 export const name = 'dsh-browser-cdp'
 // Platform-aware host services: the web shell exposes `webServer`, other Web
 // hosts expose `httpServer`. To keep activation platform-agnostic (TUI /
-// headless hosts have neither), neither is a required inject �?the /api/bcdp/*
+// headless hosts have neither), neither is a required inject — the /api/bcdp/*
 // watch routes are registered opportunistically via ctx.get('webServer') and
 // guarded, so a GUI-less host is a safe no-op. The bcdp_* tools depend only on
 // tools + subprocess, present in every host.
@@ -119,7 +119,7 @@ export const inject = ['tools', 'subprocess', 'settings']
 // Schemastery schema for the composition entry and the declarative settings
 // page. Re-exported from config.ts so the cordis loader validates the
 // composition layer and (0.1.7) projects the `.volatile()` fields into the
-// auto-generated settings form �?no registration call involved.
+// auto-generated settings form — no registration call involved.
 export const Config = ConfigSchema
 
 /**
@@ -139,7 +139,7 @@ const VENDORED_EGO_BIN = fileURLToPath(
 const DEFAULT_EGO_BIN = VENDORED_EGO_BIN
 // DEFAULT_SPACE + AUTO_SPACE_SENTINEL now come from ./config.ts so the schema
 // default, resolveConfig fold, and the tracker share one definition (A/C).
-// C's derived per-session name keeps the historical `dsh-agent-` prefix �?it is
+// C's derived per-session name keeps the historical `dsh-agent-` prefix — it is
 // a distinct generated pattern, not the named-slot default.
 const AUTO_SPACE_PREFIX = 'dsh-agent-'
 const DEFAULT_MAX_OUTPUT_BYTES = 4 * 1024 * 1024
@@ -227,7 +227,7 @@ export function createActiveSpaceTracker(defaultSpace: string | number = DEFAULT
       }
     },
     // A browser restart resets the runtime's space table, leaving the
-    // remembered NUMERIC id dangling �?the runtime then hard-fails every
+    // remembered NUMERIC id dangling — the runtime then hard-fails every
     // tool with "task space not found: N" until the user manually reopens a
     // space. Falling back to the space's NAME lets useOrCreate recreate it.
     resetToName: () => {
@@ -237,15 +237,15 @@ export function createActiveSpaceTracker(defaultSpace: string | number = DEFAULT
 }
 
 /**
- * B �?the session-keyed form of the tracker. Two DSH agents driving the same
+ * B — the session-keyed form of the tracker. Two DSH agents driving the same
  * browser each get their own slot, so "the most recently opened space" for one
  * agent never bleeds into the other. The public surface is identical to
  * `createActiveSpaceTracker` (every method routes to the CURRENT session's
  * slot), so `runWithStaleSpaceRetry` / `afterExecute` need no per-call-site
- * change �?only `setCurrentSession` is injected once per execute, inside the
+ * change — only `setCurrentSession` is injected once per execute, inside the
  * already-global `withEgoLock` (which keeps the slot choice race-free).
  *
- * `defaultNameFor(sessionKey)` resolves the fallback slot name for a session �? * this is where C's `:auto` �?`dsh-agent-<sid8>` derivation lives. It is a
+ * `defaultNameFor(sessionKey)` resolves the fallback slot name for a session — * this is where C's `:auto` — `dsh-agent-<sid8>` derivation lives. It is a
  * closure over the live config, so a volatile `defaultSpace` / `isolateSpaces`
  * edit is reflected on the NEXT freshly-created slot.
  */
@@ -357,7 +357,7 @@ export function createSessionSpaceTracker(
     return s
   }
   // Slots are keyed by session id; the number of concurrent agents is small and
-  // bounded, so retention (no eviction) is intentional �?a WeakMap over string
+  // bounded, so retention (no eviction) is intentional — a WeakMap over string
   // keys is impossible and a LRU would drop a paused agent's remembered space.
   const withSlot = (fn: (s: Slot, def: string | number) => void): void => {
     const s = slotOf(composeKey())
@@ -450,7 +450,7 @@ function withEgoLock<T>(fn: () => Promise<T> | T): Promise<T> {
  *
  * The vendored ego-linux CLI reads EGO_LINUX_CHROME (bare Chrome binary/wrapper
  * path) and EGO_LINUX_HEADLESS (=1 to run headless) from the process env. When a
- * host does not set them �?the common case on root / Docker / CI boxes �?Chrome
+ * host does not set them — the common case on root / Docker / CI boxes — Chrome
  * silently fails to start, and consumers see a 20s `DevTools port` timeout.
  *
  * This function makes the plugin self-sufficient WITHOUT touching the host or
@@ -466,7 +466,7 @@ function withEgoLock<T>(fn: () => Promise<T> | T): Promise<T> {
  *  - An opt-out switch EGO_BROWSER_AUTO_ADAPT (set to "0"/"false"/"no") restores
  *    the original "inherit host env verbatim" behavior.
  */
-/** 阶段 10 �?the render worker: the ONLY thing that can see a page. */
+/** 阶段 10 — the render worker: the ONLY thing that can see a page. */
 const RENDER_WORKER_BIN = fileURLToPath(new URL('../bin/cdp-render-worker.mjs', import.meta.url))
 const BUNDLED_WRAPPER = fileURLToPath(
   new URL('../bin/cdp-chrome-wrapper.sh', import.meta.url),
@@ -626,7 +626,7 @@ function isPosixRoot(platform: NodeJS.Platform = process.platform): boolean {
   const uid = process.getuid?.()
   return typeof uid === 'number' && uid === 0 && platform !== 'win32'
 }
-/** No display server �?headless is required (Linux/macOS headless servers). */
+/** No display server — headless is required (Linux/macOS headless servers). */
 function isHeadlessDetected(platform: NodeJS.Platform = process.platform, env: NodeJS.ProcessEnv = process.env): boolean {
   // Windows and macOS always have a desktop session; only Linux headless servers need to run the backing browser headless.
   if (platform === 'win32' || platform === 'darwin') {
@@ -647,7 +647,7 @@ export function resolveEgoEnv(cfg: Partial<ResolvedConfig>, { platform = process
   }
   const env: NodeJS.ProcessEnv = { ...baseEnv }
   // Electron hosts (DSH Desktop): process.execPath is the Electron binary, and
-  // every spawn below passes this explicit env �?without ELECTRON_RUN_AS_NODE=1
+  // every spawn below passes this explicit env — without ELECTRON_RUN_AS_NODE=1
   // the child boots as a second Electron app instead of running the script
   // (empty stderr, no @@DSH_RESULT@@ sentinel; issue #42). User-set value wins.
   if ((process.versions as { electron?: string }).electron && env.ELECTRON_RUN_AS_NODE === undefined) {
@@ -655,7 +655,7 @@ export function resolveEgoEnv(cfg: Partial<ResolvedConfig>, { platform = process
   }
   const chrome = findChromeBinary()
   // Settings-configured chrome path (highest priority after user-set env).
-  // An empty string means "auto-detect" �?skip so the platform branches below
+  // An empty string means "auto-detect" — skip so the platform branches below
   // can run.
   const configChrome = cfg?.chromePath
   if (env.EGO_LINUX_CHROME === undefined && configChrome) {
@@ -699,7 +699,7 @@ export function resolveEgoEnv(cfg: Partial<ResolvedConfig>, { platform = process
   // ── R1: point the runtime at the ACTIVATED CDP target ───────────────────
   // `resolveEgoEnv` stays synchronous (every spawn site calls it inline), so
   // it reads the attach cache that the host refreshes whenever settings
-  // change �?see the `triggerCdpRefresh` wiring in apply(). The cache, not
+  // change — see the `triggerCdpRefresh` wiring in apply(). The cache, not
   // this function, owns the probe; this function only applies the decision.
   const decision = decideCdpAttach(cfg)
   if (decision.kind === 'inject') env[EGO_LINUX_CDP_URL] = decision.wsUrl
@@ -800,7 +800,7 @@ function describeSpawnFailure(err: unknown): string {
  * session; a probe that arrives while the DevTools/CDP channel is still
  * coming up can fail with one of these. Such failures are safe to retry
  * briefly (the browser keeps warming up in the background). Anything else
- * must pass through immediately �?never mask a genuine error.
+ * must pass through immediately — never mask a genuine error.
  */
 const COLD_START_SIGNS = [
   /CDP channel is not open/i,
@@ -865,14 +865,14 @@ export function shouldReapBrowser(nowMs: number, lastActivityMs: number, idleTim
  * runtime's `--open` subcommand replaces a headless instance with a headed
  * one on the same profile (tabs restore) or just raises the existing window.
  * `--open` is on the runtimeArgs blocklist only because USER-supplied args
- * must not steal the window �?here it is an explicit user action from the
+ * must not steal the window — here it is an explicit user action from the
  * watch panel. --open stops+relaunches when headless, so give it real time.
  */
 async function openAgentWindow(ctx: EgoContext, cfg: EgoRuntimeConfig): Promise<{ ok: boolean; error?: string }> {
   try {
     const gate = cdpAttachError(cfg)
     if (gate) return { ok: false, error: gate }
-    // R4/F11 �?an `ego-cli` link drives the ego lite window the user already
+    // R4/F11 — an `ego-cli` link drives the ego lite window the user already
     // has open and can see. There is no headless instance to pop out, and the
     // native CLI does not implement `--open`. Succeed explicitly (with a log)
     // instead of spawning a command that would fail.
@@ -1016,7 +1016,7 @@ export async function runWithTabRevive(
  *
  * Fallback: `bcdp_script` (with verbatim:true) runs user-authored heredocs, which
  * tool descriptions tell the model to "end with console.log(JSON.stringify(...))"
- * �?without the sentinel prefix. A script written to that instruction used to
+ * — without the sentinel prefix. A script written to that instruction used to
  * succeed and still be reported as a failure ("no @@DSH_RESULT@@ payload"), so
  * when no sentinel line exists we accept the last line that parses as a JSON
  * object. The sentinel still wins whenever it is present (it marks the payload
@@ -1038,7 +1038,7 @@ export function parseSentinel(stdout: string): Record<string, unknown> | undefin
   }
   // Sentinel absent (or its line was malformed): accept a bare JSON object.
   // Depth-scanned rather than line-scanned, because console.log(JSON.stringify(x,
-  // null, 2)) �?the most natural thing to write �?spans many lines, and the
+  // null, 2)) — the most natural thing to write — spans many lines, and the
   // earlier line-based fallback silently missed it.
   return lastJsonObject(stdout)
 }
@@ -1096,9 +1096,9 @@ function lastJsonObject(text: string): Record<string, unknown> | undefined {
   return best
 }
 
-/** R2/R3 �?sentinel + payload for the `bcdp_status` facade probe. @internal exported for tests */
+/** R2/R3 — sentinel + payload for the `bcdp_status` facade probe. @internal exported for tests */
 export const STATUS_FACADE_SENTINEL = '__BCDP_STATUS__'
-/** @internal exported for tests �?the exact heredoc the status probe runs. */
+/** @internal exported for tests — the exact heredoc the status probe runs. */
 export const STATUS_FACADE_SCRIPT =
   `console.log(${JSON.stringify(STATUS_FACADE_SENTINEL)} + JSON.stringify({ ` +
   'taskSpaces: typeof taskSpaces, browser: typeof browser, page: typeof page }))\n'
@@ -1134,7 +1134,7 @@ export function parseStatusFacades(stdout: string): StatusFacades | undefined {
 }
 
 /**
- * R7 �?is the old dsh-ego-browser plugin installed anywhere under this DSH home?
+ * R7 — is the old dsh-ego-browser plugin installed anywhere under this DSH home?
  *
  * Reported (never enforced): the two plugins can coexist now that tool names
  * and routes no longer overlap, but both driving ONE local ego browser would
@@ -1201,10 +1201,10 @@ interface EgoRuntimeConfig {
   readonly sessionScopedPulse: boolean
   // ── R1/R7: connection sequence + activation ─────────────────────────────
   readonly links: BrowserLink[]
-  /** R7 �?extra `ego-cli` rows that sanitize dropped (local-only singleton). */
+  /** R7 — extra `ego-cli` rows that sanitize dropped (local-only singleton). */
   readonly droppedEgoCli: number
   /**
-   * R7 �?shape-aware argv prefix for the ego CLI. `[node, <file>]` for the
+   * R7 — shape-aware argv prefix for the ego CLI. `[node, <file>]` for the
    * bundled port / `ego-browser-v2`, `[<file>]` for a real executable (the
    * macOS app-bundle helper). Computed from the attach cache, which knows the
    * probed shape.
@@ -1226,7 +1226,7 @@ interface EgoRuntimeConfig {
   readonly allowProbeColdStart: boolean
   /** ego-cli 观察窗降级帧源开关（默认开）：关 = 不轮询截图，观察窗显示占位。 */
   readonly cliFramePollEnabled: boolean
-  /** Lightpanda backend �?extra `lightpanda serve` args for managed `lightpanda` rows. */
+  /** Lightpanda backend — extra `lightpanda serve` args for managed `lightpanda` rows. */
   readonly lightpandaArgs: string
   // ── 阶段 10: JEV/Laya judge (design-jev-pipeline.md) ────────────────────
   //
@@ -1256,7 +1256,7 @@ interface ExecLike {
   signal?: AbortSignal
 }
 
-/** 常驻级工具看到的工具分级视图（活动脉�?+ 活动�?+ 当前注入面）�?*/
+/** 常驻级工具看到的工具分级视图（活动脉—+ 活动—+ 当前注入面）—*/
 interface TierView {
   pulse: (sessionId?: string) => void
   active: () => boolean
@@ -1264,7 +1264,7 @@ interface TierView {
 }
 
 /**
- * R1 �?argv for one tool run. Single source of truth for the `--sdk-path`
+ * R1 — argv for one tool run. Single source of truth for the `--sdk-path`
  * injection: `bcdp_status` and `runEgoScript` must probe/run under the exact
  * same conditions, otherwise "available" and "actually works" diverge again.
  * @internal exported for tests
@@ -1296,7 +1296,7 @@ async function runEgoScript(subprocess: SubprocessService, script: string, exec:
   }
   let handle
   try {
-    // R1 �?an `ego-cli` link that opted into `useSdkPath` must get the same
+    // R1 — an `ego-cli` link that opted into `useSdkPath` must get the same
     // `--sdk-path` injection the probe used. Without it the native CLI has no
     // `taskSpaces`/`browser`/`page` facade and every script dies on line 1.
     const { attach } = effectiveChannel(cfg)
@@ -1352,7 +1352,7 @@ async function runEgoScript(subprocess: SubprocessService, script: string, exec:
   }
   if (outcome.exitCode !== 0) {
     // When run through the node interpreter, a missing CLI surfaces as a
-    // module-load failure with exit 1 instead of a spawn error �?normalize it
+    // module-load failure with exit 1 instead of a spawn error — normalize it
     // to the same clear "CLI not available" message.
     const missingModule = /Cannot find module|MODULE_NOT_FOUND/i.test(stderr)
     return {
@@ -1706,7 +1706,7 @@ const ensureRealTab = (): string =>
   `if (__real && __real.active !== true) await browser.switchTab(__real.targetId)\n` +
   (pendingViewport !== undefined ? viewportPrelude(pendingViewport) : '')
 /**
- * G �?a raw heredoc (`bcdp_script` with verbatim:true) that touches `page.*` without
+ * G — a raw heredoc (`bcdp_script` with verbatim:true) that touches `page.*` without
  * first selecting a task space dies with the runtime's "no active tab to attach
  * session". Structured bcdp_* tools never hit this because each wraps its body
  * in `useSpace(...)` + `ensureRealTab()`; a hand-written heredoc has no such
@@ -1744,7 +1744,7 @@ const commonOutputSchema = {
 }
 
 /**
- * The calling session id �?the scope the client's sidebar auto-open binds to.
+ * The calling session id — the scope the client's sidebar auto-open binds to.
  * Read structurally (`exec.agent` is typed `unknown` in this plugin's own
  * seam); a call with no initiating agent simply leaves the open unscoped.
  */
@@ -1775,7 +1775,7 @@ interface EgoToolOptions {
   afterExecute?: (args: Record<string, unknown>, value: unknown) => void
   /** F: wrap this tool's run in the tab-revive watchdog and tag recoveredFrom. */
   tabRevive?: boolean
-  /** Lightpanda backend �?return a blocking reason (or null to allow) checked BEFORE any runtime spawn. */
+  /** Lightpanda backend — return a blocking reason (or null to allow) checked BEFORE any runtime spawn. */
   gate?: (args: Record<string, unknown>) => string | null
 }
 
@@ -2290,13 +2290,13 @@ function defineEgoTool(ctx: EgoContext, cfg: EgoRuntimeConfig, opts: EgoToolOpti
       withEgoLock(async () => {
         // Signal the client to auto-open the sidebar Tab on the first bcdp_*
         // tool call. markEgoToolCall() bumps a host-side counter surfaced via
-        // /api/bcdp/spaces; the LivePreviewController transitions on 0 �?>0 and
+        // /api/bcdp/spaces; the LivePreviewController transitions on 0 —>0 and
         // calls betterSidebar.openTab(). Idempotent: the client's transition
         // guard means only the first call per session opens the Tab.
         cfg.spaceTracker.setCurrentSession(callingSessionId(exec), resolveEffectiveLink(cfg.links, cfg.activeTargetId)?.link.id ?? ''); markEgoToolCall(callingSessionId(exec))
           pendingViewport = cfg
         // Capability gate: a tool whose dependency face the attached engine
-        // cannot satisfy fails HERE �?structured and immediate �?instead of
+        // cannot satisfy fails HERE — structured and immediate — instead of
         // hanging inside the runtime until a timeout.
         if (typeof opts.gate === 'function') {
           const blocked = opts.gate(args)
@@ -2337,7 +2337,7 @@ function defineEgoTool(ctx: EgoContext, cfg: EgoRuntimeConfig, opts: EgoToolOpti
         // The operation face just drove this tab: move the focus now, so the
         // panel follows without waiting for a click or the next spaces poll.
         noteToolFocus(result.value)
-        // Value is JSON.parse output of our own payload �?fits the tool JSON contract.
+        // Value is JSON.parse output of our own payload — fits the tool JSON contract.
         return toolPayload(result)
       }),
     presentCall: () => ({
@@ -2422,7 +2422,7 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
   // without re-registration. A plain-field change remounts the plugin and
   // rebuilds this bridge from a fresh apply(); a volatile-only change is
   // delivered through the bridge's onChange (loader/volatile-update).
-  // 跨版�?0.1.2/0.1.5 �?installSection 代际,0.1.7+/0.2.0 走声明式 volatile(installEgoBrowserSettings 内部判定)
+  // 跨版— 0.1.2/0.1.5 — installSection 代际,0.1.7+/0.2.0 走声明式 volatile(installEgoBrowserSettings 内部判定)
   const bridge = installSettingsAuto(ctx, config)
   const ffmpegManager = getSharedFfmpegInstallationManager()
   const initialFfmpegConfig = resolveConfig(bridge.source() as RawConfig)
@@ -2430,9 +2430,9 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
     /* ignore */
   })
 
-  // B/C �?session-keyed tracker. `defaultNameFor` closes over the LIVE config
+  // B/C — session-keyed tracker. `defaultNameFor` closes over the LIVE config
   // so a volatile `defaultSpace` / `isolateSpaces` edit is reflected on the
-  // next freshly-created slot; C's `:auto` �?`dsh-agent-<sid8>` derivation only
+  // next freshly-created slot; C's `:auto` — `dsh-agent-<sid8>` derivation only
   // fires in isolated-sandbox mode (persistent mode collapses to the single
   // named slot, protecting login reuse).
   const spaceTracker = createSessionSpaceTracker((sessionKey) =>
@@ -2452,7 +2452,7 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
       typeof config.egoBin === 'string' && config.egoBin !== ''
         ? config.egoBin
         : DEFAULT_EGO_BIN,
-    // A �?read the folded default live off the bridge (task_5: GUI edits to the
+    // A — read the folded default live off the bridge (task_5: GUI edits to the
     // volatile field take effect on the next read, no remount). resolveConfig
     // keeps `:auto` verbatim; the tracker is what knows the sessionId + mode.
     get configuredDefaultSpace() { return resolveConfig(bridge.source() as RawConfig).defaultSpace },
@@ -2502,7 +2502,7 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
       const raw = bridge.source() as RawConfig
       return sanitizeLinks(raw.links ?? raw.cdpTargets).droppedEgoCli
     },
-    // R7 �?the CLI argv prefix follows the PROBED link: an `ego-cli` link
+    // R7 — the CLI argv prefix follows the PROBED link: an `ego-cli` link
     // knows its path and spawn shape; everything else keeps the vendored
     // runtime behind the node interpreter.
     get egoArgvPrefix() {
@@ -2549,8 +2549,8 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
     get jevWallMs() { return judgeSettingsOf(resolveConfig(bridge.source() as RawConfig)).wallMs },
   }
   // ── 工具分级注入 ──────────────────────────────────────────────────────
-  // 以前挂载时一次性把 41 �?bcdp_* 工具注册进宿主工具表，每个会话每一轮都�?  // schema 成本（实�?desc+params �?25.6K 字符），而不碰浏览器的会话一个也用不上�?  // 现在把「谁能出现在模型面前」交�?src/toolTiers.ts 的策略，注册时机由这�?  // 控制器执行：封印 = 反注册（从工具列表消失），不是执行期拒绝——与
-  // prime-memory 的工具组封印同式�?
+  // 以前挂载时一次性把 41 — bcdp_* 工具注册进宿主工具表，每个会话每一轮都—  // schema 成本（实— desc+params — 25.6K 字符），而不碰浏览器的会话一个也用不上—  // 现在把「谁能出现在模型面前」交— src/toolTiers.ts 的策略，注册时机由这—  // 控制器执行：封印 = 反注册（从工具列表消失），不是执行期拒绝——与
+  // prime-memory 的工具组封印同式—
   let browserActive = false
   // ── Per-session depth tracking ──────────────────────────────────────────
   // When sessionScopedPulse is ON: each session's pulse advances only its own
@@ -2717,8 +2717,8 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
   registerLoginImport(ctx, cfg, reg)
   registerActionTools(ctx, cfg, reg)
   registerHelpAndDoctor(ctx, cfg, reg, tierView)
-  // 注入面与分级表自检：出现表上没登记的名�?= 它落到了默认 extended，lazy 模式
-  // 下会被悄悄延后注入。测试拦在前面，这条 warn 负责漏网时看得见�?
+  // 注入面与分级表自检：出现表上没登记的名—= 它落到了默认 extended，lazy 模式
+  // 下会被悄悄延后注入。测试拦在前面，这条 warn 负责漏网时看得见—
   {
     const s = tiers.surface()
     const unlisted = unknownTieredTools([...s.live, ...s.sealed])
@@ -2733,15 +2733,15 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
       ` judgeConfigured=${judgeConfigured({ jevKey: cfg.jevKey, layaKey: cfg.layaKey })})`,
     )
   }
-  // 设置页翻 toolInjection / toolBrowse / toolExtended / toolEscape / toolJudge �?volatile 热更 �?当场重算注入�?  // （与 prime-memory �?applyToolSeals 同式：不需要重启插件）�?
+  // 设置页翻 toolInjection / toolBrowse / toolExtended / toolEscape / toolJudge — volatile 热更 —当场重算注入—  // （与 prime-memory — applyToolSeals 同式：不需要重启插件）—
 bridge.onChange(() => tiers.reapply())
 
-  // ── R1: CDP attach cache �?the bridge between settings and every spawn ────
+  // ── R1: CDP attach cache — the bridge between settings and every spawn ────
   // `resolveEgoEnv` is synchronous and reads `defaultAttachCache`, so the cache
   // must be kept current. We re-probe the ACTIVATED target whenever settings
   // change (and once on startup). A changed resolved endpoint is pushed into
   // the cast worker via `setAttachEndpoint`, which returns true only when the
-  // value actually moved �?that is the signal to recycle the worker so the live
+  // value actually moved — that is the signal to recycle the worker so the live
   // panel re-attaches to the same browser the tools now drive. No resolved
   // endpoint (local mode / nothing activated / unreachable) means "no remote
   // attach": the worker behaves exactly as before R1.
@@ -3309,7 +3309,7 @@ bridge.onChange(() => tiers.reapply())
           mode: resolved.cdpMode,
           timeoutMs: resolved.cdpProbeTimeoutMs,
           cache: defaultAttachCache,
-          // T2.15/T2.16 �?M0.9 launcher wired: an authorized fallback now
+          // T2.15/T2.16 — M0.9 launcher wired: an authorized fallback now
           // launches a managed local browser instead of erroring out.
           fallback: {
             enabled: resolved.allowLocalFallback === true,
@@ -3332,9 +3332,9 @@ bridge.onChange(() => tiers.reapply())
               ? { ok: true, cliPath: cli.cliPath }
               : { ok: false, cliPath: cli.cliPath, code: 'tabbit-cli-missing', message: cli.error }
           },
-          // Lightpanda backend �?managed-serve extra args for `lightpanda` rows.
+          // Lightpanda backend — managed-serve extra args for `lightpanda` rows.
           lightpandaArgs: resolved.lightpandaArgs,
-          // R7 �?the local ego CLI link probes through the host subprocess
+          // R7 — the local ego CLI link probes through the host subprocess
           // service, and gets our bundled harness only when it opts in.
           cliIo: createSubprocessCliIo(ctx.subprocess),
           sdkPath: fileURLToPath(new URL('../runtime/ego-browser/dist/out/index.js', import.meta.url)),
@@ -3404,7 +3404,7 @@ bridge.onChange(() => tiers.reapply())
   // inject resolves through fiber.store and is fully supported by cordis.]
   // [0.1.2 migration 2026-08-28] the strict service resolver returns undefined
   // for an UNDECLARED service, so the old `ctx.get?.('webServer')` guard was
-  // silently undefined and the /api/bcdp/* watch routes were never installed �?  // the watch panel had no data endpoints (sidebar tab showed the empty state
+  // silently undefined and the /api/bcdp/* watch routes were never installed —  // the watch panel had no data endpoints (sidebar tab showed the empty state
   // forever, zero errors). The official optional-service pattern is a nested
   // inject: the callback runs only once the service is available, and no-ops
   // on hosts without a web server (TUI / headless stay tools-only).
@@ -3584,14 +3584,14 @@ bridge.onChange(() => tiers.reapply())
       )
     }
     // Runtime capability gateway (/bcdp/api/cdp-status | cdp-probe |
-    // ffmpeg-status | ffmpeg-check | ffmpeg-install) �?serves the browser
-    // half's capability polling. 0.1.7: the config get/set pair is retired �?    // config writes go through the declarative settings form (configForms).
+    // ffmpeg-status | ffmpeg-check | ffmpeg-install) — serves the browser
+    // half's capability polling. 0.1.7: the config get/set pair is retired —    // config writes go through the declarative settings form (configForms).
     // Same webServer the cast server uses; guarded so a headless host without
     // webServer is a no-op.
     try {
       registerEgoBrowserGateway(wctx as EgoContext, bridge, ffmpegManager, {
-        // 会话 �?工作�?picks 目录（workspaceRegistry 按会话解析；无注�?        // 工作区或多个候选时返回 undefined，网关给 409 不猜）。同
-        // dsh-paste-dock �?resolveWorkspaceDir 语义�?
+        // 会话 —工作— picks 目录（workspaceRegistry 按会话解析；无注—        // 工作区或多个候选时返回 undefined，网关给 409 不猜）。同
+        // dsh-paste-dock — resolveWorkspaceDir 语义—
         resolveDir: (sessionId: string | undefined) => {
           try {
             const registry = (typeof ctx.get === 'function' ? ctx.get('workspaceRegistry') : undefined) as
@@ -3619,8 +3619,8 @@ bridge.onChange(() => tiers.reapply())
         `dsh-browser-cdp: capability gateway init failed: ${(err as Error)?.message ?? err}`,
       )
     }
-    // 设置桥（老线数据臂，session-guard settings-bridge 同式）：�?.1.5 �?    // configForms，client 设置卡走 /api/dsh-browser-cdp/settings/* 读写宿主
-    // settings 服务。rc.1+ 上路由无害冗余（卡仍走原�?configForms 臂）�?
+    // 设置桥（老线数据臂，session-guard settings-bridge 同式）：—.1.5 —    // configForms，client 设置卡走 /api/dsh-browser-cdp/settings/* 读写宿主
+    // settings 服务。rc.1+ 上路由无害冗余（卡仍走原— configForms 臂）—
     try {
       registerSettingsBridge(wctx, ctx)
     } catch (err) {
@@ -3631,7 +3631,7 @@ bridge.onChange(() => tiers.reapply())
   })
   // Idle reaper (issue #47, opt-in via the idleTimeoutMin setting): the
   // backing Chromium is a singleton that otherwise only stops on --stop or
-  // host teardown �?measured at ~425 MB idle. After N minutes without an
+  // host teardown — measured at ~425 MB idle. After N minutes without an
   // bcdp_* call, gracefully --stop it; the next bcdp_* call cold-starts it
   // (2-4s). Watching the panel does NOT count as activity (documented in the
   // setting hint). Runs on a 60s interval; cleanup clears the timer.
@@ -3644,17 +3644,17 @@ bridge.onChange(() => tiers.reapply())
           const last = getLastEgoActivity()
           if (!shouldReapBrowser(Date.now(), last, cfg.idleTimeoutMin)) return
           if (last <= reapedFor) return // already reaped for this idle stretch
-          // R4/F3 �?NEVER send `--stop` to an `ego-cli` link: that browser is
+          // R4/F3 — NEVER send `--stop` to an `ego-cli` link: that browser is
           // the user's own daily instance, not an agent-owned one. The command
           // is currently an unknown no-op on the native CLI, but "fixing" it
-          // would kill the user's browser �?an explicit non-goal, not a TODO.
+          // would kill the user's browser — an explicit non-goal, not a TODO.
           const reaperLink = effectiveChannel(cfg).effective?.link
           if (runtimeOfLink(reaperLink)?.ownsUserBrowser === true) {
             reapedFor = last
             ctx.logger?.info?.(`dsh-browser-cdp: idle reaper skipped: ${reaperLink?.kind} owns the user\'s browser (never --stop it)`)
             return
           }
-          // T2.14 �?a locally launched managed browser reaps by pid, not CLI.
+          // T2.14 — a locally launched managed browser reaps by pid, not CLI.
           try {
             const { localBrowserInfo, stopLocalBrowser } = await import('./cdp/launcher.ts')
             if (localBrowserInfo()) {
@@ -3677,7 +3677,7 @@ bridge.onChange(() => tiers.reapply())
           try {
             await readFile(`${stateDir}/browser.json`, 'utf8')
           } catch {
-            return // no state file �?no browser �?nothing to reap
+            return // no state file — no browser — nothing to reap
           }
           reapedFor = last
           ctx.logger?.info?.(`dsh-browser-cdp: idle reaper stopping the backing browser after ${cfg.idleTimeoutMin}min without bcdp_* activity`)
@@ -3709,11 +3709,11 @@ bridge.onChange(() => tiers.reapply())
   // web and expects the old process to exit promptly before restarting it, a
   // slow/frozen browser here hangs the restart forever ("waiting to restart").
   // Losing in-memory login cookies on a dirty shutdown beats a restart that
-  // never completes �?the clean path still flushes cookies on a graceful DSH
+  // never completes — the clean path still flushes cookies on a graceful DSH
   // close, and bcdp_auth_flush exists for explicit persistence.
   ctx.effect?.(() => {
     try {
-      // R4/F3 �?teardown must not stop an `ego-cli` link's browser either: it
+      // R4/F3 — teardown must not stop an `ego-cli` link's browser either: it
       // is the user's own ego lite instance and outlives this plugin.
       if (runtimeOfLink(effectiveChannel(cfg).effective?.link)?.ownsUserBrowser === true) {
         ctx.logger?.info?.('dsh-browser-cdp: teardown skipped --stop: the activated channel owns the user\'s browser (CLI / managed serve)')
@@ -3731,7 +3731,7 @@ bridge.onChange(() => tiers.reapply())
         // Keep it short; never let this outlive the host's own teardown budget.
         // But DO give the graceful stop enough time (>= the runtime's
         // Browser.close + waitForProcessExit window) so the browser merges its
-        // cookie journal into the on-disk profile before DSH is gone �?that is
+        // cookie journal into the on-disk profile before DSH is gone — that is
         // what keeps logins across a restart (the bundled runtime's behavior).
         graceMs: 8_000,
       })
@@ -3777,7 +3777,7 @@ function registerEgoStatus(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool: T
             path: { type: 'string' },
             exitCode: { type: 'integer' },
             // tabbit 通道的就绪判定走 diagnose，会带这两个字段；不声明就会被
-            // additionalProperties:false 拒掉——status 仍然算浏览器活动（能解锁其
+            // additionalProperties:false 拒掉—— status 仍然算浏览器活动（能解锁其
             // 它工具），但自己永远不可用。
             backend: { type: 'string' },
             raw: { type: 'string' },
@@ -3810,7 +3810,7 @@ function registerEgoStatus(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool: T
       // facade probe only inspects the globals the SDK harness injects
       // (taskSpaces/browser/page); it neither starts nor waits for a browser.
       // Measured ~300ms, so 15s is already a generous ceiling. Do NOT raise it
-      // for browser cold-start �?that concern does not apply to this probe.
+      // for browser cold-start — that concern does not apply to this probe.
       timeoutMs: 15_000,
       execute: async (args: Record<string, unknown>, exec: ToolExec) => {
         // Per-session pulse: pass callingSessionId so sessionScopedPulse can
@@ -3859,7 +3859,7 @@ function registerEgoStatus(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool: T
         // through to the existing per-channel probe.
         if (wantsRefresh) await cfg.refreshAttach?.()
         return withEgoLock(async () => {
-          // 注入面与通道类型先算一次：两个返回分支都要带上——probe 失败时模型
+          // 注入面与通道类型先算一次：两个返回分支都要带上—— probe 失败时模型
           // 同样需要知道「工具不在列表」是 kind 收窄，不是插件坏了。
           const face = tiers.surface()
           const kind = backendKindOf(resolveEffectiveLink(cfg.links, cfg.activeTargetId)?.link?.kind)
@@ -3879,7 +3879,7 @@ function registerEgoStatus(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool: T
           }
           try {
             const { attach } = effectiveChannel(cfg)
-            // R1 �?probe with the exact argv real tool runs use, so "available"
+            // R1 — probe with the exact argv real tool runs use, so "available"
             // means "a bcdp_* call would work", not "some other command worked".
             const handle = ctx.subprocess.spawn({
               argv: buildEgoToolArgv(cfg.egoArgvPrefix, attach, cfg.runtimeArgs ?? ''),
@@ -3931,13 +3931,13 @@ function registerEgoStatus(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool: T
     } as unknown as DefineToolOpts),
   )
 }
-/** `bcdp_auth_flush` �?force persistent login cookies down to the disk profile. */
+/** `bcdp_auth_flush` — force persistent login cookies down to the disk profile. */
 function registerAuthFlush(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool: ToolHandle) => void): void {
   reg(
     defineTool({
       name: 'bcdp_auth_flush',
       description:
-        'Force all persistent login cookies in the agent browser to be written to the on-disk profile. Call this after login (or before ending a browsing task) so the login survives a later DSH/browser restart �?Chrome only flushes cookies to disk on graceful close, this nudges it to persist them now.',
+        'Force all persistent login cookies in the agent browser to be written to the on-disk profile. Call this after login (or before ending a browsing task) so the login survives a later DSH/browser restart — Chrome only flushes cookies to disk on graceful close, this nudges it to persist them now.',
       parameters: {},
       output: {
         schema: {
@@ -3948,7 +3948,7 @@ function registerAuthFlush(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool: T
             ok: { type: 'boolean', required: true },
             total: { type: 'integer' },
             flushed: { type: 'integer' },
-            /** Lightpanda backend �?set when the engine has no Storage.flushCookies (nothing was persisted). */
+            /** Lightpanda backend — set when the engine has no Storage.flushCookies (nothing was persisted). */
             degraded: { type: 'boolean' },
             error: { type: 'string' },
           },
@@ -3995,7 +3995,7 @@ function registerAuthFlush(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool: T
               signal: AbortSignal.timeout(8000),
             })
             const jbody = await r.json() as { ok?: boolean; total?: number; flushed?: number; error?: string }
-            // Lightpanda backend �?the worker's Storage.flushCookies call is
+            // Lightpanda backend — the worker's Storage.flushCookies call is
             // already best-effort (errors swallowed inside the worker), so on
             // that engine this tool would return a fake `ok: true` while having
             // persisted nothing. Report the degraded truth instead.
@@ -4004,7 +4004,7 @@ function registerAuthFlush(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool: T
               ok: !!jbody.ok && !degraded,
               total: jbody.total ?? 0,
               flushed: jbody.flushed ?? 0,
-              ...(degraded ? { degraded: true, error: 'engine-unsupported: Lightpanda has no Storage.flushCookies �?cookies persist only while the engine process is alive' } : {}),
+              ...(degraded ? { degraded: true, error: 'engine-unsupported: Lightpanda has no Storage.flushCookies — cookies persist only while the engine process is alive' } : {}),
               ...(!degraded && jbody.error !== undefined ? { error: jbody.error } : {}),
             }
           } catch (err) {
@@ -4020,7 +4020,7 @@ function registerAuthFlush(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool: T
     } as unknown as DefineToolOpts),
   )
 }
-/** `bcdp_login_import` �?copy login cookies from the system browser (issue #46). */
+/** `bcdp_login_import` — copy login cookies from the system browser (issue #46). */
 function registerLoginImport(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool: ToolHandle) => void): void {
   reg(
     defineTool({
@@ -4048,7 +4048,7 @@ function registerLoginImport(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
             matched: { type: 'integer' },
             written: { type: 'integer' },
             domains: { type: 'json' },
-            /** Set when the tool gracefully quit the running source browser first (issue #1-�? was returned but undeclared). */
+            /** Set when the tool gracefully quit the running source browser first (issue #1-— was returned but undeclared). */
             closedSource: { type: 'boolean' },
             /** Set when the source cookie store lost rows during the session and was restored from the pre-boot backup. */
             restoredFromBackup: { type: 'boolean' },
@@ -4064,7 +4064,7 @@ function registerLoginImport(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
             const domains = Array.isArray(args.domains) ? (args.domains as unknown[]).map(String) : undefined
             const source = typeof args.source === 'string' && args.source !== '' ? args.source : 'auto'
             if (!['chrome', 'edge', 'brave', 'auto'].includes(source)) {
-              return { ok: false, error: `invalid source "${source}" �?expected chrome|edge|brave|auto` }
+              return { ok: false, error: `invalid source "${source}" — expected chrome|edge|brave|auto` }
             }
             return await importLoginCookies(
               {
@@ -4196,18 +4196,18 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
           `console.log('${SENTINEL}' + JSON.stringify(${expr}))\n`
         // includeStableLocator makes the SDK emit `loc=css:/loc=role:/loc=href:`
         // tokens per node (SDK snapshot() wrapper default; snapshotRaw passes
-        // them through). Unlike [ref=N] �?which the native engine renumbers
+        // them through). Unlike [ref=N] — which the native engine renumbers
         // every call AND whose refMap is reset by the one-shot subprocess each
-        // bcdp_* spawn pays into �?a loc is stable ACROSS calls, so cross-call
+        // bcdp_* spawn pays into — a loc is stable ACROSS calls, so cross-call
         // targeting should prefer it. See README "稳定定位 (loc vs ref)".
         const SNAP_OPTS = 'includeStableLocator: true'
         // subtree mode: resolve the caller's root against a FRESH full snapshot,
         // because the SDK demands a numeric backendNodeId. The root may be a ref
-        // (@N) OR a stable loc (`loc=css:…` / `loc=role:…` / `loc:href:…`) �?loc
+        // (@N) OR a stable loc (`loc=css:…` / `loc=role:…` / `loc:href:…`) — loc
         // wins over ref when both are given, and loc survives a new subprocess.
         if (scope === 'subtree') {
           const rootArg = str(args.root, '').trim()
-          if (rootArg === '') return send(`{ ok: false, reason: 'bcdp_snapshot: root (a ref such as @N, or a loc=css:�? is required for scope=subtree' }`)
+          if (rootArg === '') return send(`{ ok: false, reason: 'bcdp_snapshot: root (a ref such as @N, or a loc=css:…) is required for scope=subtree' }`)
           // Resolve backendNodeId from either a loc or an @ref. The `loc` field
           // on a ref carries the value WITHOUT the `loc=` prefix; `unstable`
           // means the engine could not derive a stable selector, so skip it.
@@ -4301,7 +4301,7 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
           )
         }
         // Schema marks url required, but never silently navigate to a
-        // hard-coded example page on a non-conforming empty value �?report
+        // hard-coded example page on a non-conforming empty value — report
         // back an actionable failure instead.
         if (u === '') {
           return `console.log('${SENTINEL}' + JSON.stringify({ ok: false, reused: false, page: null, reason: 'bcdp_navigate: url is required' }))\n`
@@ -4504,7 +4504,7 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
     t({
       name: 'bcdp_page_info',
       description:
-        'Return the current page info: url, title, viewport size (w, h), scroll offsets (sx, sy), device metrics (pw, ph), and whether a native dialog is open. Also reports `humanCheck` �?whether a CAPTCHA / human-verification challenge is detected on the page (so the agent can alert the user to complete it).',
+        'Return the current page info: url, title, viewport size (w, h), scroll offsets (sx, sy), device metrics (pw, ph), and whether a native dialog is open. Also reports `humanCheck` — whether a CAPTCHA / human-verification challenge is detected on the page (so the agent can alert the user to complete it).',
       parameters: {
         space: spaceParam,
       },
@@ -4952,7 +4952,7 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
         timeout: { type: 'number', description: 'Wait timeout in ms (default 30000).' },
         space: spaceParam,
       },
-      // Lightpanda backend �?the engine never fires Page.downloadWillBegin/
+      // Lightpanda backend — the engine never fires Page.downloadWillBegin/
       // downloadProgress, so `page.waitForEvent('download')` would just hang
       // until the timeout. Fail fast with the engine-aware reason instead.
       gate: () => {
@@ -4973,7 +4973,7 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
             ? `await page.locator(${j(sel)}).click()\n`
             : script !== ''
               ? `await page.evaluate(() => { ${script} })\n`
-              : '/* no trigger given �?the download may be started by an earlier navigation */\n'
+              : '/* no trigger given — the download may be started by an earlier navigation */\n'
         const save =
           savePath !== ''
             ? `const __final = await __dl.saveAs(${j(savePath)}).catch(()=>null)\n`
@@ -5063,7 +5063,7 @@ function registerActionTools(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
         if (str(args.body, '') !== '') opts.body = str(args.body, '')
         const mode = str(args.mode, 'browser')
         // issue #1 (feature ask): let browser-mode requests carry the profile's
-        // login cookies cross-origin. Whitelisted values only �?anything else
+        // login cookies cross-origin. Whitelisted values only — anything else
         // stays exactly the pre-existing behavior (field absent = engine default).
         const cred = str(args.credentials, '')
         if (mode !== 'server' && (cred === 'include' || cred === 'omit' || cred === 'same-origin')) opts.credentials = cred
@@ -5092,7 +5092,7 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
     defineTool({
       name: 'bcdp_captcha',
       description:
-        'Check the current page for a human-verification (CAPTCHA) challenge �?reCAPTCHA / hCaptcha / Cloudflare / Turnstile �?and return { detected, kind }. If detected=true, ALERT THE USER that they must complete the verification in the \'ego lite - agent\' browser window (it is the same live session shown in the watch panel), then continue after they have.',
+        'Check the current page for a human-verification (CAPTCHA) challenge — reCAPTCHA / hCaptcha / Cloudflare / Turnstile — and return { detected, kind }. If detected=true, ALERT THE USER that they must complete the verification in the \'ego lite - agent\' browser window (it is the same live session shown in the watch panel), then continue after they have.',
       parameters: {
         space: { type: 'string', description: 'Task-space name or numeric id; defaults to the configured defaultSpace.' },
       },
@@ -5248,7 +5248,7 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
         const text = key
           ? EGO_HELP_INDEX[key]!
           : (q
-              ? `未找�?topic "${q}"。可�? ` +
+              ? `未找到 topic "${q}"。可选 ` +
                 Object.keys(EGO_HELP_INDEX)
                   .filter((k) => k !== 'overview')
                   .join(', ') +
@@ -5282,7 +5282,7 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
         // leave the frame poller observing the global/null slot.
         cfg.spaceTracker.setCurrentSession(callingSessionId(exec), resolveEffectiveLink(cfg.links, cfg.activeTargetId)?.link.id ?? '')
         const lines: string[] = []
-        // 工具注入面：每个开关的当前状态与实际注册了多少工具，一行说完�?
+        // 工具注入面：每个开关的当前状态与实际注册了多少工具，一行说完—
         {
           const s = tiers.surface()
           const key = judgeConfigured({ jevKey: cfg.jevKey, layaKey: cfg.layaKey })
@@ -5291,7 +5291,7 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
             ` browse=${cfg.toolBrowse ? 'open' : 'sealed'} extended=${cfg.toolExtended ? 'open' : 'sealed'}` +
             ` escape=${cfg.toolEscape ? 'open' : 'sealed'}` +
             ` judge=${cfg.toolJudge ? 'open' : 'sealed'} judgeKey=${key ? 'set' : 'none'}` +
-            ` active=${tiers.active() ? 'yes' : 'no'} �?live ${s.live.length} / sealed ${s.sealed.length}`,
+            ` active=${tiers.active() ? 'yes' : 'no'} — live ${s.live.length} / sealed ${s.sealed.length}`,
           )
         }
         // Automatic sources: the panel's failure mode is "nothing happens and
@@ -5340,11 +5340,11 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
         if (configured) {
           lines.push(`browser binary: ${configured} (from settings)`)
         } else {
-          lines.push(`browser binary: ${chrome || '(none found �?set chromePath in settings, or set EGO_LINUX_CHROME, or install Chrome/Edge/Brave)'}`)
+          lines.push(`browser binary: ${chrome || '(none found — set chromePath in settings, or set EGO_LINUX_CHROME, or install Chrome/Edge/Brave)'}`)
         }
         // User-configured extra CLI args (effective after filtering). ego-CLI
         // args take effect on the next bcdp_* call; Chrome args only on the next
-        // browser cold start (the browser is a singleton �?run `ego-browser
+        // browser cold start (the browser is a singleton — run `ego-browser
         // --stop` or restart DSH to relaunch).
         const cliArgs = filterArgs(cfg.runtimeArgs ?? '', EGO_CLI_BLOCKED)
         const chrArgs = filterArgs(cfg.chromeArgs ?? '', CHROME_BLOCKED)
@@ -5411,19 +5411,19 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
         if (attachNow.engine === 'lightpanda' || process.platform === 'win32') {
           lines.push(
             process.platform === 'win32'
-              ? 'lightpanda on win32: no native build �?use WSL2: `wsl --install` (admin), then inside WSL: `curl -fsSL https://pkg.lightpanda.io/install.sh | bash` + `lightpanda serve --host 127.0.0.1 --port 9222`; WSL2 maps the port to Windows localhost, then add http://127.0.0.1:9222 as a CDP endpoint. Docker alternative: `docker run -d -p 127.0.0.1:9222:9222 lightpanda/browser:nightly`.'
+              ? 'lightpanda on win32: no native build — use WSL2: `wsl --install` (admin), then inside WSL: `curl -fsSL https://pkg.lightpanda.io/install.sh | bash` + `lightpanda serve --host 127.0.0.1 --port 9222`; WSL2 maps the port to Windows localhost, then add http://127.0.0.1:9222 as a CDP endpoint. Docker alternative: `docker run -d -p 127.0.0.1:9222:9222 lightpanda/browser:nightly`.'
               : 'lightpanda (linux/macOS): `curl -fsSL https://pkg.lightpanda.io/install.sh | bash` (installs to ~/.local/bin) then `lightpanda serve --host 127.0.0.1 --port 9222`.',
           )
         }
         // ── R7: connection kinds, the local CLI, and the conflict guard ────
         const kindCount = (kind: string): number => cfg.links.filter((link) => link.kind === kind).length
         const dropped = cfg.droppedEgoCli
-        lines.push(`links: ${cfg.links.length} (cdp ${kindCount('cdp')}, ego-cli ${kindCount(EGO_CLI_KIND)}, lightpanda ${kindCount(LP_KIND)})${dropped > 0 ? ` �?${dropped} extra ego-cli row(s) dropped (local-only singleton)` : ''}`)
-        // Lightpanda backend �?managed-serve row status + the quick-trial vs
+        lines.push(`links: ${cfg.links.length} (cdp ${kindCount('cdp')}, ego-cli ${kindCount(EGO_CLI_KIND)}, lightpanda ${kindCount(LP_KIND)})${dropped > 0 ? ` — ${dropped} extra ego-cli row(s) dropped (local-only singleton)` : ''}`)
+        // Lightpanda backend — managed-serve row status + the quick-trial vs
         // headed-backstop positioning, in the doctor where confusion gets solved.
         if (kindCount(LP_KIND) > 0) {
           const lpRow = cfg.links.find((link) => link.kind === LP_KIND) as LightpandaLink | undefined
-          lines.push(`lightpanda row: servePath=${lpRow?.servePath === undefined || lpRow.servePath === '' ? '(auto: PATH �?~/.local/bin; win32 via WSL2)' : lpRow.servePath} �?headless quick-trial engine; headed kinds (CDP / local Chrome / ego CLI) are the manual-fallback backstop`)
+          lines.push(`lightpanda row: servePath=${lpRow?.servePath === undefined || lpRow.servePath === '' ? '(auto: PATH —~/.local/bin; win32 via WSL2)' : lpRow.servePath} — headless quick-trial engine; headed kinds (CDP / local Chrome / ego CLI) are the manual-fallback backstop`)
         }
         // Resolve the CLI for real (no process is spawned for resolution) so the
         // doctor reports what a call would actually launch, not what was probed.
@@ -5432,14 +5432,14 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
           const resolved = resolveCliBinary({ cliPath: cliLink.cliPath, bundled: VENDORED_EGO_BIN }, createSubprocessCliIo(ctx.subprocess))
           lines.push(resolved.ok
             ? `cli: ${resolved.path} (${resolved.origin}${attachNow.cliShape ? `, shape ${attachNow.cliShape}` : ''})`
-            : `cli: (missing) �?${resolved.message}`)
+            : `cli: (missing) — ${resolved.message}`)
         }
         const toolCount = ((EGO_HELP_INDEX['tools'] ?? '').match(/bcdp_/g) ?? []).length
         const legacy = cfg.legacyEgoToolNames === true
         lines.push(`naming: ${toolCount} bcdp_* tools; legacy ego_* aliases ${legacy ? 'ON (mutually exclusive with the old dsh-ego-browser plugin)' : 'OFF (coexists with the old dsh-ego-browser plugin)'}`)
         const upstream = findUpstreamPluginInstall()
         if (upstream !== '') {
-          lines.push(`conflict: old dsh-ego-browser installed at ${upstream} �?only one plugin should drive the local ego browser (they would share its task spaces)`)
+          lines.push(`conflict: old dsh-ego-browser installed at ${upstream} — only one plugin should drive the local ego browser (they would share its task spaces)`)
         }
         lines.push(`chromeArgs (effective, next cold start): ${chrArgs.length ? chrArgs.join(' ') : '(none)'}`)
         // state dir + runtime state
@@ -5453,7 +5453,7 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
             : `${e.XDG_STATE_HOME || `${home}/.local/state`}/ego-lite-linux`)
         lines.push(`state dir: ${stateDir} (exists: ${existsSync(stateDir)})`)
         const bjson = `${stateDir}/browser.json`
-        let browserReport = 'browser.json: (none �?agent browser not running)'
+        let browserReport = 'browser.json: (none — agent browser not running)'
         if (existsSync(bjson)) {
           try {
             const { readFile } = await import('node:fs/promises')
@@ -5500,13 +5500,13 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
       const def = defineTool({
         name: 'bcdp_script',
         description:
-          'Run an arbitrary `ego-browser nodejs` heredoc script in ONE invocation (page/…locator/browser/taskSpaces/site/fetch/cdp preloaded), and return structured {ok, stdout, stderr, result, durationMs, timedOut}. The task space is selected and a real (non-blank) tab activated for you before your script runs, so page.* works directly. Set verbatim:true runs the body with no preamble. For a single page expression use bcdp_js. On tabbit the body runs in the browser Playwright runtime: no taskSpaces/cdp()/fetch.*, verbatim refused. These scripts expose the vendored SDK (`taskSpaces`, `page.locator()`, global `cdp()`, `fetch.browser|server`) �?NOT the official docs\' `taskSpace()` / `page.click()`.',
+          'Run an arbitrary `ego-browser nodejs` heredoc script in ONE invocation (page/…locator/browser/taskSpaces/site/fetch/cdp preloaded), and return structured {ok, stdout, stderr, result, durationMs, timedOut}. The task space is selected and a real (non-blank) tab activated for you before your script runs, so page.* works directly. Set verbatim:true runs the body with no preamble. For a single page expression use bcdp_js. On tabbit the body runs in the browser Playwright runtime: no taskSpaces/cdp()/fetch.*, verbatim refused. These scripts expose the vendored SDK (`taskSpaces`, `page.locator()`, global `cdp()`, `fetch.browser|server`) — NOT the official docs\' `taskSpace()` / `page.click()`.',
         parameters: {
           script: {
             type: 'string',
             required: true,
             description:
-              'Full JS script body. You may end with console.log(JSON.stringify(payload)) �?bare or prefixed with the sentinel �?and it is returned as `result`. Without one, `output` still carries everything the script printed.',
+              'Full JS script body. You may end with console.log(JSON.stringify(payload)) — bare or prefixed with the sentinel — and it is returned as `result`. Without one, `output` still carries everything the script printed.',
           },
           timeoutMs: { type: 'integer', description: 'Per-run timeout in ms (default plugin grace).' },
           verbatim: {
@@ -5572,7 +5572,7 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
           // entry point, so it carries the same preamble every structured tool
           // does: pick the task space, then activate a real (non-blank) tab.
           // Without it a plain `page.evaluate(...)` body dies with
-          // "Task space not selected" �?which reads as a plugin failure.
+          // "Task space not selected" — which reads as a plugin failure.
           // A body that already selects its own space keeps it: useOrCreate is
           // idempotent by name, so the preamble is skipped when the script
           // mentions taskSpaces.useOrCreate itself.
@@ -5647,7 +5647,7 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
     wallMs: cfg.jevWallMs,
   })
 
-  /** Build the intent from tool args. Hints stay hints �?never selectors. */
+  /** Build the intent from tool args. Hints stay hints — never selectors. */
   const intentFrom = (args: Record<string, unknown>): IntentSpec => {
     const hints = str(args.hints, '')
     const criteria = str(args.successCriteria, '')
@@ -5757,7 +5757,7 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
           // hop is skipped instead of tried, and silence looks like a dead server.
           lines.push(
             '',
-            'laya has no key, so that hop is SKIPPED �?the chain is running on the offline rule hop alone.',
+            'laya has no key, so that hop is SKIPPED — the chain is running on the offline rule hop alone.',
             'laya-api has no anonymous branch, so a keyless call is a guaranteed 401; skipping it is deliberate.',
             '',
             'To bring laya up locally:',
@@ -5866,7 +5866,7 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
           lines.push(
             '',
             'note: this pick round was assembled WITHOUT a chapter filter, so it offers every candidate in the chunk.',
-            'During a real run the loop asks the chapter question first and then restricts the pick to that section —',
+            'During a real run the loop asks the chapter question first and then restricts the pick to that section — ',
             'which is what keeps both questions inside a stricter threshold bucket.',
           )
         }
@@ -5877,7 +5877,7 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
           lines.push(`POST       : ${assembland.url}`)
           lines.push('', '── assembled request body (exactly the three allowed keys) ──', JSON.stringify(assembland.body, null, 2))
         } else {
-          lines.push('', '(no HTTP hop configured �?only the rule hop is available)')
+          lines.push('', '(no HTTP hop configured — only the rule hop is available)')
         }
 
         if (bool(args.dryRun, true)) {
@@ -5962,7 +5962,7 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
         if (defaultAttachCache.get().engine === 'lightpanda') {
           // Lightpanda backend —知情元数据: the PNG is a TEXT-level layout
           // render (no pixel engine), so visual fidelity differs from Chrome.
-          lines.push(`engine     : lightpanda (rendering: text �?screenshot fidelity differs from Chrome)`)
+          lines.push(`engine     : lightpanda (rendering: text — screenshot fidelity differs from Chrome)`)
         }
         if (frame.image?.overBudget === true) {
           // Reported rather than hidden: a caller that set a budget must be able
@@ -5975,7 +5975,7 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
             lines.push(`${node.n}. ${node.role} "${node.name}" [${node.container}]`)
           }
         }
-        lines.push('', 'note: rects are NOT carried on this path (the AX tree has none) �?the executor re-measures before any action.')
+        lines.push('', 'note: rects are NOT carried on this path (the AX tree has none) — the executor re-measures before any action.')
         return { ok: true, text: lines.join('\n') }
       },
       presentCall: () => ({ card: 'generic', title: 'bcdp_jev_frame', kind: 'other', rawInput: null }),
@@ -6107,7 +6107,7 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
 
         const started = Date.now()
         const nav = await effects.navigate(url)
-        if (!nav.ok) return { ok: false, text: `bcdp_jev_attempt: navigation failed �?${nav.error ?? 'unknown error'}` }
+        if (!nav.ok) return { ok: false, text: `bcdp_jev_attempt: navigation failed — ${nav.error ?? 'unknown error'}` }
 
         const result = await runAttempt({ intent, effects, maxActions })
 
@@ -6116,7 +6116,7 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
           `reason     : ${result.reason}`,
           `page       : ${result.lastUrl || nav.url}`,
           `elapsed    : ${Date.now() - started}ms  candidates(last round)=${result.candidates}`,
-          `verify via : bcdp_cdp / bcdp_screenshot on targetId=${effects.frames().at(-1)?.target.targetId ?? 'unknown'} �?the receipt is a report, not a proof`,
+          `verify via : bcdp_cdp / bcdp_screenshot on targetId=${effects.frames().at(-1)?.target.targetId ?? 'unknown'} — the receipt is a report, not a proof`,
         ]
         if (effects.lastError() !== '') lines.push(`lastError  : ${effects.lastError()}`)
         lines.push('', result.actions.length === 0 ? '── actions ──  (none)' : '── actions ──')

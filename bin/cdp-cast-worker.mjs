@@ -5572,7 +5572,7 @@ async function readNodeText(call, sessionId, backendNodeId, timeoutMs) {
 		};
 		const result = await call("Runtime.callFunctionOn", {
 			objectId,
-			functionDeclaration: "function () { const cap = (s) => String(s).replace(/\\s+/g, \" \").trim().slice(0, 60);\nif (this instanceof HTMLInputElement) return cap(this.value || this.placeholder || \"\");\nif (this instanceof HTMLImageElement) return cap(this.alt || \"\");\nif (this instanceof HTMLSelectElement) return cap(this.selectedOptions && this.selectedOptions[0] ? this.selectedOptions[0].text : \"\");\nreturn cap(this.getAttribute(\"aria-label\") || this.getAttribute(\"title\") || (this.innerText ?? this.textContent) || \"\"); }",
+			functionDeclaration: "function () { const cap = (s) => String(s).replace(/\\s+/g, \" \").trim().slice(0, 60);\nif (this instanceof HTMLInputElement && String(this.type || \"\").toLowerCase() === \"password\") return this.value ? \"********\" : \"\";\nif (this instanceof HTMLInputElement) return cap(this.value || this.placeholder || \"\");\nif (this instanceof HTMLImageElement) return cap(this.alt || \"\");\nif (this instanceof HTMLSelectElement) return cap(this.selectedOptions && this.selectedOptions[0] ? this.selectedOptions[0].text : \"\");\nreturn cap(this.getAttribute(\"aria-label\") || this.getAttribute(\"title\") || (this.innerText ?? this.textContent) || \"\"); }",
 			returnByValue: true
 		}, {
 			...sessionId === void 0 ? {} : { sessionId },

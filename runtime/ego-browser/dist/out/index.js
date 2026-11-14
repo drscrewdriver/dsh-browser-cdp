@@ -2598,7 +2598,13 @@ function processNetworkEvent(kind, matcher, event, requests, timeout) {
 }
 function networkMatches(facade, matcher, kind) {
     if (typeof matcher === "string") {
-        return facade.url() === matcher;
+        // [local patch, see runtime/PATCHES.md] The documented glob form
+        // (`**/api/stories`) never matched, because strings were compared with
+        // ===. Route strings containing "*" through the same helper waitForURL
+        // uses; exact URLs keep the historical behaviour.
+        return matcher.includes("*")
+            ? globToRegExp(matcher).test(facade.url())
+            : facade.url() === matcher;
     }
     if (matcher instanceof RegExp) {
         matcher.lastIndex = 0;

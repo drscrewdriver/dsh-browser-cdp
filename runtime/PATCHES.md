@@ -19,6 +19,14 @@
 | `runtime/ego-linux/bin/ego-browser.mjs` | 显式 `EGO_LINUX_HEADLESS=1/true/yes/on` 现在优先于 `hasDisplay` 推断（含 win32）；未设置时维持原 hasDisplay 逻辑 | issue #35：此前 win32 硬编码 `hasDisplay=true` 导致显式设置的环境变量被静默忽略，与 CLI help / README 文档矛盾 |
 | `runtime/ego-linux/src/task-spaces.mjs` | `createSeededContext()` 增加 `EGO_ISOLATE_SPACES` 环境变量开关支持；未开启（默认）时返回 `null` 复用磁盘 Profile，开启时保留原作者内存沙盒隔离 | 登录态持久化与沙盒隔离双模可配：用户在设置中选择是否开启空间隔离；默认关闭时所有登录态直接落盘，跨关机重启永久保留，开启时恢复独立内存沙盒 |
 | `runtime/ego-browser/screenshot-clip.mjs` + `runtime/ego-browser/dist/out/index.js` `screenshot()` | viewport / locator 截图的 CDP clip 原点改为 `pageInfo().sx/sy`（`scrollX/scrollY`），不再固定 `{x:0,y:0}`；fullPage 仍从文档原点截整页 | CDP clip 是文档坐标且默认 `captureBeyondViewport:false`：滚动后 clip 落在未绘制区域会得到空白 PNG。与 `spaces-server.mjs` followClip 同一约定 |
+| `runtime/ego-linux/src/snapshot.mjs` | 密码框的 `inputValue` 不再输出明文：`type=password` 时 `value=********`，否则维持 `squash(...)` | 安全：语义树会进模型上下文与会话日志，浏览器 autofill 会把真凭证填进去 |
+| `runtime/ego-linux/src/chrome.mjs` | 新增 `clearSessionRestore(profileDir)`；`stopBrowser()` 在 `stopped \|\| !state` 时删除 `<profile>/Default/Sessions` | issue #67 上半：SIGTERM 被 Chrome 记为 crash，残留 session 文件会让下次冷启动静默恢复全部标签，而那些标签不属于任何 space |
+| `runtime/ego-linux/src/task-spaces.mjs` | 新增 `ORPHAN_GRACE_MS` + `selectOrphans()`；`reconcile()` 在两阶段宽限后 `Target.closeTarget` 并记入 `closedSpaces`；`EMPTY` 加 `orphans` | issue #67 下半：孤儿 target 不属于任何 space，`pruneIdle`/`pruneAbandoned`/`--prune-spaces` 三套清理都扫不到，标签只增不减 |
+| `runtime/ego-linux/src/chrome.mjs` | 新增 `killWindowsProfileOwners()`（PowerShell 按命令行过滤 chrome.exe，10s 上限）；`clearProfileLock()` 加 win32 分支（清 `lockfile`/`Singleton*`） | issue #70：Windows 不写 `SingletonLock` 只留空 `lockfile`，旧实现 `readlink` 直接 ENOENT 返回，孤儿 Chrome 永久占住 `--user-data-dir`，只能重启机器 |
+| `runtime/ego-linux/src/chrome.mjs` | 新增 `X11_LOCK_DIR` / `readXLockPid()` / `isProcessAlive()` / `displaySocketAlive()`；`displayUsable()` 改为查 lock pid；`pickFreeDisplayNumber()` 只把活 display 算占用 | issue #91：Xvfb 退出后 socket 残留，旧逻辑把死 display 当可用，冷启动白等 20s 且 display 号每次重启漂移 |
+| `runtime/ego-linux/src/shim.mjs` | `ego` 门面新增 `hideCursor()` / `showCursor()` | issue #96：用户希望在浏览器窗口里保留 agent 光标，但截图 PNG 不要出现它 |
+| `runtime/ego-linux/src/cursor.mjs` | `renderOverlay()` 开头加 `document.contentType` 守卫：非 `text/html` / `application/xhtml+xml` 不注入并清掉旧 host | JSON / 纯文本 / XML / PDF 标签页是整片密集字形，磨砂徽标叠上去被用户当“乱码” |
+| `runtime/ego-linux/src/cursor.mjs` | `#arrow` 规则去掉 `display:block`，可见性统一交给 `svg.shape{display:none}` / `.on{display:block}` | `#arrow` 是 ID 选择器，其 `display:block` 压过 `svg.shape` 的 `display:none`，切到 hand/beam 后箭头与手形重叠在同一点 |
 | （其余 runtime 文件）| 与 vendoring 时一致 | 无后续本地改动 |
 
 ## 说明

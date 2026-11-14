@@ -458,7 +458,95 @@ export async function reapOrphanedBrowsers() {
  * — a browser we can no longer drive. Since this profile is single-purpose,
  * that orphan is terminated rather than left to block every future run.
  */
+/**
+ * Terminate the processes that hold this profile on Windows.
+ *
+ * [local patch, see runtime/PATCHES.md] Issue #70. Windows has no SingletonLock
+ * symlink: it publishes an empty `<profile>\lockfile` with no pid, so the owner
+ * can only be found by its command line. Without this branch clearProfileLock
+ * was a permanent no-op on Windows and one orphan held --user-data-dir forever
+ * (only a reboot freed it).
+ *
+ * Collected first, signalled second: killing the parent mid-enumeration would
+ * shorten the list. The profile path travels as an environment variable
+ * (UTF-16 end to end) because a non-ASCII user name would not survive a round
+ * trip through the console code page. Bounded by 10 s: a hung sweep would turn
+ * "the launch times out" into "the launch never returns".
+ *
+ * @param {string} profileDir
+ * @returns {Promise<number>} how many owners were killed
+ */
+async function killWindowsProfileOwners(profileDir) {
+  const script = [
+    "$p = $env:EGO_LINUX_PROFILE_DIR;",
+    "$ids = @(Get-CimInstance Win32_Process |",
+    "Where-Object { $_.Name -eq 'chrome.exe' -and $_.CommandLine -and $_.CommandLine.Contains($p) } |",
+    "Select-Object -ExpandProperty ProcessId);",
+    "$ids | ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue };",
+    "$ids -join ','",
+  ].join(" ");
+
+  const stdout = await new Promise((resolve) => {
+    let settled = false;
+    let child = null;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(value);
+    };
+    const timer = setTimeout(() => {
+      try {
+        child?.kill();
+      } catch {
+        // already gone
+      }
+      finish("");
+    }, 10000);
+    try {
+      child = spawn(
+        "powershell.exe",
+        ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
+        {
+          stdio: ["ignore", "pipe", "ignore"],
+          windowsHide: true,
+          env: { ...process.env, EGO_LINUX_PROFILE_DIR: profileDir },
+        },
+      );
+    } catch {
+      finish(""); // a failed sweep must not fail the launch it exists to unblock
+      return;
+    }
+    let out = "";
+    child.stdout.on("data", (chunk) => {
+      out += chunk;
+    });
+    child.on("error", () => finish(""));
+    child.on("close", () => finish(out));
+  });
+
+  const pids = String(stdout)
+    .trim()
+    .split(",")
+    .map((value) => Number(value.trim()))
+    .filter((value) => Number.isInteger(value) && value > 0);
+  if (pids.length === 0) return 0;
+  // TerminateProcess returns before the target is gone; the profile lock is
+  // released a beat later, and launching into a held lock is what fails.
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  return pids.length;
+}
+
 async function clearProfileLock(profileDir) {
+  if (process.platform === "win32") {
+    const killed = await killWindowsProfileOwners(profileDir);
+    await Promise.all(
+      ["lockfile", "SingletonLock", "SingletonSocket", "SingletonCookie"].map((name) =>
+        rm(join(profileDir, name), { force: true }),
+      ),
+    );
+    return killed > 0;
+  }
   const lock = join(profileDir, "SingletonLock");
   let target;
   try {
@@ -496,23 +584,58 @@ async function clearProfileLock(profileDir) {
 // never touched.
 
 const X11_UNIX_DIR = "/tmp/.X11-unix";
+// [local patch, see runtime/PATCHES.md] Issue #91: X leaves `/tmp/.Xn-lock`
+// behind after the server dies, so the socket alone is not proof of a live
+// display. Reusing a dead one costs a 20 s cold-start timeout, and counting it
+// as "taken" drifts the display number on every restart.
+const X11_LOCK_DIR = "/tmp";
+
+/** Read the pid recorded in `.Xn-lock`; null when unreadable or implausible. */
+async function readXLockPid(num, lockDir = X11_LOCK_DIR) {
+  try {
+    const raw = await readFile(join(lockDir, `.X${num}-lock`), "utf8");
+    const pid = Number(raw.trim().split(/\s+/)[0]);
+    return Number.isInteger(pid) && pid > 0 ? pid : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Is a pid still alive? `kill(pid, 0)` does not send a signal. */
+function isProcessAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    // EPERM means the process exists but belongs to another user.
+    return error?.code === "EPERM";
+  }
+}
+
+/** A local X socket is only usable when its lock pid is alive (or no lock). */
+async function displaySocketAlive(num, x11Dir = X11_UNIX_DIR, lockDir = X11_LOCK_DIR) {
+  if (!(await exists(join(x11Dir, `X${num}`)))) return false;
+  const pid = await readXLockPid(num, lockDir);
+  if (pid === null) return true;
+  return isProcessAlive(pid);
+}
 
 /**
  * Does this $DISPLAY value name a usable X server right now?
  *
  * The env var is the primary signal, but a set-but-stale value (a dead
  * session, a wiped /tmp) would read as "X is here" when it is not — so a
- * local display must also have its socket file present. A display with a
- * host part names a *remote* X server whose socket is not local; trust it
- * as-is instead of shadowing it with a local Xvfb.
+ * local display must also have its socket file present AND a live lock pid.
+ * A display with a host part names a *remote* X server whose socket is not
+ * local; trust it as-is instead of shadowing it with a local Xvfb.
  */
-async function displayUsable(display) {
+async function displayUsable(display, x11Dir = X11_UNIX_DIR, lockDir = X11_LOCK_DIR) {
   if (typeof display !== "string" || display === "") return false;
   const [host, numPart] = display.split(":");
   const num = Number((numPart ?? "").split(".")[0]);
   if (!Number.isInteger(num)) return false;
   if (host) return true;
-  return exists(join(X11_UNIX_DIR, `X${num}`));
+  return await displaySocketAlive(num, x11Dir, lockDir);
 }
 
 /**
@@ -560,14 +683,18 @@ async function findLiveXvfbDisplay() {
   return null;
 }
 
-/** Pick a display number whose socket does not exist yet. */
-async function pickFreeDisplayNumber() {
+/** Pick a display number whose socket is not live yet. */
+async function pickFreeDisplayNumber(x11Dir = X11_UNIX_DIR, lockDir = X11_LOCK_DIR) {
   const taken = new Set();
   try {
-    const sockets = await readdir(X11_UNIX_DIR);
+    const sockets = await readdir(x11Dir);
     for (const socket of sockets) {
       const match = socket.match(/^X(\d+)$/);
-      if (match) taken.add(Number(match[1]));
+      if (!match) continue;
+      const num = Number(match[1]);
+      // A leftover socket from a dead X server is not "taken" (#91); counting
+      // it would drift new displays to a fresh number on every restart.
+      if (await displaySocketAlive(num, x11Dir, lockDir)) taken.add(num);
     }
   } catch {
     // no X runtime dir yet — nothing taken
@@ -916,7 +1043,23 @@ export async function stopBrowser() {
   // block the next launch. After a graceful close there is nothing left to
   // clear, and this is a no-op.
   await clearProfileLock(PROFILE_DIR);
+  // Issue #67: a SIGTERMed Chrome records the stop as a crash and leaves
+  // Default/Sessions behind, so the next cold start quietly reopens every tab.
+  // Those tabs belong to no space, so pruneIdle / pruneAbandoned /
+  // --prune-spaces cannot see them. Logins live in Network/Cookies: dropping
+  // this only loses tab-restore data. Skip it when the browser refused to die,
+  // or the tabs still on screen would vanish on the next start.
+  if (stopped || !state) await clearSessionRestore(PROFILE_DIR);
   return stopped;
+}
+
+/**
+ * Drop Chrome's session-restore snapshot.
+ *
+ * @param {string} profileDir
+ */
+export async function clearSessionRestore(profileDir) {
+  await rm(join(profileDir, "Default", "Sessions"), { recursive: true, force: true });
 }
 
 export async function browserStatus() {

@@ -149,6 +149,10 @@ export async function readNodeText(
     }
     const functionDeclaration =
       'function () { const cap = (s) => String(s).replace(/\\s+/g, " ").trim().slice(0, 60);\n' +
+      // [local patch] A password field's value must never reach the model or the
+      // session log: report presence, not content. Mirrors the snapshot guard in
+      // runtime/ego-linux/src/snapshot.mjs (see runtime/PATCHES.md).
+      'if (this instanceof HTMLInputElement && String(this.type || "").toLowerCase() === "password") return this.value ? "********" : "";\n' +
       'if (this instanceof HTMLInputElement) return cap(this.value || this.placeholder || "");\n' +
       'if (this instanceof HTMLImageElement) return cap(this.alt || "");\n' +
       'if (this instanceof HTMLSelectElement) return cap(this.selectedOptions && this.selectedOptions[0] ? this.selectedOptions[0].text : "");\n' +

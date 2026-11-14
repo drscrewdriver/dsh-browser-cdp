@@ -30,7 +30,7 @@ import { STATE_DIR, TASK_SPACE_FILE } from "./paths.mjs";
  * Each heredoc is a fresh Node process, so state lives in a file, not memory.
  */
 
-const EMPTY = { spaces: [], selectedId: null, nextId: 1, closedSpaces: [] };
+const EMPTY = { spaces: [], selectedId: null, nextId: 1, closedSpaces: [], orphans: {} };
 
 /**
  * How many idle-closed spaces to remember.
@@ -39,6 +39,49 @@ const EMPTY = { spaces: [], selectedId: null, nextId: 1, closedSpaces: [] };
  * enough that the state file cannot grow without bound.
  */
 const REMEMBERED_CLOSURES = 20;
+
+/**
+ * How long a page target must stay unclaimed before it is treated as an orphan.
+ */
+const ORPHAN_GRACE_MS = 120000;
+
+/**
+ * Which live page targets belong to no space.
+ *
+ * [local patch, see runtime/PATCHES.md] Issue #67 (reconcile half).
+ *
+ * Two-phase deliberately: a target seen orphaned once is remembered in
+ * `seenAt`, and only closed once it has STAYED orphaned past a grace period.
+ * The grace covers the window between a tool creating a tab and registering it
+ * in a space, and the window where a person opened a tab by hand to take a look
+ * at something. Blank and chrome:// targets are never candidates — a tab is
+ * about:blank for a moment on every navigation.
+ *
+ * @param {Map<string, {url?: string}>} live
+ * @param {Array<{targetIds?: string[]}>} spaces
+ * @param {Record<string, number>} seenAt
+ * @param {number} now
+ * @param {number} graceMs
+ * @returns {{orphans: string[], next: Record<string, number>}}
+ */
+export function selectOrphans(live, spaces, seenAt, now, graceMs) {
+  const claimed = new Set();
+  for (const space of spaces) {
+    for (const id of space.targetIds || []) claimed.add(id);
+  }
+  const orphans = [];
+  const next = {};
+  for (const [targetId, target] of live) {
+    if (claimed.has(targetId)) continue;
+    const url = target && typeof target.url === "string" ? target.url : "";
+    if (url === "" || url === "about:blank") continue;
+    if (url.startsWith("chrome://") || url.startsWith("devtools://")) continue;
+    const firstSeen = typeof seenAt[targetId] === "number" ? seenAt[targetId] : now;
+    next[targetId] = firstSeen;
+    if (now - firstSeen >= graceMs) orphans.push(targetId);
+  }
+  return { orphans, next };
+}
 
 export function createTaskSpacesApi(cdp) {
   /**
@@ -292,6 +335,40 @@ export function createTaskSpacesApi(cdp) {
     if (readoptRestoredPages(state, live)) changed = true;
     if (await pruneAbandoned(state, live)) changed = true;
     if (await pruneIdle(state)) changed = true;
+
+    // [local patch, see runtime/PATCHES.md] Issue #67 (reconcile half): a page
+    // target claimed by no space — the residue of a crash-restore or a tab a
+    // human opened by hand — never leaves on its own, because pruneIdle /
+    // pruneAbandoned / --prune-spaces only walk state.spaces.
+    const orphanNow = Date.now();
+    const orphanPlan = selectOrphans(
+      live,
+      state.spaces,
+      state.orphans || {},
+      orphanNow,
+      ORPHAN_GRACE_MS,
+    );
+    if (orphanPlan.orphans.length > 0) {
+      const urls = orphanPlan.orphans.map((id) => live.get(id)?.url).filter(Boolean);
+      for (const id of orphanPlan.orphans) {
+        await cdp.call("Target.closeTarget", { targetId: id }).catch(() => {});
+      }
+      const closures = state.closedSpaces || [];
+      closures.unshift({
+        name: "(orphan tab)",
+        urls,
+        closedAt: orphanNow,
+        idleMinutes: 0,
+      });
+      state.closedSpaces = closures.slice(0, REMEMBERED_CLOSURES);
+      changed = true;
+    }
+    const nextOrphans = { ...orphanPlan.next };
+    for (const id of orphanPlan.orphans) delete nextOrphans[id];
+    if (JSON.stringify(nextOrphans) !== JSON.stringify(state.orphans || {})) {
+      state.orphans = nextOrphans;
+      changed = true;
+    }
 
     const surviving = state.spaces.filter((space) => space.targetIds.length > 0);
     if (surviving.length !== state.spaces.length) {

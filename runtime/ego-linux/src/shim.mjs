@@ -127,6 +127,11 @@ export async function createEgoShim({ headless = false } = {}) {
     // so this reads as `await ego.highlight("free shipping")`.
     highlight: (target, options) => cursor.highlight(target, options),
     clearHighlight: () => cursor.clearHighlight(),
+    // [local patch, see runtime/PATCHES.md] Issue #96: keep the agent cursor on
+    // screen but out of the screenshot PNG. The harness calls these around
+    // captureScreenshot when the caller wants a clean image.
+    hideCursor: () => cursor.hide(),
+    showCursor: () => cursor.show(),
 
     // --- App-lifecycle: no-ops on Linux -------------------------------------
     async getBrowserVersion() {

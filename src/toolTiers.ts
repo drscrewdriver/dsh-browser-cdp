@@ -236,8 +236,9 @@ export function tierAllowed(tier: ToolTier, p: TierPolicy): boolean {
  *
  * 除分级闸外还叠一条 kind 闸：该通道根本翻译不了的工具不进注入面——「注入了
  * 但一调就报错」比「不在列表里」更糟（模型会反复重试，错误文案还污染上下文）。
- * `core` 级不参与：`bcdp_status` 是 lazy 下唯一的解锁入口，也是解释「工具为何
- * 不在」的唯一渠道。
+ * `core` 级不参与：`bcdp_help` 是 lazy 下唯一的常驻解锁入口，也是解释「工具为何
+ * 不在」的唯一渠道。（`bcdp_status` 自 1.10.0 起降入 act 批——它要探通道，tabbit
+ * 线还会跑 diagnose，不适合当入口。）
  */
 export const toolAllowed = (name: string, p: TierPolicy): boolean => {
   const tier = tierOfTool(name)

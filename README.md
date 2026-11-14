@@ -30,7 +30,7 @@
 | **dsh-better-sidebar** | `0.12.2`（可选） | `≥ 0.17.1` | 未安装时自动回退浮动观察球；`< 0.12.2` 可运行但外部链接拦截（`urlTarget`）静默降级 |
 | **Node.js** | `22` | — | harness 环境自带 |
 
-**DSH 全版本适配说明**：本版本（**1.2.1 起**；1.2.2 起追加 0.2.1-rc.2，1.7.10/1.7.11 起追加 0.2.2-rc.1）面向 DSH `0.1.7-rc.1 ~ 0.2.2-rc.1`（精确枚举 10 个 rc）：相对 0.1.7 线（v0.17.x）**零代码改动**，纯依赖/元数据换代——0.2.0 宿主对插件 API 向后兼容，本插件经 `ctx.get('conversation').input` 门面投递选区（不调 `submit()`、不 override），不在 0.2.0 变更影响面内。声明式设置面自 0.1.7 引入：插件不再注册任何设置节（`ctx.settings` 注册类 API 已被宿主删除），改为在 Config schema 上以 `.volatile()` 标记可配置字段，由宿主设置页自动生成表单；volatile 字段变更通过 `loader/volatile-update` 事件热生效，无需重载插件。核心宿主 API（`defineTool`、`ctx.tools.register`、`ctx.subprocess.spawn`、`ctx.webServer.register`、`ctx.inject`、`ModuleLoader` CJS factory、`cordis.patch.yml`）沿用 0.1.2 以来形态。DSH `0.1.2-rc.1` ~ `0.1.5-rc.3` 请使用 **0.17.x** 版本线。
+**DSH 全版本适配说明**：本版本（**1.2.1 起**；1.2.2 起追加 0.2.1-rc.2，1.7.10/1.7.11 起追加 0.2.2-rc.1）面向 DSH `>=0.1.0-rc.2 <0.3.0-0`（有界区间，声明面唯一串）：相对 0.1.7 线（v0.17.x）**零代码改动**，纯依赖/元数据换代——0.2.0 宿主对插件 API 向后兼容，本插件经 `ctx.get('conversation').input` 门面投递选区（不调 `submit()`、不 override），不在 0.2.0 变更影响面内。声明式设置面自 0.1.7 引入：插件不再注册任何设置节（`ctx.settings` 注册类 API 已被宿主删除），改为在 Config schema 上以 `.volatile()` 标记可配置字段，由宿主设置页自动生成表单；volatile 字段变更通过 `loader/volatile-update` 事件热生效，无需重载插件。核心宿主 API（`defineTool`、`ctx.tools.register`、`ctx.subprocess.spawn`、`ctx.webServer.register`、`ctx.inject`、`ModuleLoader` CJS factory、`cordis.patch.yml`）沿用 0.1.2 以来形态。DSH `0.1.2-rc.1` ~ `0.1.5-rc.3` 请使用 **0.17.x** 版本线。
 
 **dsh-better-sidebar 适配说明**：本插件通过 `ctx.betterSidebar` 服务（try-catch 防御性获取）注册侧边栏 Tab 并监听外部链接。关键 API 引入版本：
 
@@ -460,4 +460,19 @@ pnpm run build   # tsdown 三 bundle：lib/index.js + lib/client.js + bin/cdp-ca
 
 同为 DeepSeek Harness 插件生态的作品，互相安利：
 
+## TUI 终端面（dsh-tui）
 
+dsh-tui 不加载插件的 client 半边（面板/卡片/设置页），也调不到插件自有 RPC；工具调用只显示一行摘要。人可读、人可操作的面只剩宿主斜杠命令。输出约定：单行 ≤100 字符、总行 ≤40、无 ANSI、两空格对齐；写操作默认 dry、加 `--yes` 才执行；`--json` 输出单行 JSON。
+
+| 命令 | 作用 |
+|---|---|
+| `/bcdp status` | 通道状态、工具面 live/sealed、帧轮询（读缓存，不 spawn） |
+| `/bcdp tabs` | 已开标签页（复用 `bcdp_tab op=list`） |
+| `/bcdp shot [path]` | 截图落盘，默认 `<cwd>/.dsh-tui/shots/<ts>.png` |
+| `/bcdp nav <url>` | 打开页面（复用 `bcdp_navigate`） |
+| `/bcdp attach <id>` | 切换已有连接项（默认 dry，`--yes` 写 activeTargetId） |
+| `/bcdp config` | 注入面开关与当前空间 |
+| `/bcdp link` | 已配置链路与激活项 |
+| `/bcdp doctor` | 静态体检（attach / cli / 工具面 / 帧轮询） |
+
+命令由插件自己在宿主侧注册（`ctx.inject(['commands'], …)`）：命令服务缺席的老宿主线上不激活、不报错。

@@ -41,6 +41,7 @@ import { buildEgoNavigateScript, buildEgoSwitchTabScript, buildEgoWindowSizeScri
 import { buildEgoAxScript, buildTabbitAxSnippet, composeFallbackReport, parseAxSentinel, type FallbackAxSnapshot } from './cast/fallback-tab-report.ts'
 import type { TabAnchorReport } from './tab-report.ts'
 import { registerEgoBrowserGateway } from './gateway.ts'
+import { registerBcdpCommand, type BcdpCommandDeps } from './tui-command.ts'
 import { EGO_HELP_INDEX } from './help.ts'
 import { HUMAN_CHECK_PROBE } from './captcha.ts'
 import { Config as ConfigSchema, resolveConfig, judgeSettingsOf, EGO_CLI_BLOCKED, CHROME_BLOCKED, filterArgs, DEFAULT_SPACE, AUTO_SPACE_SENTINEL } from './config.ts'
@@ -2693,7 +2694,11 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
     active: () => browserActive,
     surface: () => tiers.surface(),
   }
+  // 已注册工具的句柄表：`/bcdp tabs|shot` 复用同一实现（同一 buildScript / ego 锁），
+  // 不另写探测脚本，也不经过模型工具面。
+  const toolHandles = new Map<string, ToolHandle>()
   const reg = (tool: ToolHandle): void => {
+    toolHandles.set(tool.name, tool)
     tiers.offer(tool)
     // T8.5: optional ego_* aliases for scripts written before the bcdp_*
     // rename. Off by default; the old names collide with the upstream
@@ -2733,6 +2738,73 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
       ` judgeConfigured=${judgeConfigured({ jevKey: cfg.jevKey, layaKey: cfg.layaKey })})`,
     )
   }
+  // ── dsh-tui 终端面：`/bcdp` ──────────────────────────────────────────
+  // dsh-tui 不加载 client 半边（watch 面板/侧栏不执行）也调不到插件 RPC，
+  // 人要看“通道通不通/工具面开多少/帧有没有在走”只剩宿主命令这一条路。
+  // 命令层只读缓存（attach / tier surface / 帧轮询），不 spawn、不抢 ego 锁。
+  try {
+    const injectable = (ctx as unknown as {
+      inject?: (deps: string[], callback: (forked: EgoContext) => void) => unknown
+    }).inject
+    if (typeof injectable === 'function') {
+      const commandDeps: BcdpCommandDeps = {
+        attach: () => effectiveChannel(cfg).attach,
+        link: () => resolveEffectiveLink(cfg.links, cfg.activeTargetId)?.link ?? null,
+        links: () => (cfg.links ?? []).map((entry) => ({
+          id: entry.id,
+          kind: (entry as { kind?: string }).kind ?? 'unknown',
+          active: entry.id === cfg.activeTargetId,
+        })),
+        surface: () => tierView.surface(),
+        config: () => ({
+          egoBin: String(cfg.egoBin ?? ''),
+          toolInjection: cfg.toolInjection,
+          activeSpace: String(cfg.activeSpace ?? ''),
+          toolBrowse: cfg.toolBrowse,
+          toolExtended: cfg.toolExtended,
+          toolEscape: cfg.toolEscape,
+          toolJudge: cfg.toolJudge,
+          judgeConfigured: judgeConfigured({ jevKey: cfg.jevKey, layaKey: cfg.layaKey }),
+        }),
+        poll: getCliPollStatus,
+        watch: getWatchCounters,
+        runTool: async (name, args) => {
+          const handle = toolHandles.get(name)
+          if (!handle) throw new Error(`tool ${name} 未注册（可能被分级注入封印）`)
+          return await handle.execute(args, {
+            callId: `cmd-${name}-${Date.now()}`,
+            name,
+            arguments: args,
+            signal: new AbortController().signal,
+          } as never)
+        },
+        // 切换激活连接项：dry 直接成功（命令层已回 dry 文案）；--yes 才写设置节。
+        setActiveTarget: async (targetId, dry) => {
+          if (dry) return { ok: true }
+          const settings = (ctx as unknown as { get?: (name: string) => unknown }).get?.('settings') as
+            | { describe?: () => unknown; update?: (ns: string, patch: unknown, revision: number) => unknown }
+            | undefined
+          if (typeof settings?.update !== 'function') return { ok: false, reason: '宿主不提供 settings.update' }
+          let raw: unknown = []
+          try { raw = settings.describe?.() ?? [] } catch { raw = [] }
+          const list = Array.isArray(raw) ? raw : ((raw as { namespaces?: unknown[] } | null)?.namespaces ?? [])
+          const hit = (list as Array<{ ns?: string; revision?: number }>).find((entry) => entry.ns === 'dsh-browser-cdp')
+          if (hit === undefined) return { ok: false, reason: '设置节 dsh-browser-cdp 不在 profile 文档里' }
+          await settings.update('dsh-browser-cdp', { activeTargetId: targetId }, hit.revision ?? 0)
+          // 切完立即重探一次通道，让下一次 /bcdp status 看到新链路。
+          await cfg.refreshAttach?.()
+          return { ok: true }
+        },
+      }
+      // 老线没有 commands 服务时 lint 子纤维不激活，不抛错（与 plan-mode 同式）。
+      injectable.call(ctx, ['commands'], (commandCtx: EgoContext) => {
+        registerBcdpCommand(commandCtx, commandDeps)
+      })
+    }
+  } catch (error) {
+    ctx.logger?.warn?.(`dsh-browser-cdp: /bcdp command unavailable: ${(error as Error).message}`)
+  }
+
   // 设置页翻 toolInjection / toolBrowse / toolExtended / toolEscape / toolJudge — volatile 热更 —当场重算注入—  // （与 prime-memory — applyToolSeals 同式：不需要重启插件）—
 bridge.onChange(() => tiers.reapply())
 

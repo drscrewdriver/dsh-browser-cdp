@@ -6,9 +6,11 @@
 // 前」收成一处策略，注册时机交给 index.ts 的控制器执行。
 //
 // 八批（见 ego-browser-cdp-issues.md §9.2）：
-//   core     常驻：只留 bcdp_status —— 它是 lazy 模式唯一的解锁入口（调用即置活动并
+//   core     常驻：只留 bcdp_help —— 它是 lazy 模式唯一的解锁入口（调用即置活动并
 //            推进批次）。永不封印、也不给开关：把它封了，模型在「工具不在列表」时
-//            就连自救入口都没有。诊断/指南/空间/导航/读页面已移入 act / observe 批。
+//            就连自救入口都没有。选它而不是 bcdp_status 的理由：help 是纯本地查表、
+//            零副作用；status 要探通道（tabbit 线会跑 diagnose 并给浏览器启动留时间），
+//            让“看文档”变成“开浏览器”。探测/预检已移入 act 批。
 //   act      动手：click / fill / key / select / check / hover / scroll / drag / tab。
 //   observe  看结果：screenshot / page_info / read_element / js。
 //   wait     等待：wait / wait_for_selector / wait_for_url / wait_for_response / wait_page。
@@ -22,7 +24,7 @@
 //
 // escape 仍独立成批，但「不吃活动闸」的豁免已移除：
 //   它单独占 ≈1,620 字符/轮（比收窄后的常驻面还大三倍），而 lazy 下模型只要先调
-//   一次 bcdp_status 就能拿到它——牺牲的不是逃生能力，只是「冷启动直接写脚本」这一步。
+//   一次 bcdp_help 就能拿到它——牺牲的不是逃生能力，只是「冷启动直接写脚本」这一步。
 //   保留独立开关（toolEscape）是为了让用户仍能显式把它要回来。
 //   cli 与 script 原是同一 heredoc 运行时的两种返回形态（script 多 duration/
 //   timedOut），1.5.0 已合并为单个 bcdp_script：verbatim:true 走裸 heredoc，
@@ -43,7 +45,7 @@ export type ToolTier = 'core' | 'act' | 'observe' | 'wait' | 'power' | 'session'
 import { kindSupportsTool, type BackendKind } from './toolKinds.ts'
 
 const CORE = [
-  'bcdp_status',
+  'bcdp_help',
 ] as const
 const ACT = [
   'bcdp_space',
@@ -57,7 +59,7 @@ const ACT = [
   'bcdp_check',
   'bcdp_drag',
   'bcdp_tab',
-  'bcdp_help',
+  'bcdp_status',
   'bcdp_doctor',
 ] as const
 const OBSERVE = [
@@ -207,7 +209,7 @@ export const tierOpen = (tier: ToolTier, p: TierPolicy): boolean => {
  * ③ 活动闸：`lazy` 下非 core 级要等活动，`always` 下不设时机闸；
  * ④ 批次闸：只在 act/observe/wait 三批上按 batchDepth 递增放行。
  *
- * depth=0 时连 act 也被封，所以唯一常驻的 `bcdp_status` 必须既置 active 又推进
+ * depth=0 时连 act 也被封，所以唯一常驻的 `bcdp_help` 必须既置 active 又推进
  * depth，否则 lazy 模式下没有任何解锁路径（决策与收益见
  * `.agents/plans/bcdp-core-narrowing/`）。
  *

@@ -13,14 +13,14 @@
 [![dshfind](https://dshfind.com/api/badge/drscrewdriver/dsh-browser-cdp?lang=zh)](https://dshfind.com/zh/plugins/drscrewdriver/dsh-browser-cdp?ref=badge) 
 [![dsh.so risk](https://cdn.dsh.so/badge/dsh-browser-cdp.svg)](https://www.dsh.so/artifact/dsh-browser-cdp/?ref=badge)
 [![dsh.so install · dsh 0.2.1-rc.2](https://cdn.dsh.so/badge/install/dsh-browser-cdp@0.2.1-rc.2.svg)](https://www.dsh.so/artifact/dsh-browser-cdp/?ref=badge-install)
-> 看得见的 Agent 浏览器（CDP 接入），同时驱动 egolite / Tabbit / Chrome / Edge / Brave / Lightpanda。常驻只有 `bcdp_status`（401 字符），其余 34 个 `bcdp_*` 工具按活动批次解锁——不碰浏览器的会话不缴 schema token 税（实测 −91.9%）。实时观察窗支持直接点击/滚动/中文输入，点选元素以 `@"picks/*.json"` 引用投进输入框，人机验证提醒；非 CDP 通道（ego CLI / Tabbit CLI）以 3s 轮询同步画面。宿主 `>=0.1.7-rc.1 <0.3.0-0`（窗口 era，production）；下行 `0.1.0-rc.2 ~ 0.1.5-rc.3` 走命令式 installSection / 模块级注册 + describe/mutate 桥与 gen-1 齿轮（experimental，待逐线 farm 实测）。
+> 看得见的 Agent 浏览器（CDP 接入），同时驱动 egolite / Tabbit / Chrome / Edge / Brave / Lightpanda。常驻只有 `bcdp_help`（504 字符，零副作用入口 + 运行态查询），其余 34 个 `bcdp_*` 工具按活动批次解锁——不碰浏览器的会话不缴 schema token 税（相对全量实测 −98.1%；相对 1.5.0 的 4,978 字符基线为 −89.9%）。实时观察窗支持直接点击/滚动/中文输入，点选元素以 `@"picks/*.json"` 引用投进输入框，人机验证提醒；非 CDP 通道（ego CLI / Tabbit CLI）以 3s 轮询同步画面。宿主 `>=0.1.7-rc.1 <0.3.0-0`（窗口 era，production）；下行 `0.1.0-rc.2 ~ 0.1.5-rc.3` 走命令式 installSection / 模块级注册 + describe/mutate 桥与 gen-1 齿轮（experimental，待逐线 farm 实测）。
 >
-> Visible agent browser for DSH over CDP, also driving egolite / Tabbit / Chrome / Edge / Brave / Lightpanda. Only `bcdp_status` stays resident (401 chars); the other 34 context-optimized `bcdp_*` tools unlock per activity batch, so non-browser sessions pay no schema tax (−91.9% measured). Realtime watch panel with direct click/scroll/IME, element picks quoted into the composer as `@"picks/*.json"`, human-verification notices; non-CDP channels (ego CLI / Tabbit CLI) sync frames by 3s polling. Host `>=0.1.7-rc.1 <0.3.0-0` (window era, production); the down-line `0.1.0-rc.2 ~ 0.1.5-rc.3` uses imperative installSection / module-level registration + describe/mutate bridge and a Gen-1 gear (experimental, pending per-line farm).
+> Visible agent browser for DSH over CDP, also driving egolite / Tabbit / Chrome / Edge / Brave / Lightpanda. Only `bcdp_help` stays resident (504 chars, a zero-side-effect entry that also reports live state); the other 34 context-optimized `bcdp_*` tools unlock per activity batch, so non-browser sessions pay no schema tax (−98.1% vs the full surface; −89.9% vs the 1.5.0 4,978-char baseline). Realtime watch panel with direct click/scroll/IME, element picks quoted into the composer as `@"picks/*.json"`, human-verification notices; non-CDP channels (ego CLI / Tabbit CLI) sync frames by 3s polling. Host `>=0.1.7-rc.1 <0.3.0-0` (window era, production); the down-line `0.1.0-rc.2 ~ 0.1.5-rc.3` uses imperative installSection / module-level registration + describe/mutate bridge and a Gen-1 gear (experimental, pending per-line farm).
 
 [简体中文](README.md) | [Français](README.fr.md) | [Deutsch](README.de.md) | [Italiano](README.it.md) | [Русский](README.ru.md) | [Español](README.es.md)
 
 
-> **仓库**：`github.com/drscrewdriver/dsh-browser-cdp`｜当前版本 **v1.9.16**｜版本历史见 [CHANGELOG.md](CHANGELOG.md)｜详情页：[dshfind](https://dshfind.com/zh/plugins/drscrewdriver/dsh-browser-cdp)
+> **仓库**：`github.com/drscrewdriver/dsh-browser-cdp`｜当前版本 **v1.10.0**｜版本历史见 [CHANGELOG.md](CHANGELOG.md)｜详情页：[dshfind](https://dshfind.com/zh/plugins/drscrewdriver/dsh-browser-cdp)
 
 ### 版本兼容矩阵
 
@@ -273,23 +273,23 @@ wait / space / escape 三族已按 `op` 合并，旧工具名**移除**（不保
 
 ## 工具注入分级（懒注册 / 分级 / 锁定）
 
-34 个工具全量注册时，**每个会话每一轮**都要为它们的 schema 付费（挂载级实测 `description` + `parameters` 序列化 = **24,631 字符** ≈ 7.1K token，1.7.0；1.5.0 曾测为 22,224，增量主要来自分级文档与工具描述互斥引导）。而不碰浏览器的会话一个也用不上。插件因此把「谁能出现在模型面前」收成一处策略（`src/toolTiers.ts`），分**八批**注入。
+34 个非核心工具全量注册时，**每个会话每一轮**都要为它们的 schema 付费（挂载级实测 `description` + `parameters` 序列化 = **25,933 字符** ≈ 7.4K token，1.10.0；1.7.0 曾测为 24,631）。而不碰浏览器的会话一个也用不上。插件因此把「谁能出现在模型面前」收成一处策略（`src/toolTiers.ts`），分**八批**注入。
 
 > **8 批 ≠ 8 个开关**。批次是*注入时机*，开关是*用户面*（§9.3「开关与批次解耦」）。当前 4 个开关管 8 批：`toolBrowse` 管 act+observe+wait 三批并按波次放行，`toolExtended` 管 power+session，`toolEscape`、`toolJudge` 各管一批。所以「`toolBrowse` = 19 个」指的是**并集上限**，实际第一波只放 13 个。
 
 | 批次 | 成员 | schema | 何时出现 |
 |---|---|---:|---|
-| **core** 常驻（1） | `bcdp_status` | 401 | 永远在场，不可封印——它是 lazy 唯一的解锁入口 |
-| **act** 动手（13） | space / navigate / click / fill / key / hover / scroll / select / check / drag / tab / help / doctor | 8,762 | `lazy` 下首次活动放第一波 |
-| **observe** 观察（5） | screenshot / page_info / read_element / js / snapshot | 3,109 | 第二次活动 |
+| **core** 常驻（1） | `bcdp_help` | 504 | 永远在场，不可封印——它是 lazy 唯一的解锁入口与运行态查询（后端 / space / 已解锁批次），零副作用 |
+| **act** 动手（13） | space / navigate / click / fill / key / hover / scroll / select / check / drag / tab / status / doctor | 8,652 | `lazy` 下首次活动放第一波（status 探测/连接也在这里） |
+| **observe** 观察（5） | screenshot / page_info / read_element / js / snapshot | 3,278 | 第二次活动 |
 | **wait** 等待（1） | `bcdp_wait`（duration / selector / url / response / load / function / request / event） | 1,976 | 第三次活动 |
 | **power** 重量级（5） | raw CDP / http / upload / download / dialog | 3,692 | 首次活动（同 `toolExtended`） |
-| **session** 登录态（3） | captcha / auth_flush / login_import | 1,864 | 首次活动（同 `toolExtended`） |
-| **escape** 逃生舱（1） | `bcdp_script`（`verbatim:true` = 原 cli 的裸 heredoc） | 1,484 | 首次活动（1.7.0 起不再吃活动闸豁免，见下） |
+| **session** 登录态（4） | captcha / wait_for_human / auth_flush / login_import | 3,001 | 首次活动（同 `toolExtended`） |
+| **escape** 逃生舱（1） | `bcdp_script`（`verbatim:true` = 原 cli 的裸 heredoc） | 1,487 | 首次活动（1.7.0 起不再吃活动闸豁免，见下） |
 | **judge** 评审链（5） | `bcdp_jev_*` | 3,343 | 除解锁外，**还要求配了 JEV 或 Laya Key** |
-| **合计** | 34 | **24,631** | — |
+| **合计** | 35 | **25,933** | — |
 
-> 表内 schema 与合计均为 1.7.0 **挂载级实测**（`tests/tier-mount.test.ts` 的度量用例打印），八批求和 = 24,631 与全量档逐字对齐。
+> 表内 schema 与合计均为 1.10.0 **挂载级实测**（`tests/tier-mount.test.ts` 的度量用例打印），八批求和 = 25,933 与全量档逐字对齐。
 
 ### 通道（kind）维度的第二道闸
 
@@ -297,22 +297,32 @@ wait / space / escape 三族已按 `op` 合并，旧工具名**移除**（不保
 
 设置项在插件设置页**最上方**的「工具封印」分块（全部 volatile，翻完当场生效，不重启插件）——一个开关管一组批次，形状照 dsh-prime-memory 的「工具封印」：
 
-- **`toolInjection`** `lazy`（**默认**：只常驻 `bcdp_status`——它是唯一的解锁入口，其余首次 `bcdp_*` 调用后按开关注入）/ `always`（挂载即全量，历史行为）。
+- **`toolInjection`** `lazy`（**默认**：只常驻 `bcdp_help`——它是唯一的解锁入口兼运行态查询，其余首次 `bcdp_*` 调用后按开关注入）/ `always`（挂载即全量，历史行为）。
 - **`toolBrowse`**（act + observe + wait = 19）/ **`toolExtended`**（power + session = 8）/ **`toolEscape`**（script = 1）/ **`toolJudge`**（5）：开 = 开放注册，关 = 该批从模型工具列表移除。四组各自独立，封一组不波及别组；`core` 级不给开关（封了就没了活动入口）。
 
-**1.7.0 起 `escape` 不再吃活动闸的例外**：`bcdp_script` 仍是唯一能在一次调用里干完任意多步任务的入口（`page` / `browser` / `taskSpaces` / `fetch` / `cdp` 全预置），但它不再常驻——先调一次常驻的 `bcdp_status` 即可拿到它。豁免的代价是它单独占 ≈1,700 字符/轮（比收窄后的整个常驻面还大四轮），而 lazy 会话里模型本来就要先调 `status`。如果你需要「冷启动直接写脚本」的旧行为，设 `toolInjection = always`（或留在 1.6.x）。
+**1.7.0 起 `escape` 不再吃活动闸的例外**：`bcdp_script` 仍是唯一能在一次调用里干完任意多步任务的入口（`page` / `browser` / `taskSpaces` / `fetch` / `cdp` 全预置），但它不再常驻——先调一次常驻的 `bcdp_help` 即可拿到它。豁免的代价是它单独占 ≈1,700 字符/轮（比收窄后的整个常驻面还大三轮），而 lazy 会话里模型本来就要先调 `help`。如果你需要「冷启动直接写脚本」的旧行为，设 `toolInjection = always`（或留在 1.6.x）。
 
 行为要点：
 
-- **封印 = 反注册**（工具从模型的工具列表里消失），不是执行期拒绝。解锁信号挂在 `bcdp_*` 调用的公共出口上，工具体不知道分级存在；`bcdp_status` / `bcdp_help` / `bcdp_doctor` 自身也算活动信号（读了指南就得有工具可用）——但后两者已属 act 批，冷启动下只能靠 `bcdp_status` 触发。
+- **封印 = 反注册**（工具从模型的工具列表里消失），不是执行期拒绝。解锁信号挂在 `bcdp_*` 调用的公共出口上，工具体不知道分级存在；`bcdp_help` / `bcdp_status` / `bcdp_doctor` 自身也算活动信号（读了指南就得有工具可用）——但冷启动下只有 `bcdp_help` 在场，所以它是唯一入口。
 - **闲置自动收回**：`lazy` + `idleTimeoutMin > 0` 时，空闲回收把后台浏览器停掉的同一刻收回扩展面；下次活动重新铺开。`always` 模式不受影响。
 - `legacyEgoToolNames` 的 `ego_*` 别名跟随其 `bcdp_*` 本体的级别。
-- 当前注入面写在 `bcdp_doctor` 报告首行（例：`tool injection: mode=lazy browse=open extended=open escape=open judge=open judgeKey=none active=yes → live 28 / sealed 6`，即一次 `bcdp_status` + 一次 `doctor` 之后的面），不用猜。注意 `doctor` 本身已属 act 批，要先调 `bcdp_status` 才能拿到它；冷启动时模型面上只有 `bcdp_status`（live 1 / sealed 33）。
-- 默认档下不碰浏览器的会话只有 **1** 个工具在场（`bcdp_status` = 401 字符 ≈115 tok，较 1.5.0 的 4,978 字符 **−91.9%**）；它是解锁入口，调用即按批次铺开其余工具。要回到历史行为把 `toolInjection` 改成 `always`（34 件全在场需再配一个评审 Key）。
-- **各档实测注入面**（挂载级口径，1.7.0；序列化工具的 `name + description + parameters` 求和，token 按 3.48 字符/token 折算）：默认 **1 个 / 401 字符 ≈115 tok** → 首次活动（act 批 + power + session + escape）23 个 / 16,203 ≈4,660 tok → 第 2 波（+observe）与第 3 波（+wait）后 29 个 / 21,288 ≈6,120 tok → 全量（always + 评审 Key）34 个 / 24,631 ≈7,080 tok。这些数字由 `tests/tier-mount.test.ts` 的度量用例当场打印，不靠估算。
+- 当前注入面写在 `bcdp_doctor` 报告首行（例：`tool injection: mode=lazy browse=open extended=open escape=open judge=open judgeKey=none active=yes → live 28 / sealed 6`，即一次 `bcdp_status` + 一次 `doctor` 之后的面），不用猜。注意 `doctor` 本身已属 act 批，要先调 `bcdp_help` 才能拿到它；冷启动时模型面上只有 `bcdp_help` 一个；调一次后它自己报 `live=24 sealed=11`（**调用后**的口径，不是调用前的 1）。
+- 默认档下不碰浏览器的会话只有 **1** 个工具在场（`bcdp_help` = 504 字符 ≈145 tok，较 1.5.0 的 4,978 字符 **−89.9%**、相对当前全量 25,933 字符 **−98.1%**）；它是解锁入口，调用即按批次铺开其余工具。要回到历史行为把 `toolInjection` 改成 `always`（35 件全在场需再配一个评审 Key）。
+- **各档实测注入面**（挂载级口径，1.10.0；序列化工具的 `name + description + parameters` 求和，token 按 3.48 字符/token 折算）：默认 **1 个 / 504 字符 ≈145 tok** → 首次活动（act 批 + power + session + escape）24 个 / 17,336 ≈4,982 tok → 第 2 波（+observe）与第 3 波（+wait）后 30 个 / 22,590 ≈6,491 tok → 全量（always + 评审 Key）35 个 / 25,933 ≈7,452 tok。这些数字由 `tests/tier-mount.test.ts` 的度量用例当场打印，不靠估算。
 - 五个字段都带 schema `.default()`：volatile 字段的表单描述符直接拿 schema 默认值，不写默认会出现「面板显示 A、运行时用 B」。
 
 > 取舍提醒：窄工具（一个动作一个工具）是模型写对参数、少重试的护栏。1.5.0 只合并了 **wait / space / escape** 三族同源冗余（41 → 34，省 1,869 字符 schema）：五个 wait 共用同一 preamble 与 timeout 语义、三个 space 本就是同一个 op 工具的碎片、cli/script 是同一 heredoc 运行时。代价是这三族的旧工具名不再存在（见上方迁移表）；交互原子（click/fill/key…）**不合并**，因为它们是模型写对参数的护栏。
+
+## 随包 skill：`bcdp-browser`（`/bcdp-browser`）
+
+1.10.0 起插件随包注册一个 skill，把“流程”从工具 schema 里搬出来，schema 只留“能力边界”：
+
+- **两个入口分工**：`bcdp_help` 给**运行态**（后端 / space / 已解锁批次 / 单工具 `topic` 提示）；skill 给**流程**（一次循环、六条铁律、后端降级表，以及 `references/recipes|recovery|eval.md` 三册按需读）。明确写了“不要用 help 代替流程，也不要反复读 skill”。
+- **怎么被加载**：模型自主（卡片 `description` + `whenToUse` 路由）+ 用户手动（`invocation.userInvocable: true` → `/bcdp-browser`）；系统提示另注入一段“非平凡浏览器任务前先加载”。
+- **加载不解锁**：skill provider 拿不到调用方 sessionId，做不了会话级 pulse；所以读完说明仍需调一次 `bcdp_help` 才会铺开工具面（SKILL.md 里明写了这条）。
+- **rank 600 / source `bundled`**：同名去重时 rank 小者胜，用户自建或共享目录的 `bcdp-browser` 可以覆盖包内版。
+- **单测与产物同路径**：`src/skill/index.ts` 与 `lib/skill/index.js` 都保留一级目录，`../../skills/` 在两边都指向包根。
 
 ## 任务空间命名与并发隔离（1.6.0）
 

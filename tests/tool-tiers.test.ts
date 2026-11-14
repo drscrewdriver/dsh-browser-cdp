@@ -44,16 +44,26 @@ describe("tier table coverage", () => {
   it("tiers are disjoint and core is exactly the resident entry set", () => {
     const all = Object.values(TIER_MEMBERS).flat();
     expect(new Set(all).size).toBe(all.length);
-    // 1.7.0 收窄：常驻只剩解锁入口本身，其余全按活动/开关放行。
-    expect(TIER_MEMBERS.core).toEqual(["bcdp_status"]);
+    // 1.10.0：常驻入口换成 bcdp_help（纯本地查表、零副作用）；bcdp_status 降入 act。
+    expect(TIER_MEMBERS.core).toEqual(["bcdp_help"]);
   });
 
   it("the eight batches carry the members the issues doc §9.2 assigns them", () => {
-    // 1.7.0：space / navigate / help / doctor 从 core 并入 act，snapshot 并入 observe。
+    // 1.10.0：help 升回 core 当入口，status（探测/连接，tabbit 线会起浏览器）降入 act。
     expect(TIER_MEMBERS.act).toEqual([
-      "bcdp_space", "bcdp_navigate",
-      "bcdp_click", "bcdp_fill", "bcdp_key", "bcdp_hover", "bcdp_scroll", "bcdp_select", "bcdp_check", "bcdp_drag", "bcdp_tab",
-      "bcdp_help", "bcdp_doctor",
+      "bcdp_space",
+      "bcdp_navigate",
+      "bcdp_click",
+      "bcdp_fill",
+      "bcdp_key",
+      "bcdp_hover",
+      "bcdp_scroll",
+      "bcdp_select",
+      "bcdp_check",
+      "bcdp_drag",
+      "bcdp_tab",
+      "bcdp_status",
+      "bcdp_doctor",
     ]);
     expect(TIER_MEMBERS.observe).toEqual([
       "bcdp_screenshot", "bcdp_page_info", "bcdp_read_element", "bcdp_js", "bcdp_snapshot",
@@ -95,7 +105,7 @@ describe("tierOfTool", () => {
     expect(bareToolName("bcdp_click")).toBe("click");
     expect(bareToolName("ego_click")).toBe("click");
     expect(tierOfTool("ego_click")).toBe(tierOfTool("bcdp_click"));
-    expect(tierOfTool("ego_status")).toBe("core");
+    expect(tierOfTool("ego_status")).toBe(tierOfTool("bcdp_status"));
   });
 
   it("an unregistered name falls to the strictest tier instead of sneaking onto the resident surface", () => {

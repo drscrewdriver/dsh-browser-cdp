@@ -2,7 +2,7 @@
   "$schema": "https://dsh.community/schemas/dsh-plugin-0.15.json",
   "id": "dsh-browser-cdp",
   "name": "dsh-browser-cdp",
-  "version": "1.9.51",
+  "version": "1.10.0",
   "manifestVersion": "0.15",
   "facets": {
     "host": {
@@ -72,7 +72,7 @@
                   "label": "always"
                 }
               ],
-              "hint": "lazy（默认）= 只常驻 1 个（bcdp_status，兼作解锁入口），其余首次 bcdp_* 调用后按下方开关注入，闲置回收时收回；always = 挂载即注册全部 34 个（历史行为）。"
+              "hint": "lazy（默认）= 只常驻 1 个（bcdp_help，兼作解锁入口与运行态查询），其余首次 bcdp_* 调用后按下方开关注入，闲置回收时收回；always = 挂载即注册全部 35 个（历史行为）。"
             },
             {
               "path": [

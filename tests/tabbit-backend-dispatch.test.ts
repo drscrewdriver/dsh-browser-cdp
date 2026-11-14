@@ -191,9 +191,11 @@ describe("tabbit output contract conformance", () => {
   // bcdp_status 与 bcdp_script 用各自的严格 schema（additionalProperties:false）。
   // 这两个曾因为返回 `backend`/`raw`/`text` 这类未声明 key、或漏掉 required 的 stdout
   // 而被宿主拒成「输出不可用」——这里按分支逐一对着声明表核，新增 key 必须先登记。
+  // 1.10.x: 失败契约（src/errors.ts）统一补 code/retry/actionSent/hint，四个都要登记。
+  const FAILURE_KEYS = ["code", "retry", "actionSent", "hint"];
   const DECLARED: Record<string, string[]> = {
-    bcdp_status: ["ok", "available", "path", "exitCode", "backend", "raw", "backendKind", "toolFace", "guidance", "facades", "error"],
-    bcdp_script: ["ok", "stdout", "stderr", "output", "result", "durationMs", "timedOut", "error", "backend", "resultTruncated", "hint"],
+    bcdp_status: ["ok", "available", "path", "exitCode", "backend", "raw", "backendKind", "toolFace", "guidance", "facades", "error", ...FAILURE_KEYS],
+    bcdp_script: ["ok", "stdout", "stderr", "output", "result", "durationMs", "timedOut", "error", "backend", "resultTruncated", "hint", ...FAILURE_KEYS],
   };
 
   const check = (tool: string, label: string, value: any) => {

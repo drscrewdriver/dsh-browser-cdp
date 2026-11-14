@@ -15,3 +15,7 @@
 - insert:
     - id: dsh-browser-cdp
       name: "dsh-browser-cdp"
+    # 随包 skill（bcdp-browser：流程/铁律/配方 + /bcdp-browser 手动加载）与系统
+    # 提示段。子路径行合法；只有 client 行必须用裸包名（见上方注释）。
+    - id: dsh-browser-cdp-skill
+      name: "dsh-browser-cdp/skill"

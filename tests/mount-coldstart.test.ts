@@ -107,8 +107,8 @@ describe('mount-time attach probe (cold-start gate)', () => {
   it('the doctor explains the automatic sources (else a still panel is unexplainable)', async () => {
     const mounted = mountEgoCli({ allowProbeColdStart: false })
     await vi.advanceTimersByTimeAsync(1500)
-    // One pulse opens the act tier, which is where bcdp_doctor lives.
-    await mounted.handles.get('bcdp_status').execute({}, {})
+    // One pulse (the resident bcdp_help entry) opens the act tier, which is where bcdp_doctor lives.
+    await mounted.handles.get('bcdp_help').execute({}, {})
     const doctor = mounted.handles.get('bcdp_doctor')
     expect(doctor, 'bcdp_doctor should be registered after one pulse').toBeDefined()
     const value = await doctor.execute({}, {})

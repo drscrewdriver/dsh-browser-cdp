@@ -27,6 +27,8 @@ const HOST_EXTERNALS = [
   '@deepseek-ai/dsh-tools',
   '@deepseek-ai/dsh-tools/invariant',
   '@deepseek-ai/dsh-settings',
+  '@deepseek-ai/dsh-skill',
+  '@deepseek-ai/dsh-system-prompt',
   '@deepseek-ai/cordis',
   /^@deepseek-ai\/dsh-client-/,
   'react',
@@ -88,4 +90,24 @@ const worker: UserConfig = {
   },
 }
 
-export default defineConfig([host, client, worker])
+/**
+ * Skill half — bundled `bcdp-browser` skill provider + system-prompt section.
+ *
+ * `clean: false` is mandatory: the `host` config above owns `clean: true`, and a
+ * second lib-emitting entry that also cleans would delete `lib/index.js`.
+ */
+const skill: UserConfig = {
+  name: `${ID}/skill`,
+  // 保留一级目录（lib/skill/index.js）：这样 `../../skills/` 在源码（src/skill/）
+  // 与产物（lib/skill/）下都指向包根，路径在 vitest 与运行时完全一致。
+  entry: { 'skill/index': 'src/skill/index.ts' },
+  outDir: 'lib',
+  format: ['esm'],
+  platform: 'node',
+  target: 'es2024',
+  dts: false,
+  clean: false,
+  external: HOST_EXTERNALS,
+}
+
+export default defineConfig([host, client, worker, skill])

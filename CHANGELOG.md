@@ -1,3 +1,15 @@
+## 1.10.0 (2026-11-14)
+
+**入口从 `bcdp_status` 换成 `bcdp_help`，流程说明搬进随包 skill `bcdp-browser`。**
+
+- **core 换位**：常驻工具改为 `bcdp_help`（504 字符，纯本地查表、零副作用），`bcdp_status` 降入 act 批。理由：status 要探通道（tabbit 线跑 `diagnose` 会给浏览器启动留时间），“看文档”不该变成“开浏览器”。
+- **help 成为运行态入口**：返回值新增 `backend` / `space` / `injection`（并在 `text` 头部给一行 `backend=… · space=… · mode=… live=N sealed=M`）；description 指向 skill。新增字段已登记进 strict output schema，所有分支都给值。
+- **随包 skill `bcdp-browser`**（`/bcdp-browser`）：`modelInvocable + userInvocable`、rank 600、`resourceBase` 指向 `skills/bcdp-browser/`；SKILL.md 承载流程/铁律/降级表，`references/{recipes,recovery,eval}.md` 按需读；frontmatter parser 兼容 LF/CRLF。**加载 skill 不解锁**（provider 拿不到 sessionId），仍需先调 `bcdp_help`。
+- **系统提示注入**：非平凡浏览器任务前加载 `bcdp-browser`，并声明 lazy 下先调 `bcdp_help`。
+- **构建**：新增 `lib/skill/index.js` 产物（`clean:false`，保留一级目录使 `../../skills/` 在源码与产物下都指向包根）；`package.json` 加 `./skill` 导出、`skills/` 打包、`dsh-skill`/`dsh-system-prompt` 可选 peer；`cordis.patch.yml` 加 `dsh-browser-cdp/skill` 行。
+- **实测**（挂载级）：常驻 1 个 / 504 字符；一次活动 24 个 / 17,336；三次活动 30 个 / 22,590；全量 35 个 / 25,933。相对全量 −98.1%。
+- **测试**：`tool-tiers` / `tier-mount` / `mount-coldstart` 的入口断言同步；新增 `tests/skill-provider.test.ts`（frontmatter LF/CRLF、卡片字段、get 名字不匹配）。全量 1198 passed / 13 skipped。
+
 ## 1.9.22 (2026-11-13)
 
 **面板 ↻ 现在真的会同步「当前激活对象」——而且是零副作用。**

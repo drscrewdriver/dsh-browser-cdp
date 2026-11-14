@@ -14,17 +14,18 @@ const tabbitConfig = (over: Record<string, unknown> = {}): Record<string, unknow
 const browseBatch = (batch: "act" | "observe" | "wait") =>
   [...TIER_MEMBERS.act, ...TIER_MEMBERS.observe, ...TIER_MEMBERS.wait].filter((n) => batchOfTool(n) === batch);
 
-/** 常驻面 = core（1.7.0 收窄后只剩 `bcdp_status`；escape 不再特例常驻）。 */
+/** 常驻面 = core（1.10.0：只剩 `bcdp_help` 一个无副作用入口）。 */
 const RESIDENT = () => [...TIER_MEMBERS.core];
 
 /**
- * 触发一次浏览器活动：调 `bcdp_status`。
+ * 触发一次浏览器活动：调常驻的 `bcdp_help`。
  *
- * 1.7.0 收窄后 `bcdp_help` / `bcdp_doctor` 已属 act 批，冷启动下不在场，
- * 不能再用作活动源；`bcdp_status` 是唯一常驻、且调用即置 active 并推进批次深度的入口。
+ * 1.10.0 起 `bcdp_status` 已降入 act 批（它要探通道，tabbit 线会跑 diagnose），
+ * 冷启动下不在场，不能再用作活动源；`bcdp_help` 是唯一常驻、且调用即置 active
+ * 并推进批次深度的入口。
  */
 const pulse = async (m: { handles: Map<string, any> }): Promise<void> => {
-  await m.handles.get("bcdp_status").execute({}, {});
+  await m.handles.get("bcdp_help").execute({}, {});
 };
 
 /** 一次活动后（depth=1）应有的面：core + act 批 + power + session + escape。 */
@@ -122,10 +123,10 @@ const faceChars = (live: string[], handles: Map<string, any>): number =>
 describe("tool tier injection at mount", () => {
   it("the shipped default is lazy: the core entry alone, nothing else", () => {
     const { live } = mount();
-    // 1.7.0：`bcdp_status` 是唯一常驻工具，也是唯一的解锁入口。
+    // 1.10.0：`bcdp_help` 是唯一常驻工具，也是唯一的解锁入口。
     expect(sorted(live)).toEqual(sorted(RESIDENT()));
-    expect(live).toEqual(["bcdp_status"]);
-    // 逃生舱不再常驻：要先调一次 status 才能拿到它。
+    expect(live).toEqual(["bcdp_help"]);
+    // 逃生舱不再常驻：要先调一次 help 才能拿到它。
     expect(live).not.toContain("bcdp_script");
     expect(live).not.toContain("bcdp_click");
   });
@@ -135,6 +136,23 @@ describe("tool tier injection at mount", () => {
     const chars = faceChars(live, handles);
     console.log(`FACE default: ${live.length} tool(s), ${chars} chars`);
     expect(chars).toBeLessThanOrEqual(600);
+  });
+
+  it("the resident bcdp_help entry reports live state (backend / space / injection)", async () => {
+    const m = mount();
+    const value = await m.handles.get("bcdp_help").execute({}, {});
+    // 运行态三字段必须进 strict output schema 的声明面（否则输出会被判不可用）。
+    expect(typeof value.backend).toBe("string");
+    expect(typeof value.space).toBe("string");
+    expect(typeof value.injection).toBe("string");
+    // 同一份运行态也要进 text 头部——模型看到的是渲染后的 text，不是结构化字段。
+    expect(value.text).toContain("backend=");
+    expect(value.text).toContain("space=");
+    expect(value.text).toContain("mode=lazy");
+    // 口径：surface 在 pulse 之后取，所以报的是“这次调用解锁后”的面（不是调用前的 1）。
+    expect(value.text).toContain("live=");
+    expect(value.text).toContain("sealed=");
+    expect(value.text).not.toContain("live=0");
   });
 
   it("the three injection faces are ordered (README figures)", async () => {
@@ -149,10 +167,10 @@ describe("tool tier injection at mount", () => {
     // 单调性：活动只能把面铺开，不会反而收小。
     expect(afterOne).toBeGreaterThan(atDefault);
     expect(atFullBrowse).toBeGreaterThan(afterOne);
-    // 全量档（always + 配了评审 Key）：README 的 34 件数字以此为准。
+    // 全量档（always + 配了评审 Key）：README 的 35 件数字以此为准。
     const full = mount({ toolInjection: "always", layaKey: "k" });
     expect(full.live.length).toBe(35);
-    console.log(`FACE full=${faceChars(full.live, full.handles)} tools=34`);
+    console.log(`FACE full=${faceChars(full.live, full.handles)} tools=35`);
     // 分批 schema（README 表格数据）：同一个序列化口径。
     const perTool = new Map<string, number>(
       full.live.map((n) => [n, JSON.stringify({ name: n, description: full.handles.get(n).description, parameters: full.handles.get(n).parameters }).length]),
@@ -178,7 +196,7 @@ describe("tool tier injection at mount", () => {
     expect(sorted(live)).toEqual(sorted(Object.values(TIER_MEMBERS).flat()));
   });
 
-  it("the first bcdp_status call releases the act batch (no browser needed)", async () => {
+  it("the first bcdp_help call releases the act batch (no browser needed)", async () => {
     const m = mount();
     expect(sorted(m.live)).toEqual(sorted(RESIDENT()));
     await pulse(m);
@@ -257,8 +275,10 @@ describe("tool tier injection at mount", () => {
 
   it("the legacy ego_* alias follows its bcdp_* twin's tier", () => {
     const { live } = mount({ legacyEgoToolNames: true });
-    expect(live).toContain("ego_status");
-    // 1.7.0：escape 不再常驻，所以 ego_script 冷启动也被封；ego_click 属 act，同样不在场。
+    // 1.10.0：core 换成 help 后，常驻的别名是 ego_help；ego_status 随 bcdp_status 降入 act。
+    expect(live).toContain("ego_help");
+    expect(live).not.toContain("ego_status");
+    // escape 不再常驻，所以 ego_script 冷启动也被封；ego_click 属 act，同样不在场。
     expect(live).not.toContain("ego_script");
     expect(live).not.toContain("ego_click");
   });
@@ -273,8 +293,8 @@ describe("tool tier injection at mount", () => {
 
   it("tabbit-cli narrows the surface to what that channel can translate", async () => {
     const m = mount(tabbitConfig());
-    // 冷启动：core 不吃 kind 闸——`bcdp_status` 是唯一的解锁入口与解释渠道。
-    expect(m.live).toEqual(["bcdp_status"]);
+    // 冷启动：core 不吃 kind 闸——`bcdp_help` 是唯一的解锁入口与解释渠道。
+    expect(m.live).toEqual(["bcdp_help"]);
     await pulse(m);
     // 活动后放开的每一件事，都必须是该通道真能做的。
     for (const n of m.live) expect(TABBIT_CLI_SUPPORTED).toContain(n);

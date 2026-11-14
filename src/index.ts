@@ -48,6 +48,7 @@ import { installSettingsAuto, registerSettingsBridge } from './settings.ts'
 import { BATCH_ORDER, createTierInjector, judgeConfigured, TIER_MEMBERS, toolAllowed, unknownTieredTools, type TierInjector, type TierPolicy } from './toolTiers.ts'
 import { getSharedFfmpegInstallationManager } from './ffmpeg-installation.ts'
 import { SENTINEL, j, str, num, bool, readAll, SAFE_FN, safeEvalWrap } from './util.ts'
+import { FAILURE_PROPS, normalizeFailure } from './errors.ts'
 import {
   EGO_LINUX_CDP_URL,
   decideAttach,
@@ -2569,7 +2570,23 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
 
   const tiers: TierInjector = createTierInjector({
     register: (tool) => {
-      const dispose = ctx.tools.register(tool) as unknown as () => void
+      // Failure contract (src/errors.ts): every failed result leaves this
+      // wrapper with code / retry / actionSent / hint. One place covers all
+      // 35 tools (and the legacy ego_* aliases, which reuse this execute).
+      // Success values and already-classified failures pass through untouched.
+      const original = (tool as { execute?: unknown }).execute
+      const registered =
+        typeof original === 'function'
+          ? {
+              ...tool,
+              execute: async (args: unknown, exec: unknown) =>
+                normalizeFailure(
+                  String((tool as { name?: unknown }).name ?? ''),
+                  await (original as (a: unknown, e: unknown) => Promise<unknown>)(args, exec),
+                ),
+            }
+          : tool
+      const dispose = ctx.tools.register(registered as typeof tool) as unknown as () => void
       // Cordis lifecycle: unregister the tool when the plugin unmounts.
       ctx.effect?.(() => dispose)
       return dispose
@@ -3754,6 +3771,7 @@ function registerEgoStatus(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool: T
           type: 'object',
           additionalProperties: false,
           properties: {
+            ...FAILURE_PROPS,
             ok: { type: 'boolean', required: true },
             available: { type: 'boolean', required: true },
             path: { type: 'string' },
@@ -3926,6 +3944,7 @@ function registerAuthFlush(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool: T
           type: 'object',
           additionalProperties: false,
           properties: {
+            ...FAILURE_PROPS,
             ok: { type: 'boolean', required: true },
             total: { type: 'integer' },
             flushed: { type: 'integer' },
@@ -4020,6 +4039,7 @@ function registerLoginImport(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool:
           type: 'object',
           additionalProperties: false,
           properties: {
+            ...FAILURE_PROPS,
             ok: { type: 'boolean', required: true },
             source: { type: 'string' },
             profile: { type: 'string' },
@@ -5081,6 +5101,7 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
           type: 'object',
           additionalProperties: false,
           properties: {
+            ...FAILURE_PROPS,
             ok: { type: 'boolean', required: true },
             detected: { type: 'boolean', required: true },
             kind: { oneOf: [{ type: 'string' }, { type: 'null' }] },
@@ -5132,6 +5153,7 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
           type: 'object',
           additionalProperties: false,
           properties: {
+            ...FAILURE_PROPS,
             ok: { type: 'boolean', required: true },
             needed: { type: 'boolean', required: true },
             resolved: { type: 'boolean', required: true },
@@ -5187,7 +5209,7 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
     defineTool({
       name: 'bcdp_help',
       description:
-        'Query the built-in ego-browser tool guide. `topic` may be a category (overview/tools/navigate/observe/input/keyboard-mouse/form/wait/network/login/script/doctor) or a specific tool name (e.g. bcdp_click). Returns the matching usage notes. Call this when unsure which eyebrow tool to use. If a bcdp_* tool is missing from your list, ask topic=injection.',
+        'Start here before any browser work. Returns the live backend, task space and which bcdp_* tiers are unlocked, plus a per-topic guide via `topic` (a category like overview/navigate/form/wait/login/script, or a tool name such as bcdp_click). Load the `bcdp-browser` skill for workflows and recovery recipes.',
       parameters: {
         topic: {
           type: 'string',
@@ -5200,17 +5222,27 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
           type: 'object',
           additionalProperties: false,
           properties: {
+            ...FAILURE_PROPS,
             ok: { type: 'boolean', required: true },
             topic: { type: 'string', required: true },
             text: { type: 'string', required: true },
+            backend: { type: 'string' },
+            space: { type: 'string' },
+            injection: { type: 'string' },
           },
         },
         render: renderText,
       },
       timeoutMs: 10_000,
       execute: async (args: Record<string, unknown>, exec: ToolExec) => {
-        // help 已属 act 批，能被调用说明活动已发生；此处 pulse 只推进批次深度（幂等）。
+        // 常驻入口：调用即 pulse，推进解锁批次（幂等）；help 本身零副作用。
         tiers.pulse(callingSessionId(exec))
+        // 运行态：模型第一步就要知道“在哪条通道 / 哪个空间 / 工具面铺开到哪”。
+        const surface = tiers.surface()
+        const backend = resolveEffectiveLink(cfg.links, cfg.activeTargetId)?.link.kind ?? 'none'
+        const space = cfg.activeSpace
+        const injection = `mode=${cfg.toolInjection} live=${surface.live.length} sealed=${surface.sealed.length}`
+        const runtime = `backend=${backend} · space=${space} · ${injection}`
         const q = str(args.topic, '').trim().toLowerCase()
         const key = Object.prototype.hasOwnProperty.call(EGO_HELP_INDEX, q) ? q : ''
         const text = key
@@ -5223,7 +5255,7 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
                 '\n\noverview: ' +
                 EGO_HELP_INDEX.overview
               : EGO_HELP_INDEX.overview)
-        return { ok: true, topic: q || 'overview', text }
+        return { ok: true, topic: q || 'overview', text: `${runtime}\n\n${text}`, backend, space, injection }
       },
       presentCall: () => ({ card: 'generic', title: 'bcdp_help', kind: 'other', rawInput: null }),
     } as unknown as DefineToolOpts),
@@ -5238,7 +5270,7 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
         schema: {
           type: 'object',
           additionalProperties: false,
-          properties: { ok: { type: 'boolean', required: true }, report: { type: 'string', required: true } },
+          properties: { ...FAILURE_PROPS, ok: { type: 'boolean', required: true }, report: { type: 'string', required: true } },
         },
         render: renderText,
       },
@@ -5691,7 +5723,7 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
         schema: {
           type: 'object',
           additionalProperties: false,
-          properties: { ok: { type: 'boolean', required: true }, text: { type: 'string', required: true } },
+          properties: { ...FAILURE_PROPS, ok: { type: 'boolean', required: true }, text: { type: 'string', required: true } },
         },
         render: renderText,
       },
@@ -5763,7 +5795,7 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
         schema: {
           type: 'object',
           additionalProperties: false,
-          properties: { ok: { type: 'boolean', required: true }, text: { type: 'string', required: true } },
+          properties: { ...FAILURE_PROPS, ok: { type: 'boolean', required: true }, text: { type: 'string', required: true } },
         },
         render: renderText,
       },
@@ -5889,7 +5921,7 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
         schema: {
           type: 'object',
           additionalProperties: false,
-          properties: { ok: { type: 'boolean', required: true }, text: { type: 'string', required: true } },
+          properties: { ...FAILURE_PROPS, ok: { type: 'boolean', required: true }, text: { type: 'string', required: true } },
         },
         render: renderText,
       },
@@ -5968,7 +6000,7 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
         schema: {
           type: 'object',
           additionalProperties: false,
-          properties: { ok: { type: 'boolean', required: true }, text: { type: 'string', required: true } },
+          properties: { ...FAILURE_PROPS, ok: { type: 'boolean', required: true }, text: { type: 'string', required: true } },
         },
         render: renderText,
       },
@@ -6044,7 +6076,7 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
         schema: {
           type: 'object',
           additionalProperties: false,
-          properties: { ok: { type: 'boolean', required: true }, text: { type: 'string', required: true } },
+          properties: { ...FAILURE_PROPS, ok: { type: 'boolean', required: true }, text: { type: 'string', required: true } },
         },
         render: renderText,
       },

@@ -40,6 +40,8 @@ export interface PanelActionRunner {
   navigate: (body: Record<string, unknown>) => Promise<PanelActionOutcome>
   /** Make one tab the browser's active target (the user clicked it in the panel). */
   switchTab: (body: Record<string, unknown>) => Promise<PanelActionOutcome>
+  /** Close one tab (the user clicked × in the panel). Refuses the last tab. */
+  closeTab: (body: Record<string, unknown>) => Promise<PanelActionOutcome>
 }
 
 /**
@@ -175,6 +177,48 @@ export function buildEgoSwitchTabScript(spaceJson: string, body: Record<string, 
     `  if (!__hit) throw new Error('tab not found: ' + __bcdpTarget)\n` +
     `  if (__hit.active !== true) await browser.switchTab({ targetId: __bcdpTarget })\n` +
     `  console.log(${js(PANEL_SENTINEL)} + JSON.stringify({ ok: true, targetId: __bcdpTarget, url: __hit.url || '', title: __hit.title || '' }))\n` +
+    `} catch (__bcdpErr) {\n` +
+    `  console.log(${js(PANEL_SENTINEL)} + JSON.stringify({ ok: false, error: String((__bcdpErr && __bcdpErr.message) || __bcdpErr) }))\n` +
+    `}\n`
+  )
+}
+
+/**
+ * close-tab heredoc — the user clicked × in the panel.
+ *
+ * An `ego-cli` link injects no CDP websocket, so `/api/bcdp/close` used to
+ * answer 409 `channel-cannot-close` for it: the × looked dead. The runtime does
+ * expose `browser.closeTab(targetId)` (measured: two tabs closed, inventory went
+ * 5 → 3), so the same operation runs here as a heredoc on the channel real tools
+ * use.
+ *
+ * Two guards, both learned the hard way:
+ *  - **Last tab is refused.** Closing the only page leaves the space with nothing
+ *    to show, and the panel renders a strip no tool can recover from without
+ *    opening a new tab first.
+ *  - **Only close what is really there.** A stale panel row (tab already gone from
+ *    another window) answers `tab-not-found` instead of throwing, so the client can
+ *    drop the row rather than retry forever.
+ */
+export function buildEgoCloseTabScript(spaceJson: string, body: Record<string, unknown>): string {
+  const targetId = js(pickTargetId(body))
+  return (
+    `const __bcdpTarget = ${targetId}\n` +
+    `try {\n` +
+    `  if (__bcdpTarget === '') throw new Error('targetId required')\n` +
+    `  await taskSpaces.useOrCreate(${spaceJson})\n` +
+    `  const __tabs = await browser.listTabs()\n` +
+    `  const __hit = __tabs.find((t) => t.targetId === __bcdpTarget)\n` +
+    `  if (!__hit) {\n` +
+    `    console.log(${js(PANEL_SENTINEL)} + JSON.stringify({ ok: false, reason: 'tab-not-found', targetId: __bcdpTarget }))\n` +
+    `  } else if (__tabs.length <= 1) {\n` +
+    `    console.log(${js(PANEL_SENTINEL)} + JSON.stringify({ ok: false, reason: 'last-tab', targetId: __bcdpTarget }))\n` +
+    `  } else {\n` +
+    `    await browser.closeTab(__bcdpTarget)\n` +
+    `    const __left = await browser.listTabs()\n` +
+    `    const __gone = !__left.some((t) => t.targetId === __bcdpTarget)\n` +
+    `    console.log(${js(PANEL_SENTINEL)} + JSON.stringify({ ok: __gone, closed: __gone, reason: __gone ? '' : 'still-open', targetId: __bcdpTarget, remaining: __left.length }))\n` +
+    `  }\n` +
     `} catch (__bcdpErr) {\n` +
     `  console.log(${js(PANEL_SENTINEL)} + JSON.stringify({ ok: false, error: String((__bcdpErr && __bcdpErr.message) || __bcdpErr) }))\n` +
     `}\n`

@@ -1,3 +1,13 @@
+## 1.12.1 (2026-11-15)
+
+**修掉面板 × 在 ego-cli 通道上点了没反应。**
+
+- **根因不是权限，是硬闸**：`/api/bcdp/close` 的 CLI 分支调 `closeCliTab`，而它第一行是 `if (channel.tabbitInventory !== true) return 'channel-cannot-close'`——ego-cli 通道恒被拒（实测 409）。但运行时**确实提供** `browser.closeTab(targetId)`（实测 5 个标签 → 3 个，新标签页与百度都真关掉了），所以错的是这道闸，不是通道能力。
+- **ego-cli 走 panel-action heredoc 关闭**：新增 `buildEgoCloseTabScript`（`src/cast/panel-actions.ts`），与 size/navigate/switch 同一套 `taskSpaces.useOrCreate` + `browser.*` + sentinel 协议；`PanelActionRunner` 增加 `closeTab`，`closeCliTab` 在 `egoRuntime === true` 时先试它，只有两者都不具备的通道才答 `channel-cannot-close`。
+- **共用同一个 runner 实例**：把 `makePanelActions(ctx, cfg)` 提到 `initCastServer` 之前存成局部变量，关闭与尺寸/导航/切页串行在**同一把 ego 锁**上，不再各建一个。
+- **两道守卫**：`last-tab`（只剩一个标签时拒绝，避免把面板吊死在空清单）、`tab-not-found`（陈旧行不抛异常，让客户端能安静丢行）。关闭后**回读 inventory 验证**，真没了才答 `closed`。
+- 新增 10 条契约测试（`tests/ego-close-contract.test.ts`）：走 facade 不走裸 CDP、拒绝最后标签、陈旧行降级、sentinel 分支齐全、ego 分支先于拒绝分支、runner 唯一构造点。
+
 ## 1.12.0 (2026-11-15)
 
 **设置分节排版：连接目标置顶，评审（JEV / Laya）组可抽屉折叠。**

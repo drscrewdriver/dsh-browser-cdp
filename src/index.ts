@@ -37,7 +37,7 @@ import { fileURLToPath } from 'node:url'
 import { importLoginCookies } from './login-import.ts'
 import { initCastServer, markEgoToolCall, getLastEgoActivity, onEgoActivity, setAttachEndpoint, recycleWorker, getCliPollStatus, getAttachEndpoint, broadcastCliFrames, broadcastCliSpaces, getCliTrackAll, pushFocus, panelWatcherCount, getWatchCounters } from './cast-server.ts'
 import { CliFramePoller, buildFrameScript, FRAME_SENTINEL } from './cast/cli-frame-poller.ts'
-import { buildEgoNavigateScript, buildEgoSwitchTabScript, buildEgoWindowSizeScript, parsePanelResult, type PanelActionOutcome, type PanelActionRunner } from './cast/panel-actions.ts'
+import { buildEgoCloseTabScript, buildEgoNavigateScript, buildEgoSwitchTabScript, buildEgoWindowSizeScript, parsePanelResult, type PanelActionOutcome, type PanelActionRunner } from './cast/panel-actions.ts'
 import { buildEgoAxScript, buildTabbitAxSnippet, composeFallbackReport, parseAxSentinel, type FallbackAxSnapshot } from './cast/fallback-tab-report.ts'
 import type { TabAnchorReport } from './tab-report.ts'
 import { registerEgoBrowserGateway } from './gateway.ts'
@@ -1455,6 +1455,7 @@ function makePanelActions(ctx: EgoContext, cfg: EgoRuntimeConfig): PanelActionRu
     windowSize: (body) => run((spaceJson) => buildEgoWindowSizeScript(spaceJson, body)),
     navigate: (body) => run((spaceJson) => buildEgoNavigateScript(spaceJson, body)),
     switchTab: (body) => run((spaceJson) => buildEgoSwitchTabScript(spaceJson, body)),
+    closeTab: (body) => run((spaceJson) => buildEgoCloseTabScript(spaceJson, body)),
   }
 }
 
@@ -3482,6 +3483,9 @@ bridge.onChange(() => tiers.reapply())
   // on hosts without a web server (TUI / headless stay tools-only).
   ctx.inject?.(['webServer'], (wctx) => {
     try {
+      // One runner instance: the close path and the size/navigate/switch actions
+      // must serialize behind the SAME ego lock, not two.
+      const panelActions = makePanelActions(ctx, cfg)
       initCastServer(
         wctx as EgoContext,
         cfg,
@@ -3490,14 +3494,26 @@ bridge.onChange(() => tiers.reapply())
         () => openAgentWindow(ctx, cfg),
         (opts) => importLoginCookies(opts, { subprocess: ctx.subprocess }),
         cliPoller,
-        makePanelActions(ctx, cfg),
+        panelActions,
         () => tabbitSpaceRows(),
         // Closing a tab on a CLI channel: the panel's × must really close it,
         // not just drop the row. Tabbit can do it through its own runtime
         // (`page.close()` on the tab); other CLI channels answer 501.
         async (targetId: string): Promise<{ ok: boolean; reason: string }> => {
           const eff = resolveEffectiveLink(cfg.links, cfg.activeTargetId)
-          if (runtimeOfLink(eff?.link)?.channel.tabbitInventory !== true) return { ok: false, reason: 'channel-cannot-close' }
+          // Tabbit has its own close path (below); an ego-cli link has no CDP
+          // websocket but DOES expose browser.closeTab, so it closes through the
+          // panel-action heredoc. Only a channel with neither answers 'cannot'.
+          const __ch = runtimeOfLink(eff?.link)?.channel
+          if (__ch?.tabbitInventory !== true) {
+            if (__ch?.egoRuntime === true) {
+              const out = await panelActions.closeTab({ targetId })
+              if (out.ok === true) return { ok: true, reason: 'closed' }
+              const why = typeof out.reason === 'string' && out.reason !== '' ? out.reason : 'close-failed'
+              return { ok: false, reason: why }
+            }
+            return { ok: false, reason: 'channel-cannot-close' }
+          }
           const cli = resolveTabbitCli((eff?.link as { cliPath?: string } | undefined)?.cliPath)
           if (!cli.found) return { ok: false, reason: 'tabbit-cli-missing' }
           const tabId = Number(targetId)

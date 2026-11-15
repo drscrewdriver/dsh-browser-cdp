@@ -1,3 +1,12 @@
+## 1.12.0 (2026-11-15)
+
+**设置分节排版：连接目标置顶，评审（JEV / Laya）组可抽屉折叠。**
+
+- **连接目标置顶**：`FamilySettingsCard` 把 `FamLinks` 移到 `FAM_FIELD_GROUPS` 之前并传 `first: true`——顺序即优先级，它决定每一次 `bcdp_*` 打谁，是分节的第一性配置；置顶后块顶分隔线按 `first` 条件去掉，分节最上方不再出现无意义横线。
+- **评审组抽屉折叠**：`gJudge` 组加 `foldable: true`，组标题改为 `<button aria-expanded>` + `▸/▾`，收起时标题右侧显示实际字段数「14 项」；收起态字段行**整段不渲染**（不是 CSS 隐藏，避免隐藏输入框仍可 Tab 聚焦）。
+- **折叠态只存 localStorage**（`bcdp.settings.fold.<gk>`，读写全程 try/catch）：折叠是纯 UI 偏好，**绝不写宿主配置**——每次配置写都是一次 patch 落盘。契约测试强制断言 `FamGroup` 内无 `commitField` / `scope.set`。
+- 新增 3 条契约用例（`tests/fam-links.contract.test.ts`）：连接目标必须先于所有分组、首个块不带顶部分隔线、只有评审组可折叠且折叠不落配置。
+
 ## 1.11.0
 
 **设置入口改为独立顶层分节 + 齿轮挂载崩溃修复。**

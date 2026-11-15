@@ -1151,10 +1151,22 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 		// 全量设置面：Config 里所有用户可调 volatile 字段按组分块渲染。
 		// kind: bool=checkbox / num=数字 / str=文本 / secret=密码 / sel=下拉。
 		// 文案直接内联 en/zh（跟随 wt 的 _egoLocale），不再膨胀字典键。
+
+		// 抽屉折叠态：纯 UI 偏好，**绝不写宿主配置**（配置每写一次 = 一次 patch 落盘，
+		// 折叠态不属于配置语义）。与文件内其它 localStorage 用法同构，全程 try/catch
+		// （隐私模式 / 配额满都不抛）。缺省 false = 收起（抽屉语义）。
+		function foldKey(gk: string) { return 'bcdp.settings.fold.' + gk }
+		function readFold(gk: string) {
+			try { return window.localStorage.getItem(foldKey(gk)) === '1' } catch (e) { return false }
+		}
+		function writeFold(gk: string, open: boolean) {
+			try { window.localStorage.setItem(foldKey(gk), open ? '1' : '0') } catch (e) { /* ignore */ }
+		}
+
 		var FAM_FIELD_GROUPS = [
 			// 工具封印：放在最前（与 prime-memory 的「工具封印」节同一位置）——
 			// 它是“今天这个会话能看到多少个工具”的唯一开关面。
-			{ gk: 'gTools', en: 'Tool sealing', zh: '工具封印', fields: [
+			{ gk: 'gTools', foldable: true, en: 'Tool sealing', zh: '工具封印', fields: [
 				{ k: 'toolInjection', kind: 'sel', options: ['lazy', 'always'], en: ['Injection mode', 'lazy (default) = only bcdp_status stays resident — it is the unlock entry, and the rest are injected after the first bcdp_* call and sealed back on idle reaping. always = every tool registered at mount (historical)'], zh: ['工具注入模式', 'lazy（默认）= 只常驻 bcdp_status（它是解锁入口），其余在首次 bcdp_* 调用后铺开、闲置回收时收回；always = 挂载即注册全部（历史行为）'] },
 				{ k: 'toolBrowse', kind: 'bool', en: ['Basic browsing tools (19)', 'On (default) = released in three waves after browser activity (act → observe → wait); off = 19 tools removed from the model tool list (space / navigate / click / fill / key / drag / screenshot / read / help / doctor / wait ...)'], zh: ['基础操作工具（19 个）', '开（默认）= 浏览器活动后按 act → observe → wait 三波放行；关 = 19 个工具从模型工具列表移除（空间/导航/点击/填写/键鼠/拖拽/截图/读取/指南/预检/等待…）'] },
 				{ k: 'toolExtended', kind: 'bool', en: ['Extended tools (8)', 'On (default) = registered after browser activity; off = 8 tools removed (raw CDP / http / upload / download / dialog / captcha / auth flush / login import)'], zh: ['扩展能力工具（8 个）', '开（默认）= 浏览器活动后注册；关 = 8 个工具移除（裸 CDP/HTTP/上传/下载/对话框/验证码/登录落盘/登录导入）'] },
@@ -1162,7 +1174,7 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 				{ k: 'toolJudge', kind: 'bool', en: ['Judgement tools bcdp_jev_* (5)', 'On still requires a JEV or Laya key — without one they can only answer "not configured", so they stay sealed anyway'], zh: ['评审工具 bcdp_jev_*（5 个）', '开仍需配了 JEV/Laya Key；没 Key 它们本来也只能回答「未配置」，依旧不注入'] },
 				{ k: 'sessionScopedPulse', kind: 'bool', en: ['Per-session unlock', 'On (default) = each session must call bcdp_status independently; one session\'s unlock does not affect others. Off = process-wide (any unlock affects all sessions, historical)'], zh: ['按会话隔离解锁', '开（默认）= 每个会话各自调 bcdp_status 解锁，不互相影响；关 = 进程级共享（任一会话解锁对所有会话生效，历史行为）'] },
 			] },
-			{ gk: 'gBasic', en: 'Basics', zh: '基础', fields: [
+			{ gk: 'gBasic', foldable: true, en: 'Basics', zh: '基础', fields: [
 				{ k: 'isolateSpaces', kind: 'bool', en: ['Space isolation', 'Off = persistent profile (logins survive restarts); on = isolated sandbox'], zh: ['空间隔离', '关 = 持久化配置（重启保留登录态）；开 = 每次隔离沙箱'] },
 				{ k: 'idleTimeoutMin', kind: 'num', min: 0, max: 1440, step: 1, en: ['Auto-stop idle browser (minutes, 0 = off)', 'Stops the backing browser after N minutes without a bcdp_* call; relaunches on demand'], zh: ['空闲自动停止（分钟，0 = 不停）', '超过 N 分钟没有 bcdp_* 调用即停止后台浏览器，下次调用按需重启'] },
 				{ k: 'cdpMode', kind: 'sel', options: ['auto', 'local', 'remote'], en: ['Connection mode', 'auto = activated target only; remote = never start a local browser; local = always local control'], zh: ['连接模式', 'auto = 只用已激活目标；remote = 绝不静默启动本地浏览器；local = 始终本地控制'] },
@@ -1174,7 +1186,7 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 				{ k: 'localUserDataDir', kind: 'str', en: ['Local profile dir', 'Empty = managed dir; never point at your daily Chrome profile'], zh: ['本地浏览器 Profile 目录', '留空 = 托管目录；不要指向日常使用的 Chrome 配置'] },
 				{ k: 'legacyEgoToolNames', kind: 'bool', en: ['Also register legacy ego_* tool names', 'For scripts written before the bcdp_* rename; conflicts with the upstream ego-browser plugin'], zh: ['同时注册旧版 ego_* 工具名', '给 bcdp_* 更名前的脚本用；与上游 ego-browser 插件互斥'] },
 			] },
-			{ gk: 'gCapture', en: 'Capture & streaming', zh: '截图与推流', fields: [
+			{ gk: 'gCapture', foldable: true, en: 'Capture & streaming', zh: '截图与推流', fields: [
 				{ k: 'captureBackend', kind: 'sel', options: ['auto', 'cdp', 'ffmpeg'], en: ['Capture backend', 'auto, cdp, or ffmpeg'], zh: ['截取后端', 'auto / cdp / ffmpeg'] },
 				{ k: 'streamProfile', kind: 'sel', options: ['low', 'balanced', 'high'], en: ['Capture quality profile', 'Overall quality preset'], zh: ['画质档位', '整体画质预设'] },
 				{ k: 'cdpFps', kind: 'num', min: 5, max: 30, step: 1, en: ['CDP preview FPS', ''], zh: ['CDP 预览帧率', ''] },
@@ -1194,7 +1206,10 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 				{ k: 'cliFramePollEnabled', kind: 'bool', en: ['ego-cli fallback frames (3s)', 'With no CDP screencast (local ego-cli link active), capture one screenshot every 3s through the CLI so the watch panel still fills. Off = panel shows a placeholder and no screenshot subprocess is spawned'], zh: ['ego-cli 降级帧（3s 一刷）', '无 CDP screencast（本机 ego-cli 激活）时，每 3s 走一次 CLI 截图填充观察窗画面区。关 = 面板显示占位提示、不拉截图子进程'] },
 				{ k: 'tabTracking', kind: 'sel', options: ['active', 'all'], en: ['Tab tracking (CLI routes)', 'active = capture only the browser-active tab; all = capture every tab in the space (one picture each), the active one outlined green'], zh: ['tab 跟踪模式（CLI 路线）', '仅激活 = 只抓浏览器激活的那个 tab；全模式 = space 内每个 tab 各出一张图，激活那个用绿框标出'] },
 			] },
-			{ gk: 'gJudge', en: 'Judgement (JEV / Laya)', zh: '评审（JEV / Laya）', fields: [
+			// foldable：本组 14 个字段（URL / Key / 模型 / 预算 …）配好一次基本不动，
+			// 收起成抽屉，点标题才铺开。四个配置组全部 foldable（gTools/gBasic/gCapture/gJudge），
+			// 折叠态一律只写 localStorage，绝不落宿主配置。
+			{ gk: 'gJudge', foldable: true, en: 'Judgement (JEV / Laya)', zh: '评审（JEV / Laya）', fields: [
 				{ k: 'judgePrefer', kind: 'str', en: ['Judge hop order', 'Comma separated; defaults to "laya,rule"'], zh: ['评审跳序', '逗号分隔；默认 "laya,rule"'] },
 				{ k: 'jevUrl', kind: 'str', en: ['JEV base URL', 'Leave empty to skip the jev hop'], zh: ['JEV 基础 URL', '留空 = 跳过 jev 跳'] },
 				{ k: 'jevKey', kind: 'secret', en: ['JEV bearer key', 'Empty = the jev hop is skipped'], zh: ['JEV Bearer Key', '留空 = 跳过 jev 跳'] },
@@ -1228,21 +1243,47 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 			var value = snapshot.value || {}
 			var writable = snapshot.writable === true
 			var h = React.createElement
+			// 顺序即语义：连接目标决定每一次 bcdp_* 打谁，是分节的第一性配置，
+			// 因此排在最前（first=true 去掉块顶分隔线）；工具封印等分组随后。
 			return h('div', { style: { display: 'grid', gap: '8px' } },
+				h(FamLinks, { key: 'links', first: true, value: value, writable: writable, scope: scope }),
 				FAM_FIELD_GROUPS.map(function (group) {
 					return h(FamGroup, { key: group.gk, group: group, value: value, writable: writable, scope: scope })
 				}),
-				h(FamLinks, { key: 'links', value: value, writable: writable, scope: scope }),
 			)
 		}
 
 		function FamGroup(props: any) {
 			var group = props.group
 			var h = React.createElement
+			var title = _egoLocale === 'zh' ? group.zh : group.en
+			var foldable = group.foldable === true
+			// 折叠态挂在组件内（每组的 hook 数量恒定：非 foldable 组也走 useState，只是不用它）。
+			var foldState = React.useState(function () { return foldable ? readFold(group.gk) : true })
+			var open = foldState[0], setOpen = foldState[1]
+			var headStyle = { fontSize: '12px', fontWeight: 600, color: 'var(--dsw-alias-label-secondary, rgba(127,127,127,.9))', padding: '2px 0 4px' }
+			var chevronStyle = { fontSize: '10px', lineHeight: '16px', flex: '0 0 auto', color: 'var(--dsw-alias-label-tertiary, rgba(127,127,127,.8))' }
+			function toggle() {
+				var next = !open
+				setOpen(next)
+				writeFold(group.gk, next)
+			}
 			return h('div', { style: { borderTop: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.25))', paddingTop: '6px' } },
-				h('div', { style: { fontSize: '12px', fontWeight: 600, color: 'var(--dsw-alias-label-secondary, rgba(127,127,127,.9))', padding: '2px 0 4px' } },
-					_egoLocale === 'zh' ? group.zh : group.en),
-				group.fields.map(function (f: any) { return h(FamField, { key: f.k, f: f, group: group, ...props }) })
+				foldable
+					? h('button', { type: 'button', onClick: toggle,
+						'aria-expanded': open, 'aria-label': title,
+						style: { display: 'flex', alignItems: 'center', gap: '6px', width: '100%',
+							background: 'none', border: 'none', padding: 0, margin: 0,
+							cursor: 'pointer', font: 'inherit', textAlign: 'left', color: 'inherit' } },
+						h('span', { style: chevronStyle }, open ? '\u25be' : '\u25b8'),
+						h('span', { style: { ...headStyle, flex: '1 1 auto', minWidth: 0 } }, title),
+						h('span', { style: { fontSize: '10px', flex: '0 0 auto', color: 'var(--dsw-alias-label-tertiary, rgba(127,127,127,.7))' } },
+							open ? '' : String(group.fields.length) + (_egoLocale === 'zh' ? ' 项' : ' items')))
+					: h('div', { style: headStyle }, title),
+				// 收起时整段不渲染（不是 CSS 隐藏）：隐藏的输入框仍会被 Tab 聚焦。
+				foldable && !open
+					? null
+					: group.fields.map(function (f: any) { return h(FamField, { key: f.k, f: f, group: group, ...props }) })
 			)
 		}
 
@@ -1525,7 +1566,11 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 						: h('button', { type: 'button', disabled: !writable, style: btnStyle,
 							onClick: function () { void commitField(scope, 'cdpMode', 'local') } },
 							wt('linksActivate'))))
-			return h('div', { style: { borderTop: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.25))', paddingTop: '6px', display: 'grid', gap: '4px' } },
+			// first=true（置顶）：块顶不再画分隔线，避免分节最上方出现无意义横线。
+			var linksHeadStyle = props.first === true
+				? { paddingTop: '0', display: 'grid', gap: '4px' }
+				: { borderTop: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.25))', paddingTop: '6px', display: 'grid', gap: '4px' }
+			return h('div', { style: linksHeadStyle },
 				h('div', { style: { fontSize: '12px', fontWeight: 600, color: 'var(--dsw-alias-label-secondary, rgba(127,127,127,.9))', padding: '2px 0 4px' } },
 					wt('linksTitle')),
 				links.length === 0

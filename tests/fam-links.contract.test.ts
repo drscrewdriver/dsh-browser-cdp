@@ -95,3 +95,55 @@ describe("FamLinks v2 write discipline (source contracts)", () => {
   });
 });
 
+
+describe("settings section layout: links first, judgement group folds", () => {
+  it("the connection-target block renders BEFORE every field group", () => {
+    const start = source.indexOf("function FamilySettingsCard");
+    const end = source.indexOf("function FamGroup");
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    const fn = source.slice(start, end);
+    const linksAt = fn.indexOf("h(FamLinks");
+    const groupsAt = fn.indexOf("FAM_FIELD_GROUPS.map");
+    expect(linksAt).toBeGreaterThan(-1);
+    expect(groupsAt).toBeGreaterThan(-1);
+    // 顺序即语义：连接目标是分节第一性配置，必须排在所有分组之前。
+    expect(linksAt).toBeLessThan(groupsAt);
+    expect(fn).toMatch(/first: true/);
+  });
+
+  it("the first block drops its top divider so the section has no stray rule", () => {
+    const start = source.indexOf("function FamLinks");
+    const end = source.indexOf("function apply(ctx");
+    expect(end).toBeGreaterThan(start);
+    const fn = source.slice(start, end);
+    expect(fn).toMatch(/props\.first === true/);
+    expect(fn).toMatch(/linksHeadStyle/);
+  });
+
+  it("every configuration group folds, and its collapsed state never touches host config", () => {
+    // 四个配置组全部可折叠：工具封印 / 基础 / 截图与推流 / 评审（JEV / Laya）。
+    const groupsAt = source.indexOf("var FAM_FIELD_GROUPS");
+    const groupsEnd = source.indexOf("function famText");
+    const groups = source.slice(groupsAt, groupsEnd);
+    for (const gk of ["gTools", "gBasic", "gCapture", "gJudge"]) {
+      expect(groups).toMatch(new RegExp("gk: '" + gk + "', foldable: true"));
+    }
+    expect((groups.match(/foldable: true/g) || []).length).toBe(4);
+    // 折叠 = 纯 UI 态：只写 localStorage，绝不 commitField。
+    const start = source.indexOf("function FamGroup");
+    const end = source.indexOf("function FamField");
+    const fn = source.slice(start, end);
+    expect(fn).toMatch(/aria-expanded/);
+    expect(fn).toMatch(/readFold\(group\.gk\)/);
+    expect(fn).toMatch(/writeFold\(group\.gk, next\)/);
+    expect(fn).not.toMatch(/commitField/);
+    expect(fn).not.toMatch(/scope\.set/);
+    // 收起时不渲染字段行（不是 CSS 隐藏）。
+    expect(fn).toMatch(/foldable && !open/);
+    // 折叠态读写全程 try/catch：隐私模式/配额满不抛。
+    const helpers = source.slice(source.indexOf("function foldKey"), groupsAt);
+    expect((helpers.match(/try \{/g) || []).length).toBe(2);
+    expect(helpers).toMatch(/bcdp\.settings\.fold\./);
+  });
+});

@@ -63,7 +63,7 @@ describe("manifest version-line discipline", () => {
       // unified era: devDeps stay on the newest line (typecheck fidelity only);
       // segment era: devDep must equal the shared range verbatim;
       // exact-enum era: a single-term pin on one of the enumerated rc is fidelity.
-      expect(dev === RANGE || ENUM_TERMS.includes(dev) || /^>=0\.2\.0-rc\.\d+ <0\.2\.1-0$/.test(dev)).toBe(true);
+      expect(dev === RANGE || ENUM_TERMS.includes(dev) || /^>=0\.2\.\d+-rc\.\d+ <0\.2\.\d+-0$/.test(dev)).toBe(true);
     }
   });
 

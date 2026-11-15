@@ -42,6 +42,22 @@ export interface PanelActionRunner {
   switchTab: (body: Record<string, unknown>) => Promise<PanelActionOutcome>
   /** Close one tab (the user clicked × in the panel). Refuses the last tab. */
   closeTab: (body: Record<string, unknown>) => Promise<PanelActionOutcome>
+  /**
+   * The browser's real tab inventory, in the shape the panel's `spaces` event
+   * needs. A structural change (close) must push this immediately: the strip is
+   * driven by `spaces`, and on a CLI channel that event normally rides a frame
+   * broadcast which early-returns when there is no picture.
+   */
+  listTabs: () => Promise<PanelSpaceRow[]>
+}
+
+/** One row of the panel's tab strip (mirrors cast-server's CliSpaceRow). */
+export interface PanelSpaceRow {
+  targetId: string
+  url: string
+  title: string
+  active: boolean
+  lastActive: number
 }
 
 /**
@@ -177,6 +193,26 @@ export function buildEgoSwitchTabScript(spaceJson: string, body: Record<string, 
     `  if (!__hit) throw new Error('tab not found: ' + __bcdpTarget)\n` +
     `  if (__hit.active !== true) await browser.switchTab({ targetId: __bcdpTarget })\n` +
     `  console.log(${js(PANEL_SENTINEL)} + JSON.stringify({ ok: true, targetId: __bcdpTarget, url: __hit.url || '', title: __hit.title || '' }))\n` +
+    `} catch (__bcdpErr) {\n` +
+    `  console.log(${js(PANEL_SENTINEL)} + JSON.stringify({ ok: false, error: String((__bcdpErr && __bcdpErr.message) || __bcdpErr) }))\n` +
+    `}\n`
+  )
+}
+
+/**
+ * tab-inventory heredoc — the panel's tab strip, read from the browser.
+ *
+ * Used after a structural change (a close) so the strip updates NOW instead of
+ * waiting for the next successful frame capture. Prints the raw rows as JSON
+ * behind the sentinel; the host maps them onto its CliSpaceRow contract.
+ */
+export function buildEgoListTabsScript(spaceJson: string): string {
+  return (
+    `try {\n` +
+    `  await taskSpaces.useOrCreate(${spaceJson})\n` +
+    `  const __tabs = await browser.listTabs()\n` +
+    `  const __rows = __tabs.map((t) => ({ targetId: String(t.targetId || ''), url: String(t.url || ''), title: String(t.title || ''), active: t.active === true }))\n` +
+    `  console.log(${js(PANEL_SENTINEL)} + JSON.stringify({ ok: true, tabs: __rows }))\n` +
     `} catch (__bcdpErr) {\n` +
     `  console.log(${js(PANEL_SENTINEL)} + JSON.stringify({ ok: false, error: String((__bcdpErr && __bcdpErr.message) || __bcdpErr) }))\n` +
     `}\n`

@@ -1,3 +1,13 @@
+## 1.12.2 (2026-11-15)
+
+**修掉「关了但面板不刷新」。**
+
+- **现象**：ego-cli 通道上点 × 关新浪，浏览器里确实没了（`browser.listTabs()` 5 → 4），但面板标签条还挂着那一行。
+- **根因**：面板标签条只认 `spaces` SSE 事件；在 CLI 通道上这个事件是**搭帧广播的车**发的（`writeCliImages` 里 `includeSpaces`），而帧广播在**没有图**时直接 early-return。关闭是结构性变更，不该等下一次成功截图——面板空闲时就是永远等不到。
+- **修法**：`closeCliTab` 的 ego 分支在关闭成功后主动拉一次真实清单并 `broadcastCliSpaces`，用 `void (async …)()` 发射，**不阻塞**给用户的响应（点击不该等第二次 CLI 往返）。新增 `buildEgoListTabsScript`（`src/cast/panel-actions.ts`）与 `PanelActionRunner.listTabs`，走同一套 `taskSpaces.useOrCreate` + `browser.listTabs` + sentinel 协议。
+- 拉清单失败时静默降级——下一次轮询 tick 会自己追上，不因此让关闭报错。
+- 新增 6 条契约测试（`ego-close-contract` 3 条 + 新增 `ego-list-tabs-contract` 3 条）：关闭分支必须在返回 `closed` 前广播、清单走 facade、发射不阻塞。
+
 ## 1.12.1 (2026-11-15)
 
 **修掉面板 × 在 ego-cli 通道上点了没反应。**

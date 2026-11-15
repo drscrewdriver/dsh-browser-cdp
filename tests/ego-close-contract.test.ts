@@ -73,3 +73,29 @@ describe('closeCliTab ego-cli branch', () => {
     expect((HOST.match(/makePanelActions\(ctx, cfg\)/g) ?? []).length).toBe(1)
   })
 })
+
+describe('ego close pushes the new inventory immediately', () => {
+  it('broadcasts the strip after a successful close instead of waiting for a frame', () => {
+    const i = HOST.indexOf("async (targetId: string): Promise<{ ok: boolean; reason: string }> => {")
+    const seg = HOST.slice(i, HOST.indexOf('// Tab activation', i))
+    // the ego branch must refresh the strip before returning 'closed'
+    const egoIdx = seg.indexOf('__ch?.egoRuntime === true')
+    const closedIdx = seg.indexOf("reason: 'closed'")
+    expect(egoIdx).toBeGreaterThan(-1)
+    expect(closedIdx).toBeGreaterThan(egoIdx)
+    expect(seg.slice(egoIdx, closedIdx)).toContain('broadcastCliSpaces(')
+    expect(seg.slice(egoIdx, closedIdx)).toContain('panelActions.listTabs()')
+  })
+
+  it('reads the inventory through the runtime facade', () => {
+    expect(HOST).toContain('buildEgoListTabsScript')
+    expect(HOST).toContain('listTabs: async () => {')
+  })
+
+  it('never blocks the close response on the broadcast', () => {
+    const i = HOST.indexOf("async (targetId: string): Promise<{ ok: boolean; reason: string }> => {")
+    const seg = HOST.slice(i, HOST.indexOf('// Tab activation', i))
+    // fired and forgotten: the user's click must not wait on a second CLI hop
+    expect(seg).toContain('void (async () => {')
+  })
+})

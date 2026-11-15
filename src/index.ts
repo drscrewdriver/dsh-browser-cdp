@@ -37,7 +37,7 @@ import { fileURLToPath } from 'node:url'
 import { importLoginCookies } from './login-import.ts'
 import { initCastServer, markEgoToolCall, getLastEgoActivity, onEgoActivity, setAttachEndpoint, recycleWorker, getCliPollStatus, getAttachEndpoint, broadcastCliFrames, broadcastCliSpaces, getCliTrackAll, pushFocus, panelWatcherCount, getWatchCounters } from './cast-server.ts'
 import { CliFramePoller, buildFrameScript, FRAME_SENTINEL } from './cast/cli-frame-poller.ts'
-import { buildEgoCloseTabScript, buildEgoNavigateScript, buildEgoSwitchTabScript, buildEgoWindowSizeScript, parsePanelResult, type PanelActionOutcome, type PanelActionRunner } from './cast/panel-actions.ts'
+import { buildEgoCloseTabScript, buildEgoListTabsScript, buildEgoNavigateScript, buildEgoSwitchTabScript, buildEgoWindowSizeScript, parsePanelResult, type PanelActionOutcome, type PanelActionRunner } from './cast/panel-actions.ts'
 import { buildEgoAxScript, buildTabbitAxSnippet, composeFallbackReport, parseAxSentinel, type FallbackAxSnapshot } from './cast/fallback-tab-report.ts'
 import type { TabAnchorReport } from './tab-report.ts'
 import { registerEgoBrowserGateway } from './gateway.ts'
@@ -1456,6 +1456,23 @@ function makePanelActions(ctx: EgoContext, cfg: EgoRuntimeConfig): PanelActionRu
     navigate: (body) => run((spaceJson) => buildEgoNavigateScript(spaceJson, body)),
     switchTab: (body) => run((spaceJson) => buildEgoSwitchTabScript(spaceJson, body)),
     closeTab: (body) => run((spaceJson) => buildEgoCloseTabScript(spaceJson, body)),
+    listTabs: async () => {
+      const space = resolveCliPanelSpace(cfg)
+      if (space === null) return []
+      const parsed = await run((spaceJson) => buildEgoListTabsScript(spaceJson))
+      const raw = (parsed as { tabs?: unknown }).tabs
+      if (parsed.ok !== true || !Array.isArray(raw)) return []
+      const now = Date.now()
+      return (raw as { targetId?: unknown; url?: unknown; title?: unknown; active?: unknown }[])
+        .filter((t) => typeof t.targetId === 'string' && t.targetId !== '')
+        .map((t) => ({
+          targetId: String(t.targetId),
+          url: String(t.url ?? ''),
+          title: String(t.title ?? ''),
+          active: t.active === true,
+          lastActive: now,
+        }))
+    },
   }
 }
 
@@ -3512,7 +3529,22 @@ bridge.onChange(() => tiers.reapply())
           if (__ch?.tabbitInventory !== true) {
             if (__ch?.egoRuntime === true) {
               const out = await panelActions.closeTab({ targetId })
-              if (out.ok === true) return { ok: true, reason: 'closed' }
+              if (out.ok === true) {
+                // The strip is driven by the `spaces` SSE event, and on this channel
+                // that event is normally piggybacked on a FRAME broadcast — which
+                // early-returns when there is no picture (blank page, skipped
+                // capture). A close is a structural change: push the new inventory
+                // NOW, or the row lingers until the next successful capture (or
+                // forever, if the panel is idle). Measured: the tab was really gone
+                // from browser.listTabs() while the panel still listed it.
+                void (async () => {
+                  try {
+                    const tabs = await panelActions.listTabs()
+                    if (tabs.length > 0) broadcastCliSpaces(tabs)
+                  } catch { /* the next poller tick will catch up */ }
+                })()
+                return { ok: true, reason: 'closed' }
+              }
               const why = typeof out.reason === 'string' && out.reason !== '' ? out.reason : 'close-failed'
               return { ok: false, reason: why }
             }

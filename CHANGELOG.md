@@ -1,3 +1,10 @@
+## 1.11.0
+
+**设置入口改为独立顶层分节 + 齿轮挂载崩溃修复。**
+
+- **独立设置分节**：从家族 tab 迁出，新增 `mountOwnSettingsSection`（`settings.section`）与 `mountSettingsSectionIcon`（图标），低版本回退齿轮浮窗。
+- **gen-1 齿轮崩溃修复**：`mountGen1SettingsGear` 裸 `ctx.get('remote')` 与 `remote.settings` 属性访问在 strict-resolver 宿主上抛 `cannot get property "remote.settings" without inject`，导致整个 mount 崩溃；改为将 `openSettingsDocument` 探测整体置于 try/catch，不可达时降级为 `hasOpenDoc=false`，由可达的 `configForms` 决定门控（0.1.7+/0.2.x 仍正确隐藏齿轮）。
+
 ## 1.10.0 (2026-11-14)
 
 **入口从 `bcdp_status` 换成 `bcdp_help`，流程说明搬进随包 skill `bcdp-browser`。**

@@ -27,15 +27,23 @@ describe("FamLinks v2 write discipline (source contracts)", () => {
     expect(fn).not.toMatch(/scope\.set/);
   });
 
-  it("the same FamilySettingsCard also mounts on the plugins page (plugins.bundle.config, keyed by package)", () => {
-    const start = source.indexOf("function mountPluginsPageCard");
+  it("the settings card mounts exactly once, as a top-level settings.section (no family tab, no plugin page card)", () => {
+    // 唯一入口原则：一个顶层 settings.section 承载 FamilySettingsCard。
+    const start = source.indexOf("function mountOwnSettingsSection");
     expect(start).toBeGreaterThan(-1);
-    const fn = source.slice(start);
-    expect(fn).toMatch(/ctx\.slots\.inject\('plugins\.bundle\.config'/);
-    expect(fn).toMatch(/key: 'dsh-browser-cdp'/);
+    const fn = source.slice(start, source.indexOf("function mountSettingsSectionIcon"));
+    expect(fn).toMatch(/ctx\.slots\.inject\('settings\.section'/);
+    expect(fn).toMatch(/id: 'dsh-browser-cdp'/);
     expect(fn.indexOf("FamilySettingsCard")).toBeGreaterThan(-1);
-    // one render source, two surfaces: the family tab keeps its own mount
-    expect(source).toMatch(/ctx\.slots\.inject\('dsh-family\.tab'/);
+    // 旧入口全部退出：家族 tab / 插件详情页卡 / Gen-2 item 卡都不再注册。
+    expect(source).not.toMatch(/ctx\.slots\.inject\('dsh-family\.tab'/);
+    expect(source).not.toMatch(/ctx\.slots\.inject\('plugins\.bundle\.config'/);
+    expect(source).not.toMatch(/ctx\.slots\.inject\('settings\.plugin\.item'/);
+    // 分节图标走 0.2.2 的独立槽位，id 必须等于分节 id（宿主按 id 寻址）。
+    const iconStart = source.indexOf("function mountSettingsSectionIcon");
+    const iconFn = source.slice(iconStart, source.indexOf("function SettingsSectionIcon"));
+    expect(iconFn).toMatch(/ctx\.slots\.inject\('settings\.section\.icon'/);
+    expect(iconFn).toMatch(/id: 'dsh-browser-cdp'/);
   });
 
   it("a rejected write surfaces instead of vanishing; user data never reaches innerHTML", () => {

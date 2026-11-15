@@ -2,7 +2,6 @@
 declare function require(id: string): any
 
 import { addRow, applyProbe, buildCdpRow, buildCliRow, buildLpRow, buildTabbitRow, hasCliLink, hasLpLink, hasTabbitLink, isFull, isValidEndpoint, MAX_LINKS, moveRow, removeRow, updateRow } from './fam-links'
-import { claimFamilyHostIfOrphaned } from './family-host'
 import { fromRatio, normalizeStored, toRatio, type RatioPos, type Viewport } from './fab-pos'
 import { commitField } from './fam-write'
 import { shouldShowGen1SettingsGear } from './gen1-gate'
@@ -1008,86 +1007,71 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 		// 冲突或瞬态故障）则有限次重试，预算用尽报 false 给调用方回滚乐观态。
 		// 桥轨的 set 在返回 false 前已经把 describe 等到底，所以重试带的是新 revision。
 
-		// ── 插件族共用设置 tab（「起子插件设置」）──────────────────────────
-		// dsh-thinking-levels 的顶级 settings.section 声明 `dsh-family.tab` 子席位；
-		// 本卡全量渲染 Config 的用户可调 volatile 字段（分组 + links 连接目标）。
-		// 数据臂双轨：rc.1+ 用 configForms 原生句柄（快照身份稳定）；≤0.1.5 无
-		// configForms 服务 → 落 webServer 桥轨。thinking-levels 缺席时 inject
-		// 静默等待，不阻塞客户端半。
-		function mountFamilySettingsCard(ctx: any) {
+		// ── 独立设置分节（顶层 settings.section，本插件唯一设置入口）────────
+		// 以前挂在 dsh-thinking-levels 的「起子插件设置」家族 tab 里（dsh-family.tab
+		// 子席位 + claimFamilyHostIfOrphaned 兜底接管）。家族聚合意味着「不装
+		// thinking-levels 就没有设置面」，而本卡是一个完整的多分组设置页，不适合
+		// 塞在别人的 tab 里 —— 改为自持一个顶层分节，与记忆/模型/插件并列。
+		//
+		// 分节 body 直接复用 FamilySettingsCard：它是自包含 grid（不消费
+		// renderSlot / 家族账本），本就可作顶层分节主体。
+		// 数据臂双轨不变：rc.1+ 用 configForms 原生句柄（快照身份稳定）；≤0.1.5 无
+		// configForms 服务 → 落 webServer 桥轨。
+		function ownSettingsScope(ctx: any) {
 			var forms = typeof ctx.get === 'function' ? ctx.get('configForms') : undefined
 			var scope = forms && typeof forms.get === 'function' ? forms.get('dsh-browser-cdp') : undefined
-			if (!scope) scope = makeBridgeScope()
-			// 贡献卡注册（apply 顶层）：scope 已有 configForms/桥 两轨兜底，恒非空。
-			ctx.slots.inject('dsh-family.tab', function () {
+			return scope || makeBridgeScope()
+		}
+
+		function mountOwnSettingsSection(ctx: any) {
+			var scope = ownSettingsScope(ctx)
+			// order 210：紧随宿主内置分节（general 0 / models 10 / plugins 15 /
+			// agent-presets 20）与记忆（200）。id 自带，不与任何内置 id 相撞。
+			ctx.slots.inject('settings.section', function () {
 				return ctx.slots.register({
-					name: 'dsh-family.tab',
+					name: 'settings.section',
 					id: 'dsh-browser-cdp',
-					order: 35,
+					order: 210,
 					label: function () { return wt('famTitle') },
 					inject: function () { return { scope: scope } },
 				}, FamilySettingsCard)
-			}, 'dsh-browser-cdp: family settings tab')
-			// 家族容器兜底：thinking-levels/guard/steward/mcp 全部让位或声明失败时，
-			// 上面的 inject 会静默等待——本卡整轮启动不可见且不报错。到分级时刻自己上位。
-			// declare-or-withdraw：声明失败就放弃，绝不裸注册不带 children 的残废节。
-			var claim = claimFamilyHostIfOrphaned(
-				ctx.slots,
-				function () {
-					try {
-						return ctx.slots.entries('settings.section')
-							.some(function (e: any) { return String((e && e.options && e.options.id) || '') === 'dsh-family' })
-					} catch { return false }
-				},
-				function () { return '起子插件设置' },
-				'[dsh-browser-cdp]',
-				// 接管态内联直挂本卡：own 卡组件 + 现取 scope（configForms/桥 两轨兜底，非空白）。
-				{ id: 'dsh-browser-cdp', component: FamilySettingsCard, inject: function () { return { scope: scope } } },
-			)
-			if (typeof ctx.effect === 'function') ctx.effect(function () { return claim }, 'dsh-browser-cdp: family host backstop')
+			}, 'dsh-browser-cdp: own settings section')
 		}
 
-		// ── 插件详情页设置卡（plugins.bundle.config keyed 席位）─────────────
-		// thinking-levels b660785 同款双挂载：同一张 FamilySettingsCard、同一个
-		// scope——family tab 之外，插件详情页的 keyed 席位（按包名分发）是独立
-		// 设置入口；不装 thinking-levels 时 family tab 的 inject 静默等待、本卡
-		// 无处出现，这个面就是唯一设置入口。0.1.7 / 0.2.0 宿主均声明该席位；
-		// 未声明它的宿主上 inject 空转不阻塞客户端半。卡是叶子组件（不消费
-		// renderSlot），无需 b660785 的缺席守卫。
-		function mountPluginsPageCard(ctx: any) {
-			var forms = typeof ctx.get === 'function' ? ctx.get('configForms') : undefined
-			var scope = forms && typeof forms.get === 'function' ? forms.get('dsh-browser-cdp') : undefined
-			if (!scope) scope = makeBridgeScope()
-			ctx.slots.inject('plugins.bundle.config', function () {
+		// ── 分节导航图标（0.2.2+ 的独立槽位，按分节 id 寻址）────────────────
+		// 宿主把导航行图标做成 `settings.section.icon` list 槽：注册 id 必须等于目标
+		// 分节的 id（未匹配的 id 永不渲染），渲染点 `renderSlot('settings.section.icon',
+		// { size, active }, { only: row.id, fallback: navIcon(row.id) })`——没有注册就
+		// 回退内置齿轮。所以在不支持该槽的宿主（0.2.1/0.1.7 及更早）上，这个 inject
+		// 静默等待，分节退回齿轮，天然降级，不需要版本判断。
+		// 0.2.2-rc.3 宿主源码：ui-settings/src/client/contract/slots.ts:67。
+		function mountSettingsSectionIcon(ctx: any) {
+			ctx.slots.inject('settings.section.icon', function () {
 				return ctx.slots.register({
-					name: 'plugins.bundle.config',
-					key: 'dsh-browser-cdp',
-					inject: function () { return { scope: scope } },
-				}, FamilySettingsCard)
-			}, 'dsh-browser-cdp: plugins-page config card')
+					name: 'settings.section.icon',
+					id: 'dsh-browser-cdp',
+					order: 210,
+					inject: function () { return {} },
+				}, SettingsSectionIcon)
+			}, 'dsh-browser-cdp: settings section icon')
 		}
 
-		// ── Gen-2（0.1.2/0.1.5）设置页插件卡席位 ──────────────────────────
-		// dsh-family.tab / plugins.bundle.config 都是 0.1.7+ 席位；0.1.2/0.1.5 的
-		// 宿主设置页由 ui-settings-plugins 的 keyed 席位 settings.plugin.item 派发——
-		// key 必须等于卡片所编辑的 settings 命名空间，实际渲染面 = 宿主 served
-		// namespaces（来自 settingsScope.describe）∩ 已注册卡（§3.5 三条件，缺一不
-		// 出现且无报错）。served 本 ns 依赖 host 侧 installSettingsAuto 的 Gen-B
-		// installSection 已在 0.1.2/0.1.5 注册该 ns。数据臂沿用 configForms||桥 两轨。
-		// 在未声明该槽的宿主（Gen-1 无设置页 / Gen-3 已换席位）上，inject 空转不阻塞。
-		function mountLegacySettingsCard(ctx: any) {
-			var forms = typeof ctx.get === 'function' ? ctx.get('configForms') : undefined
-			var scope = forms && typeof forms.get === 'function' ? forms.get('dsh-browser-cdp') : undefined
-			if (!scope) scope = makeBridgeScope()
-			ctx.slots.inject('settings.plugin.item', function () {
-				return ctx.slots.register({
-					name: 'settings.plugin.item',
-					key: 'dsh-browser-cdp',
-					inject: function () { return { scope: scope } },
-				}, FamilySettingsCard)
-			}, 'dsh-browser-cdp: legacy gen-2 settings card')
+		// 导航图标组件：宿主给 size（请求的方形边长）与 active（该分节是否选中）。
+		// 用 currentColor 描边跟随导航行的字色，选中/悬停不用另写样式。
+		function SettingsSectionIcon(props: any) {
+			var size = typeof props.size === 'number' && props.size > 0 ? props.size : 16
+			return React.createElement('span', {
+				style: { display: 'inline-flex', width: size + 'px', height: size + 'px', alignItems: 'center', justifyContent: 'center' },
+				dangerouslySetInnerHTML: { __html: ICON_GLOBE },
+			})
 		}
 
+		// 旧设置面（plugins.bundle.config 详情页卡 / settings.plugin.item Gen-2 卡 /
+		// dsh-family.tab 家族 tab）已全部移除：本插件只保留一个设置入口——上面那个
+		// 顶层 settings.section。三个槽位在 0.1.2 起就同时存在（实测 0.1.2-rc.1 /
+		// 0.1.5-rc.3 / 0.1.7-rc.2 / 0.2.2-rc.3 的 ui-settings-plugins 都声明
+		// settings.plugin.item 与 settings.plugins.tab），继续挂多份 = 设置里出现
+		// 多份「CDP 浏览器」。各留一个座位 = 结构上不可能再出现两份。
 		// ── Gen-1（0.1.0/0.1.1）设置齿轮（shell.overlay 浮窗补位）───────────
 		// Gen-1 宿主壳无可达原生设置页（§4 farm 实测齿轮→整卡→改值→落盘全通），
 		// 故在 shell.overlay 挂一枚固定齿轮，点开浮层承载同一张 FamilySettingsCard。
@@ -1098,8 +1082,20 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 		function mountGen1SettingsGear(ctx: any) {
 			var forms = typeof ctx.get === 'function' ? ctx.get('configForms') : undefined
 			var hasConfigForms = !!(forms && typeof forms.get === 'function')
-			var remote = (typeof ctx.get === 'function' ? ctx.get('remote') : undefined) || ctx.remote
-			var hasOpenDoc = !!(remote && remote.settings && typeof remote.settings.openSettingsDocument === 'function')
+			// `remote` is intentionally NOT in this plugin's top-level inject list, so a
+			// strict-resolver host throws when the settings namespace is touched (the throw
+			// surfaces on the `remote.settings` property access, NOT on ctx.get('remote')).
+			// The whole openSettingsDocument probe must therefore sit inside the try: leaving
+			// the property read outside aborts the entire gear mount. Degrading an unreachable
+			// remote to hasOpenDoc=false is safe because the (reachable) configForms signal
+			// still hides the gear on 0.1.7+/0.2.x, and genuine gen-1 hosts show it as intended.
+			var hasOpenDoc = false
+			try {
+				var remote = (typeof ctx.get === 'function' ? ctx.get('remote') : undefined) || ctx.remote
+				hasOpenDoc = !!(remote && remote.settings && typeof remote.settings.openSettingsDocument === 'function')
+			} catch (e) {
+				hasOpenDoc = false
+			}
 			if (!shouldShowGen1SettingsGear(hasConfigForms, hasOpenDoc)) return
 			var scope = makeBridgeScope()
 			ctx.slots.inject('shell.overlay', function () {
@@ -1651,9 +1647,8 @@ h('button', { type: 'button', disabled: !writable || isFull(links) || hasCliLink
 		// inside apply take every later mount down with them, so each one is
 		// isolated and failures degrade to a console.warn only.
 		var mounts: Array<[string, (c: any) => void]> = [
-			['family settings tab', mountFamilySettingsCard],
-			['plugins-page config card', mountPluginsPageCard],
-			['legacy gen-2 settings card', mountLegacySettingsCard],
+			['own settings section', mountOwnSettingsSection],
+			['settings section icon', mountSettingsSectionIcon],
 			['gen-1 settings gear', mountGen1SettingsGear],
 
 			['picks dock', mountPicksDockCard],

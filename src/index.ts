@@ -1808,6 +1808,10 @@ let _tabbitWindowId = 0
 const TABBIT_PANEL_TASK = 'dsh-panel'
 /** Upper bound on pages one task may own; each extra page slows every call. */
 const TABBIT_MAX_OWNED_PAGES = 2
+/** How long the close guard may stay armed. A tabbit snippet that never resolves
+ * must not stall the frame poller forever; 15 s is comfortably past the measured
+ * fast path (~560 ms) and the claim-release path (~47 ms + close). */
+const CLOSE_INFLIGHT_MAX_MS = 15_000
 /** Last close attempt, echoed in the stats snapshot: the panel's × is verified by
  * INVENTORY, not by the receipt status (page.close() kills the receipt). */
 let lastClose: { tabId: number; task: string; state: string; status: string; closedByReceipt: boolean; stillThere: boolean; ms: number; at: number } | null = null
@@ -3518,6 +3522,11 @@ bridge.onChange(() => tiers.reapply())
           if (!cli.found) return { ok: false, reason: 'tabbit-cli-missing' }
           const tabId = Number(targetId)
           if (!Number.isFinite(tabId) || tabId <= 0) return { ok: false, reason: 'bad-target' }
+          // B6 — never close the last tab. An empty space leaves the panel with a
+          // strip no tool can recover from without opening a new tab first, and the
+          // user reads it as 'the panel broke'.
+          const invNow = tabbitSpaceRows()
+          if (invNow.tabs.length <= 1 && invNow.complete) return { ok: false, reason: 'last-tab' }
           // DISPATCH, DON'T BLOCK. Measured behaviour of tabbit-cli 1.21.21:
           //
           //   available → an IDLE task closes a real tab in ~560 ms;
@@ -3536,31 +3545,55 @@ bridge.onChange(() => tiers.reapply())
           const withDeadline = async <T>(work: Promise<T>, ms: number, fallback: T): Promise<T> => {
             return Promise.race([work, new Promise<T>((resolve) => setTimeout(() => resolve(fallback), ms))])
           }
+          // B1 — the guard must cover the CLOSE, not just the inventory. Releasing it
+          // in a `finally` around the lookup let the 3 s poller grab the executor the
+          // instant the lookup ended, and the close receipt queued behind it. Release
+          // at the end of the async chain, with a watchdog so a snippet that never
+          // resolves cannot stall the poller forever.
           _closeInFlight = true
-          let state = ""
-          let closer = CLOSE_SCRATCH_TASK
-          try {
-            const inv = await withDeadline(tabbitListTabs(ctx.subprocess, cli.cliPath, TABBIT_PANEL_TASK), 3000, null)
-            state = String(inv?.tabs.find((t) => t.tabId === tabId)?.state ?? "")
-            if (state === "owned") {
-              await withDeadline(tabbitFinishTask(ctx.subprocess, cli.cliPath, TABBIT_PANEL_TASK, false), 3000, undefined as never)
-              _tabbitOwnerCache = { at: 0, owners: new Map() }
-            } else if (state === "claimed") {
-              let owner = _tabbitOwnerCache.owners.get(tabId)
-              if (owner === undefined) {
-                const diag = await withDeadline(tabbitDiagnose(ctx.subprocess, cli.cliPath), 3000, null)
-                if (diag) owner = parseTabbitTasks(diag.raw).find((t) => t.ownedTabIds.includes(tabId))?.taskName
-              }
-              if (owner !== undefined && owner !== "") closer = owner
-            }
-          } finally {
+          let released = false
+          const release = (): void => {
+            if (released) return
+            released = true
             _closeInFlight = false
           }
+          const watchdog = setTimeout(release, CLOSE_INFLIGHT_MAX_MS)
+          let state = ''
+          let closer = CLOSE_SCRATCH_TASK
+          let owner = ''
+          try {
+            const inv = await withDeadline(tabbitListTabs(ctx.subprocess, cli.cliPath, TABBIT_PANEL_TASK), 3000, null)
+            state = String(inv?.tabs.find((t) => t.tabId === tabId)?.state ?? '')
+            // B2/B3 — ask the shared planner who may close this tab. Hard-coding
+            // TABBIT_PANEL_TASK finished the wrong task whenever the tab was held by
+            // a tool's own `dsh-<session>` task, so `owned` tabs could never close.
+            if (state === 'owned' || state === 'claimed') {
+              let tasks = _tabbitOwnerCache.at !== 0 && _tabbitOwnerCache.owners.has(tabId)
+                ? [{ taskName: String(_tabbitOwnerCache.owners.get(tabId) ?? ''), ownedTabIds: [tabId] }]
+                : []
+              if (tasks.length === 0) {
+                const diag = await withDeadline(tabbitDiagnose(ctx.subprocess, cli.cliPath), 3000, null)
+                if (diag) tasks = parseTabbitTasks(diag.raw)
+              }
+              const candidates = planCloseTasks(tasks, tabId, _tabbitLastTaskName)
+              owner = candidates[0] ?? ''
+              if (state === 'owned' && owner !== '') {
+                // Drop the claim first: closing under a busy owner queues for minutes.
+                await withDeadline(tabbitFinishTask(ctx.subprocess, cli.cliPath, owner, false), 3000, undefined as never)
+                // B4 — the task is gone, so its cached identity must go too, or the
+                // poller keeps running against a dead task (EMPTY_OUTPUT / recycle).
+                forgetTabbitTaskState()
+                if (_tabbitLastTaskName === owner) _tabbitLastTaskName = ''
+                _tabbitOwnerCache = { at: 0, owners: new Map() }
+              }
+              if (owner !== '') closer = owner
+            }
+          } catch { /* inventory is best-effort; the close below is the point */ }
 
           // Fire the close and return. Verification is the poller's next inventory.
           void runTabbitSnippet(
             ctx.subprocess,
-            "await page.close().catch(() => {}); return { closed: page.isClosed() };",
+            'await page.close().catch(() => {}); return { closed: page.isClosed() };',
             { cliPath: cli.cliPath, taskName: closer, requestId: `close-${Date.now()}`, tabId },
           ).then(async (fired) => {
             let stillThere = true
@@ -3568,10 +3601,11 @@ bridge.onChange(() => tiers.reapply())
               const inv = await tabbitListTabs(ctx.subprocess, cli.cliPath, TABBIT_PANEL_TASK)
               stillThere = inv.tabs.some((t) => t.tabId === tabId)
             } catch { /* cannot verify */ }
+            // B5 — the ONE terminal write for a dispatched close.
             lastClose = {
               tabId,
               task: closer,
-              state: state || "unknown",
+              state: state || 'unknown',
               status: String(fired.receipt.status),
               closedByReceipt: !stillThere,
               stillThere,
@@ -3586,10 +3620,24 @@ bridge.onChange(() => tiers.reapply())
             } else {
               ctx.logger?.info?.(`dsh-browser-cdp: close tab ${tabId} via ${closer} did not close (${fired.receipt.status})`)
             }
-          }).catch(() => undefined)
+          }).catch(() => {
+            // B5 — the failure terminal state, written exactly once too.
+            lastClose = {
+              tabId,
+              task: closer,
+              state: state || 'unknown',
+              status: 'error',
+              closedByReceipt: false,
+              stillThere: true,
+              ms: Date.now() - startedAt,
+              at: Date.now(),
+            }
+          }).finally(() => {
+            clearTimeout(watchdog)
+            release()
+          })
 
-          lastClose = { tabId, task: closer, state: state || "unknown", status: "dispatched", closedByReceipt: false, stillThere: true, ms: Date.now() - startedAt, at: Date.now() }
-          return { ok: true, reason: "dispatched" }
+          return { ok: true, reason: 'dispatched' }
         },
         // Tab activation / reload / goto on the tabbit channel. Without this the
         // panel's own actions fell through to the ego-cli heredoc runner and

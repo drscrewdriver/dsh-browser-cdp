@@ -33,4 +33,20 @@ describe('planCloseTasks', () => {
     ]
     expect(planCloseTasks(tasks, 5, '')).toEqual(['first', CLOSE_SCRATCH_TASK])
   })
+// The close path feeds this planner whatever the diagnostic returned. When the
+  // diagnostic failed (timeout / CLI error) the list is empty and the tab is not
+  // found among owners — the close must still pick a task instead of guessing.
+  it('falls back to the last used task when the owner is absent from the list', () => {
+    const tasks = [
+      { taskName: 'dsh-panel', ownedTabIds: [1] },
+      { taskName: 'dsh-other', ownedTabIds: [2] },
+    ]
+    expect(planCloseTasks(tasks, 42, 'dsh-session')).toEqual(['dsh-session', CLOSE_SCRATCH_TASK])
+  })
+
+  it('degrades to the scratch task alone when nothing is known about the tab', () => {
+    expect(planCloseTasks([], 42, '')).toEqual([CLOSE_SCRATCH_TASK])
+    // whitespace-only last task name must not become a candidate
+    expect(planCloseTasks([], 42, '   ')).toEqual([CLOSE_SCRATCH_TASK])
+  })
 })

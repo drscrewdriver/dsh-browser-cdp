@@ -1,3 +1,7 @@
+## 1.13.1 (2026-11-17)
+
+> 1.13.0 因 npm registry 的 staged-publish 元数据残留（`409 Cannot publish over previously staged version`，同 npm/cli#9889）无法落地，改用 1.13.1 发布。代码与 1.13.0 完全一致。
+
 ## 1.13.0 (2026-11-17)
 
 **`cdpMode=local` 不再「一开 DSH 就弹窗」，并且受管浏览器终于真的被用上。**

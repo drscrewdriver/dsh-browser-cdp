@@ -1,3 +1,23 @@
+## 1.13.0 (2026-11-17)
+
+**`cdpMode=local` 不再「一开 DSH 就弹窗」，并且受管浏览器终于真的被用上。**
+
+上游 issue [#14](https://github.com/drscrewdriver/dsh-browser-cdp/issues/14)。
+
+- **启动时机可配置**：新增 `localLaunchPolicy`（`eager` / `on-demand` / `manual`），**默认 `on-demand`**。默认值变了，行为也就变了 —— 显式写在这里：`on-demand` 下 DSH 启动后受管浏览器进程数为 0，推迟到首个真正碰页面的 `bcdp_*` 调用才起。
+  - **要回退到旧行为**（每次启动 DSH 就弹窗）：把 `localLaunchPolicy` 设成 `eager`。1.12.2 及更早就是 eager。
+  - 它与 `localHeadless` **正交**，不是三态下拉：`on-demand + 有头` = 启动干净、首次页面操作才出窗口；`on-demand + 无头` = 全程无窗口。
+  - `allowProbeColdStart` 只闸 ego-cli 探针，管不到 local 分支 —— 两个后端此前给了相反的默认值，这次补齐。
+- **修掉一个比 #14 更靠前的缺陷：受管 launcher 的端点从来没被注入过**。
+  - ① `effectiveChannel` 用 `attachMatchesLink` 按链路过滤缓存，而 local 缓存行的 `targetId` 恒为 `''`（local 模式没有激活目标）—— 两个判据同时把它挡掉，launcher 写进去的 ready/wsUrl 取不出来。
+  - ② `decideAttach` 的 local 分支无条件返回 `{kind:'local'}`，而 `resolveEgoEnv` 只在 `kind==='inject'` 时写 `EGO_LINUX_CDP_URL`。
+  - 合起来的后果：运行时自己再冷启一个 Chrome（`ego-lite-linux` profile），受管实例只服务观察窗 —— local 模式实际是**两个浏览器**。
+  - 修法：`effectiveChannel` 在 local 模式跳过链路作用域；`decideAttach` 在 ready+ws 时返回 `{kind:'inject', source:'local'}`（`inject.source` 由 `'remote'` 扩为 `'remote' | 'local'`）。
+- **运行期开关**：`/bcdp browser on|off|start|status`。`off` 立刻停掉且本会话不再自动起；`on` 解除；`start` 在 `manual` 策略下是唯一入口；`status` **只读**（查询状态绝不起浏览器）。**不落盘** —— 它只覆盖本会话，重启回到配置值（落盘会与 `localLaunchPolicy` 形成两个真相源）。
+- **状态查询零副作用**：`bcdp_status`（含 `refresh:true`）在 local 未启动时改走只读的 `refreshLocalProbe()`，并在既有 `raw` 字段里合成 `not-started: …`（**不新增 output 属性** —— 它是唯一常驻工具，每字符按轮付费）；`bcdp_tab op=list` / `bcdp_space op=list|close` 在未启动时直接返回空结果 + 指引，**不进 heredoc**（那条通道的初始化副作用就是冷启动浏览器）。
+- **面板 ⟳ 不再是一条隐藏的启动路径**：`/api/cdp-refresh` 在 local 模式改走 `refreshLocalProbe()`，既不启动，也不再用一个裸 `status:'local'` 把已经起来的浏览器从徽标里抹掉。
+- 新增 41 条测试：`local-launch`（25，谓词与策略矩阵）、`local-inject`（10，断链两端 + 只读探活）、`tui-command`（6，browser 子命令）、`config`（4，默认值与脏值兜底）。顺带修了 `mount-coldstart` 一条既有假绿：它用 `includes('nodejs')` 判 heredoc，而解释器路径 `C:\nodejs\node.exe` 也含 "nodejs"，在 node 装在 `nodejs` 目录的机器上恒假。
+
 ## 1.12.2 (2026-11-15)
 
 **修掉「关了但面板不刷新」。**

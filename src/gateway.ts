@@ -26,6 +26,7 @@ import type { RawConfig, ResolvedConfig } from './types.ts'
 import {
   defaultAttachCache,
   refreshAttach,
+  refreshLocalProbe,
   probeEndpoint,
 } from './cdp-targets.ts'
 import { createSubprocessCliIo } from './cdp/cli-link.ts'
@@ -193,31 +194,39 @@ export function registerEgoBrowserGateway(
             // a manual refresh from the panel has the same effect as a settings
             // change.
             const cfg = resolveConfig(bridge.source() as RawConfig)
-            const attach = await refreshAttach({
-              targets: cfg.links,
-              activeTargetId: cfg.activeTargetId,
-              mode: cfg.cdpMode,
-              timeoutMs: cfg.cdpProbeTimeoutMs,
-              cache: defaultAttachCache,
-              // R7 — same wiring as triggerCdpRefresh(): a local ego CLI link
-              // is probed through the host subprocess service.
-              cliIo: createSubprocessCliIo(ctx.subprocess),
-              sdkPath: fileURLToPath(new URL('../runtime/ego-browser/dist/out/index.js', import.meta.url)),
-              bundledCli: fileURLToPath(new URL('../runtime/ego-linux/bin/ego-browser.mjs', import.meta.url)),
-              // Lightpanda backend — managed-serve extra args for `lightpanda` rows.
-              lightpandaArgs: cfg.lightpandaArgs,
-              // Same cold-start gate as triggerCdpRefresh(): leaving this
-              // undefined let an undefined value mean "cold start allowed",
-              // so a panel refresh could pop a browser window that a settings
-              // change would not. Both paths must read the same switch.
-              cliProbeColdStart: cfg.allowProbeColdStart === true,
-              tabbitProbe: (link) => {
-                const cli = resolveTabbitCli(link.cliPath)
-                return cli.found
-                  ? { ok: true, cliPath: cli.cliPath }
-                  : { ok: false, cliPath: cli.cliPath, code: 'tabbit-cli-missing', message: cli.error }
-              },
-            })
+            // local mode: refresh means "re-read what the launcher already has",
+            // NEVER "start one". Routing this through refreshAttach with
+            // useLauncher would make the panel's ⟳ a second launch path that
+            // silently defeats localLaunchPolicy — and it would also clobber the
+            // launcher's ready row with a bare `status:'local'`, so a browser
+            // that WAS up would vanish from the badge.
+            const attach = cfg.cdpMode === 'local'
+              ? await refreshLocalProbe({ cache: defaultAttachCache, timeoutMs: cfg.cdpProbeTimeoutMs })
+              : await refreshAttach({
+                  targets: cfg.links,
+                  activeTargetId: cfg.activeTargetId,
+                  mode: cfg.cdpMode,
+                  timeoutMs: cfg.cdpProbeTimeoutMs,
+                  cache: defaultAttachCache,
+                  // R7 — same wiring as triggerCdpRefresh(): a local ego CLI link
+                  // is probed through the host subprocess service.
+                  cliIo: createSubprocessCliIo(ctx.subprocess),
+                  sdkPath: fileURLToPath(new URL('../runtime/ego-browser/dist/out/index.js', import.meta.url)),
+                  bundledCli: fileURLToPath(new URL('../runtime/ego-linux/bin/ego-browser.mjs', import.meta.url)),
+                  // Lightpanda backend — managed-serve extra args for `lightpanda` rows.
+                  lightpandaArgs: cfg.lightpandaArgs,
+                  // Same cold-start gate as triggerCdpRefresh(): leaving this
+                  // undefined let an undefined value mean "cold start allowed",
+                  // so a panel refresh could pop a browser window that a settings
+                  // change would not. Both paths must read the same switch.
+                  cliProbeColdStart: cfg.allowProbeColdStart === true,
+                  tabbitProbe: (link) => {
+                    const cli = resolveTabbitCli(link.cliPath)
+                    return cli.found
+                      ? { ok: true, cliPath: cli.cliPath }
+                      : { ok: false, cliPath: cli.cliPath, code: 'tabbit-cli-missing', message: cli.error }
+                  },
+                })
             const ws = attach.status === 'ready' && attach.wsUrl !== '' ? attach.wsUrl : null
             if (setAttachEndpoint(ws, attach.status === 'ready' ? attach.engine ?? 'unknown' : null)) {
               void recycleWorker('cdp manual refresh').catch(() => null)

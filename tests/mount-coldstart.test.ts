@@ -66,7 +66,10 @@ describe('mount-time attach probe (cold-start gate)', () => {
     await vi.advanceTimersByTimeAsync(1500)
     const commands = spawns.map((argv) => argv.join(' '))
     expect(commands.some((command) => command.includes('--status')), `expected a --status probe, saw: ${JSON.stringify(commands)}`).toBe(true)
-    expect(commands.some((command) => command.includes('nodejs')), `no heredoc may run on mount, saw: ${JSON.stringify(commands)}`).toBe(false)
+    // 判据是 heredoc 子命令本身（argv 里有一个恰好等于 'nodejs' 的元素），
+    // 不是字符串包含：解释器路径 `C:\nodejs\node.exe` 也含 "nodejs"，
+    // 用 includes() 会让这条断言在 node 装在 nodejs 目录的机器上恒假。
+    expect(spawns.some((argv) => argv.includes('nodejs')), `no heredoc may run on mount, saw: ${JSON.stringify(commands)}`).toBe(false)
     for (const dispose of teardown) dispose()
   })
 

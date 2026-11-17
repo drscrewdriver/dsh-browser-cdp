@@ -192,6 +192,17 @@ export const Config = z.object({
   toolJudge: z.boolean().default(true).description('Judgement tier (5 bcdp_jev_* tools). On still requires a JEV or Laya key: without one they can only answer "not configured", so they stay sealed anyway.').volatile(),
   sessionScopedPulse: z.boolean().default(true).description('Per-session unlock: when on, calling bcdp_status in session A only unlocks tools for session A — other sessions stay at their own depth. When off, any session\'s unlock is process-wide (historical behaviour). Falls back to off when the host does not expose agent-scoped tool restriction.').volatile(),
   localHeadless: z.boolean().description('Run the locally launched browser headless.'),
+  // 启动时机（与 localHeadless 正交，别合并成一个三态下拉）：on-demand 下
+  // DSH 启动不再弹受管浏览器窗口，推迟到首个真正碰页面的 bcdp_* 调用。
+  // issue #14：`allowProbeColdStart` 只闸住了 ego-cli 探针，local 走的是另一条
+  // 路径（refreshAttach 的 local 分支），两条后端此前给了相反的默认值。
+  localLaunchPolicy: z
+    .union(['eager', 'on-demand', 'manual'])
+    .default('on-demand')
+    .description(
+      'When the managed local browser (cdpMode=local) is allowed to start. on-demand (default) = only on the first call that really touches a page, so DSH starts with no browser window; eager = at plugin mount, which is the pre-1.13 behaviour and pops a window on every start; manual = only via `/bcdp browser start`. Orthogonal to localHeadless: on-demand + headed is a meaningful combination (clean start, window appears on first page action).',
+    )
+    .volatile(),
   remoteEnabled: z.boolean().description('Master switch for REMOTE attach. Off = the configured target sequence is preserved but inert (nothing probes or connects remotely); flip back on any time. Does not affect cdpMode=local.').volatile(),
   // 探测冷启动闸门：`<cli> nodejs` heredoc 通道的初始化副作用就是把背后的
   // 浏览器冷启动起来（vendored CLI 是 createEgoShim → ensureBrowser，原生 ego
@@ -518,6 +529,10 @@ export function resolveConfig(config: RawConfig = {}): ResolvedConfig {
     toolJudge: tierOpenByDefault(config.toolJudge),
     sessionScopedPulse: tierOpenByDefault(config.sessionScopedPulse),
     localHeadless: config.localHeadless === undefined ? false : Boolean(config.localHeadless),
+    // 与 schema 的 .default() 必须同值：只写一处就会出现「面板显示 A、运行时
+    // 用 B」（见本文件上方 volatile 字段默认值的同款教训）。回退到 1.12.2 的
+    // 行为只需把这里与 schema 两处都改成 'eager'。
+    localLaunchPolicy: oneOf(config.localLaunchPolicy, ['eager', 'on-demand', 'manual'], 'on-demand'),
     localUserDataDir: typeof config.localUserDataDir === 'string' ? config.localUserDataDir : '',
     lightpandaArgs: trimmed(config.lightpandaArgs),
     remoteEnabled: config.remoteEnabled === undefined ? true : Boolean(config.remoteEnabled),

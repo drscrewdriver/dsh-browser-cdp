@@ -1,6 +1,28 @@
 import { describe, it, expect } from "vitest";
 import { resolveConfig, judgeSettingsOf, tokenizeArgs, filterArgs, normalizeProbeState, EGO_CLI_BLOCKED, CHROME_BLOCKED } from "../src/config.ts";
 
+describe("localLaunchPolicy (issue #14)", () => {
+  it("defaults to on-demand so DSH boots without a browser window", () => {
+    expect(resolveConfig({}).localLaunchPolicy).toBe("on-demand")
+  })
+
+  it("keeps an explicit eager for the 1.12.2 behaviour (regression escape)", () => {
+    expect(resolveConfig({ localLaunchPolicy: "eager" }).localLaunchPolicy).toBe("eager")
+  })
+
+  it("keeps an explicit manual", () => {
+    expect(resolveConfig({ localLaunchPolicy: "manual" }).localLaunchPolicy).toBe("manual")
+  })
+
+  it("falls back to on-demand for a hand-edited invalid value", () => {
+    // 手改 YAML 会写出任意字符串/数字，resolveConfig 必须兜底而不是透传。
+    const dirty = (v: unknown) => resolveConfig({ localLaunchPolicy: v } as never).localLaunchPolicy
+    expect(dirty("always")).toBe("on-demand")
+    expect(dirty(1)).toBe("on-demand")
+    expect(dirty(null)).toBe("on-demand")
+  })
+})
+
 describe("dual capture config", () => {
   it("returns canonical defaults", () => {
     expect(resolveConfig({})).toEqual({
@@ -10,7 +32,7 @@ describe("dual capture config", () => {
       ffmpegFps: 20, ffmpegMaxWidth: 1280, ffmpegBitrateKbps: 4000, ffmpegEncoder: "auto", ffmpegPath: "", githubMirror: "",
       runtimeArgs: "", chromeArgs: "", isolateSpaces: false, idleTimeoutMin: 0, defaultSpace: ":auto",
       links: [], activeTargetId: "", cdpMode: "auto", cdpProbeTimeoutMs: 3000,
-      cursorHud: true, cursorName: "DeepSeek", allowLocalFallback: false, localHeadless: false, localUserDataDir: "", lightpandaArgs: "", legacyEgoToolNames: false, remoteEnabled: true,
+      cursorHud: true, cursorName: "DeepSeek", allowLocalFallback: false, localHeadless: false, localLaunchPolicy: "on-demand", localUserDataDir: "", lightpandaArgs: "", legacyEgoToolNames: false, remoteEnabled: true,
       // 探测冷启动闸门默认关：挂载探测绝不拉起浏览器。
       allowProbeColdStart: false,
       cliFramePollEnabled: true,
@@ -36,7 +58,7 @@ describe("dual capture config", () => {
       ffmpegFps: 20, ffmpegMaxWidth: 1280, ffmpegBitrateKbps: 4000, ffmpegEncoder: "auto", ffmpegPath: "", githubMirror: "",
       runtimeArgs: "", chromeArgs: "", isolateSpaces: false, idleTimeoutMin: 0, defaultSpace: ":auto",
       links: [], activeTargetId: "", cdpMode: "auto", cdpProbeTimeoutMs: 3000,
-      cursorHud: true, cursorName: "DeepSeek", allowLocalFallback: false, localHeadless: false, localUserDataDir: "", lightpandaArgs: "", legacyEgoToolNames: false, remoteEnabled: true,
+      cursorHud: true, cursorName: "DeepSeek", allowLocalFallback: false, localHeadless: false, localLaunchPolicy: "on-demand", localUserDataDir: "", lightpandaArgs: "", legacyEgoToolNames: false, remoteEnabled: true,
       allowProbeColdStart: false,
       cliFramePollEnabled: true,
       // 工具分级注入默认：lazy + 三级全开放（core 级不可封印）。

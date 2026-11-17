@@ -25,7 +25,7 @@
 import type { BrowserLink, BrowserLinkKind, CdpLink, CdpMode, EgoCliLink, LightpandaLink } from './types.ts'
 import { discoverWebSocketUrl, normalizeEndpoint, type CdpErrorCode } from './cdp/endpoint.ts'
 import { engineOf, type EngineId } from './cdp/capabilities.ts'
-import { launchLocalBrowser } from './cdp/launcher.ts'
+import { launchLocalBrowser, localBrowserInfo } from './cdp/launcher.ts'
 import type { CliLinkIo } from './cdp/cli-link.ts'
 // Runtime registry (R1): the per-kind readiness logic lives behind this lookup,
 // so this module keeps exactly ONE place that knows a link kind can differ.
@@ -469,7 +469,14 @@ export function emptyAttachState(): AttachState {
 }
 
 export type AttachDecision =
-  | { kind: 'inject'; wsUrl: string; targetId: string; source: 'remote' }
+  /**
+   * `source` distinguishes WHERE the injected endpoint came from:
+   *  - `remote` — an activated CDP target answered `/json/version`;
+   *  - `local`  — the M0.9 managed launcher's instance is up and probed.
+   * Both inject the same env var, but the provenance is what the panel badge
+   * and `bcdp_doctor` report, so they must not be collapsed.
+   */
+  | { kind: 'inject'; wsUrl: string; targetId: string; source: 'remote' | 'local' }
   | { kind: 'local'; message: string }
   /** R7 — the CLI owns its browser; the runtime needs no endpoint. */
   | { kind: 'cli'; message: string }
@@ -513,6 +520,21 @@ export interface DecideInput {
  */
 export function decideAttach(input: DecideInput): AttachDecision {
   if (input.mode === 'local') {
+    // The managed launcher is UP and probed: hand its endpoint to the runtime.
+    //
+    // This branch used to return `{kind:'local'}` unconditionally, which meant
+    // `resolveEgoEnv` never wrote EGO_LINUX_CDP_URL for local mode — so the
+    // vendored runtime cold-started ITS OWN Chrome (ego-lite-linux profile)
+    // while the launcher's instance sat there serving only the watch worker.
+    // Two browsers, two profiles, and the one the tools drove was not the one
+    // the panel showed (issue #14 follow-up).
+    //
+    // `{kind:'local'}` is still the answer when nothing is up yet: "local
+    // control" is the honest state before the launcher has produced anything,
+    // and it is what keeps `eager` byte-identical to 1.12.2.
+    if (input.status === 'ready' && input.wsUrl !== '') {
+      return { kind: 'inject', wsUrl: input.wsUrl, targetId: '', source: 'local' }
+    }
     return { kind: 'local', message: 'local mode: using local browser control' }
   }
   // `remote` names a NETWORK endpoint literally, so a browser-owning channel
@@ -670,6 +692,72 @@ export interface RefreshInput {
  * They now live in src/runtime/<kind>-runtime.ts and are reached through
  * `runtimeOf(kind)` below — this module no longer switches on a link kind.
  */
+
+/**
+ * Re-read the MANAGED launcher's state and publish it, **without ever starting
+ * anything**.
+ *
+ * This is the read-only twin of `refreshAttach`'s `mode:'local'` branch, and it
+ * exists for two callers that must not become a second launch path:
+ *  - the panel's ⟳ (`/api/cdp-refresh`) — a refresh button that starts a
+ *    browser would silently defeat `localLaunchPolicy` (the same trap
+ *    `allowProbeColdStart` already fell into once);
+ *  - the on-demand preflight — it asks "is it already up?", and only the
+ *    caller that decided to launch is allowed to launch.
+ *
+ * Three outcomes, all honest:
+ *  - `local`      — nothing recorded / the pid is gone (never started, or died);
+ *  - `ready`      — the recorded instance answers and has a wsUrl;
+ *  - `unreachable`— a live pid whose endpoint does not answer (wedged).
+ */
+export async function refreshLocalProbe(input: {
+  cache?: AttachCache
+  timeoutMs?: number
+  now?: () => number
+  /** Injectable launcher IO for fixtures (production reads the real registry). */
+  launcherIo?: unknown
+} = {}): Promise<AttachState> {
+  const cache = input.cache ?? defaultAttachCache
+  const now = input.now ?? (() => Date.now())
+  const suggested: AttachState = {
+    ...emptyAttachState(),
+    mode: 'local',
+    status: 'local',
+    targetId: '',
+    linkKind: undefined,
+    cliPath: undefined,
+    cliShape: undefined,
+    sdkPath: '',
+    endpointSource: undefined,
+    engine: undefined,
+    resolvedAt: now(),
+  }
+  const info = localBrowserInfo(undefined, input.launcherIo as never)
+  if (info === null) return cache.patch(suggested)
+  const probe = await probeEndpoint(info.endpoint, { timeoutMs: input.timeoutMs, now })
+  if (probe.ok && probe.wsUrl) {
+    return cache.patch({
+      ...suggested,
+      status: 'ready',
+      endpoint: info.endpoint,
+      wsUrl: probe.wsUrl,
+      engine: probe.engine,
+      code: '',
+      message: 'local mode: managed browser already up',
+      latencyMs: probe.latencyMs,
+      endpointSource: 'local',
+    })
+  }
+  return cache.patch({
+    ...suggested,
+    status: 'unreachable',
+    endpoint: info.endpoint,
+    engine: undefined,
+    code: 'local-launch-not-ready',
+    message: `managed local browser pid ${info.pid} is alive but its endpoint did not answer: ${probe.message}`,
+    latencyMs: probe.latencyMs,
+  })
+}
 
 /**
  * Re-probe the activated target and publish the outcome into the cache.

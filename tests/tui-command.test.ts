@@ -56,6 +56,11 @@ function deps(overrides: Partial<BcdpCommandDeps> = {}): BcdpCommandDeps {
       throw new Error(`unexpected tool ${name}`)
     },
     setActiveTarget: async () => ({ ok: true }),
+    localBrowser: {
+      status: () => ({ running: false, policy: 'on-demand', power: 'auto', endpoint: null }),
+      start: async () => ({ ok: true }),
+      stop: async () => ({ ok: true }),
+    },
     ...overrides,
   }
 }
@@ -107,6 +112,78 @@ describe('runBcdpCommand', () => {
     expect(result.text).toContain('bcdp status — ready')
     expect(result.text).toContain('tools     live 2 / sealed 1')
     expect(result.text).toContain('frames    polling')
+  })
+
+  it('/bcdp browser 默认走 status，只读且展示三层状态', async () => {
+    const result = await runBcdpCommand('browser', deps())
+    expect(result.kind).toBe('success')
+    expect(result.text).toContain('bcdp browser — stopped')
+    expect(result.text).toContain('policy   on-demand')
+    expect(result.text).toContain('power    auto')
+  })
+
+  it('/bcdp browser status 只读：不调 start 也不调 stop', async () => {
+    const calls: string[] = []
+    const d = deps({
+      localBrowser: {
+        status: () => ({ running: false, policy: 'on-demand', power: 'auto', endpoint: null }),
+        start: async () => { calls.push('start'); return { ok: true } },
+        stop: async () => { calls.push('stop'); return { ok: true } },
+      },
+    })
+    await runBcdpCommand('browser status', d)
+    expect(calls).toEqual([])
+  })
+
+  it('/bcdp browser off 调 stop 并提示恢复方式', async () => {
+    const calls: string[] = []
+    const d = deps({
+      localBrowser: {
+        status: () => ({ running: true, policy: 'on-demand', power: 'auto', endpoint: 'http://127.0.0.1:1' }),
+        start: async () => { calls.push('start'); return { ok: true } },
+        stop: async () => { calls.push('stop'); return { ok: true } },
+      },
+    })
+    const result = await runBcdpCommand('browser off', d)
+    expect(calls).toEqual(['stop'])
+    expect(result.kind).toBe('success')
+    expect(result.text).toContain('/bcdp browser on')
+  })
+
+  it('/bcdp browser on 与 start 都调 start', async () => {
+    const calls: string[] = []
+    const d = deps({
+      localBrowser: {
+        status: () => ({ running: false, policy: 'manual', power: 'off', endpoint: null }),
+        start: async () => { calls.push('start'); return { ok: true } },
+        stop: async () => { calls.push('stop'); return { ok: true } },
+      },
+    })
+    await runBcdpCommand('browser on', d)
+    await runBcdpCommand('browser start', d)
+    expect(calls).toEqual(['start', 'start'])
+  })
+
+  it('/bcdp browser 失败时给出下一步而不是静默成功', async () => {
+    const d = deps({
+      localBrowser: {
+        status: () => ({ running: false, policy: 'manual', power: 'auto', endpoint: null }),
+        start: async () => ({ ok: false, reason: 'chrome-not-found' }),
+        stop: async () => ({ ok: false, reason: 'stop-timeout' }),
+      },
+    })
+    const started = await runBcdpCommand('browser start', d)
+    expect(started.kind).toBe('error')
+    expect(started.text).toContain('chrome-not-found')
+    const stopped = await runBcdpCommand('browser off', d)
+    expect(stopped.kind).toBe('error')
+    expect(stopped.text).toContain('stop-timeout')
+  })
+
+  it('/bcdp browser 未知子命令报错并列可选项', async () => {
+    const result = await runBcdpCommand('browser toggle', deps())
+    expect(result.kind).toBe('error')
+    expect(result.text).toContain('[on|off|start|status]')
   })
 
   it('未知子命令走 error 并给下一步', async () => {

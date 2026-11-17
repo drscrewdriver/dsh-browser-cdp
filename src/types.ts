@@ -199,6 +199,17 @@ export type CdpTarget = CdpLink
 export type CdpMode = 'auto' | 'local' | 'remote'
 
 /**
+ * When the managed local browser may start (issue #14).
+ *
+ * Re-exported from `local-launch.ts` so config/types consumers do not have to
+ * reach into the predicate module for a type; the module itself stays the
+ * single source of truth for the VALUES.
+ */
+import type { LocalBrowserPower as _LocalBrowserPower, LocalLaunchPolicy as _LocalLaunchPolicy } from './local-launch.ts'
+export type LocalBrowserPower = _LocalBrowserPower
+export type LocalLaunchPolicy = _LocalLaunchPolicy
+
+/**
  * The judge-facing subset of the resolved config (阶段 10).
  *
  * Extracted as its own type rather than passed as the whole `ResolvedConfig`
@@ -309,6 +320,8 @@ export interface ResolvedConfig {
   // ── M0.9 local launcher (optional; see design-cdp-local-launch.md) ──────
   allowLocalFallback: boolean
   localHeadless: boolean
+  /** When the managed local browser may start (orthogonal to `localHeadless`). */
+  localLaunchPolicy: LocalLaunchPolicy
   localUserDataDir: string
   /** Lightpanda backend — extra `lightpanda serve` args (managed flags filtered by the launcher). */
   lightpandaArgs: string

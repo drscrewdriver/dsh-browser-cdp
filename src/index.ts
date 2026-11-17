@@ -56,6 +56,7 @@ import {
   defaultAttachCache,
   emptyAttachState,
   refreshAttach,
+  refreshLocalProbe,
   resolveEffectiveLink,
   attachMatchesLink,
   sanitizeLinks,
@@ -107,7 +108,8 @@ import { buildRound, serializeLaya } from './jev/pipe.ts'
 import { chaptersOf } from './jev/frame.ts'
 import type { IntentSpec } from './jev/prompt.ts'
 import type { Frame } from './jev/frame.ts'
-import type { EgoContext, JudgeSettings, RawConfig, ResolvedConfig, SubprocessService, ToolExec, WebServerLike, BrowserLink, CdpMode, LightpandaLink } from './types.ts'
+import type { EgoContext, JudgeSettings, RawConfig, ResolvedConfig, SubprocessService, ToolExec, WebServerLike, BrowserLink, CdpMode, LightpandaLink, LocalBrowserPower, LocalLaunchPolicy } from './types.ts'
+import { notStartedMessage, shouldLaunchOnCall, shouldLaunchOnMount } from './local-launch.ts'
 
 export const name = 'dsh-browser-cdp'
 // Platform-aware host services: the web shell exposes `webServer`, other Web
@@ -431,6 +433,28 @@ let egoLockDepth = 0
 export function egoLockBusy(): boolean {
   return egoLockDepth > 0
 }
+
+/**
+ * 本会话的受管浏览器运行期开关（`/bcdp browser on|off`）。
+ *
+ * **刻意不落盘、不进 `ResolvedConfig`**：落盘会让它和 `localLaunchPolicy`
+ * 形成两个真相源。它的语义就是「本会话临时覆盖」，重启回到配置值 ——
+ * 所以它是模块级可变状态，与 `defaultAttachCache` 同款既有模式。
+ *
+ * `auto` = 听配置轴；`on` = 无视 on-demand 立即允许；`off` = 本会话一律不起
+ * （并且下一次启动请求会被拒绝，文案指向 `/bcdp browser on`）。
+ */
+let localBrowserPower: LocalBrowserPower = 'auto'
+
+/** 读当前运行期开关（命令面 `/bcdp browser status` 用）。 */
+export function localBrowserPowerState(): LocalBrowserPower {
+  return localBrowserPower
+}
+
+/** 写运行期开关（命令面 `/bcdp browser on|off` 用；`auto` = 恢复听配置）。 */
+export function setLocalBrowserPower(next: LocalBrowserPower): void {
+  localBrowserPower = next
+}
 function withEgoLock<T>(fn: () => Promise<T> | T): Promise<T> {
   return backendQueue.run({
     key: BACKEND_LANE,
@@ -725,6 +749,13 @@ export function resolveEgoEnv(cfg: Partial<ResolvedConfig>, { platform = process
 export function effectiveChannel(cfg: Partial<ResolvedConfig>): { effective: EffectiveLink | null; attach: AttachState } {
   const effective = resolveEffectiveLink(cfg.links ?? [], cfg.activeTargetId ?? '')
   const live = defaultAttachCache.get()
+  // `cdpMode=local` — the cache row belongs to the MANAGED LAUNCHER, not to any
+  // link in the sequence: `refreshAttach` writes it with `targetId: ''` on
+  // purpose (there is no activated target in this mode). Filtering it through
+  // `attachMatchesLink` would drop it on BOTH counts (no effective link → the
+  // ternary short-circuits to an empty state; even with one, `'' !== link.id`),
+  // which is how the launcher's ready endpoint never reached the runtime.
+  if ((cfg.cdpMode ?? 'auto') === 'local') return { effective, attach: live }
   const attach = effective && attachMatchesLink(live, effective.link) ? live : emptyAttachState()
   return { effective, attach }
 }
@@ -1221,6 +1252,8 @@ interface EgoRuntimeConfig {
   readonly allowLocalFallback: boolean
   readonly legacyEgoToolNames: boolean
   readonly localHeadless: boolean
+  /** When the managed local browser may start (orthogonal to `localHeadless`). */
+  readonly localLaunchPolicy: LocalLaunchPolicy
   readonly remoteEnabled: boolean
   readonly localUserDataDir: string
   /** 探测冷启动闸门（默认关）：关 = ego-cli 探测绝不拉起背后的浏览器。 */
@@ -2299,8 +2332,101 @@ function friendlyTabbitScriptError(message: string): string {
   return message
 }
 
-function defineEgoTool(ctx: EgoContext, cfg: EgoRuntimeConfig, opts: EgoToolOptions): ToolHandle {
-  return defineTool({
+/** 受管本地浏览器是否已经起着（纯读，不 spawn）。 */
+async function managedBrowserIsUp(): Promise<boolean> {
+  const { localBrowserInfo } = await import('./cdp/launcher.ts')
+  return localBrowserInfo() !== null
+}
+
+/**
+ * 只读 op 在「浏览器没起」时的空结果。
+ *
+ * 不 spawn、不进 heredoc：`bcdp_tab op=list` 与 `bcdp_space op=list` 的语义是
+ * 「看看现在有什么」，没起浏览器时正确答案是「什么都没有」+ 怎么起，而不是
+ * 悄悄把一个浏览器拉起来再列它自己的一个空标签页。
+ */
+function emptyListResultFor(
+  name: string,
+  args: Record<string, unknown>,
+  cfg: EgoRuntimeConfig,
+): { ok: boolean; text: string } {
+  const note = notStartedMessage(cfg.localLaunchPolicy, localBrowserPower)
+  const op = typeof args['op'] === 'string' ? args['op'] : ''
+  if (name.replace(/^(?:bcdp|ego)_/, '') === 'tab') {
+    return { ok: true, text: `tabs: (none — the managed browser is not running)\n${note}` }
+  }
+  if (op === 'close') {
+    return { ok: false, text: `space close: the managed browser is not running, so there is nothing to close. ${note}` }
+  }
+  return { ok: true, text: `spaces: (none — the managed browser is not running)\n${note}` }
+}
+
+/**
+ * 按需拉起受管本地浏览器（issue #14 的 on-demand 路径）。**幂等**。
+ *
+ * 三种结果：
+ *  - `ok:true`  —— 已经起着（复用），或刚刚起好并被探活；
+ *  - `ok:false` —— 本会话被 `/bcdp browser off` 关掉 / manual 策略拒绝启动，
+ *                  文案里带可执行命令（`notStartedMessage`）；
+ *  - `ok:false` —— launcher 起不来（找不到 Chrome、端口不通等），文案来自 launcher。
+ *
+ * 为什么先 `localBrowserInfo()` 再 refreshAttach：前者是纯读（pid 存活即认），
+ * 后者会走完整的 launch→probe 流程。已经起着的时候不该再付一次启动开销。
+ */
+async function ensureManagedBrowser(
+  ctx: EgoContext,
+  cfg: EgoRuntimeConfig,
+  options: {
+    /**
+     * 显式命令（`/bcdp browser start`）绕过策略判定。manual 策略下这是唯一
+     * 启动入口 —— 策略拒绝的是「隐式自动起」，不是「用户点名要起」。
+     */
+    force?: boolean
+  } = {},
+): Promise<{ ok: true } | { ok: false; message: string }> {
+  // 非 local 模式不走这条路：受管 launcher 只服务 cdpMode=local。
+  if (cfg.cdpMode !== 'local') return { ok: true }
+  // 运行期开关与策略：拒绝时给可执行文案，不 spawn 任何东西。
+  //
+  // 这里判的是「本会话允不允许起」，与「这次调用碰不碰页面」是两件事 ——
+  // 后者已由调用方（defineEgoTool）用真实工具名判过。拿一个假工具名在这里
+  // 二次判定会让 manual/off 的语义绕开真实 args，属于重复计算。
+  if (!options.force && (localBrowserPower === 'off' || cfg.localLaunchPolicy === 'manual')) {
+    return { ok: false, message: notStartedMessage(cfg.localLaunchPolicy, localBrowserPower) }
+  }
+  const { localBrowserInfo } = await import('./cdp/launcher.ts')
+  if (localBrowserInfo() !== null) return { ok: true }
+  const attach = await refreshAttach({
+    targets: cfg.links,
+    activeTargetId: cfg.activeTargetId,
+    mode: 'local',
+    timeoutMs: cfg.cdpProbeTimeoutMs,
+    cache: defaultAttachCache,
+    fallback: {
+      enabled: cfg.allowLocalFallback === true,
+      chromePath: cfg.chromePath,
+      chromeArgs: cfg.chromeArgs,
+      localHeadless: cfg.localHeadless,
+      userDataDir: cfg.localUserDataDir,
+    },
+    // 这次是我们决定要起 —— 闸门已在上面判过，这里必须放行。
+    useLauncher: true,
+  })
+  if (attach.status === 'ready' && attach.wsUrl !== '') {
+    // 端点变了要让 worker 跟着重连，否则观察窗还连着上一个浏览器。
+    if (setAttachEndpoint(attach.wsUrl, attach.engine ?? 'unknown')) {
+      void recycleWorker('on-demand launch').catch(() => null)
+    }
+    ctx.logger?.info?.('dsh-browser-cdp: on-demand launch started the managed browser')
+    return { ok: true }
+  }
+  return {
+    ok: false,
+    message: `could not start the managed local browser: ${attach.code === '' ? attach.message : `${attach.code}: ${attach.message}`}`,
+  }
+}
+
+function defineEgoTool(ctx: EgoContext, cfg: EgoRuntimeConfig, opts: EgoToolOptions): ToolHandle {  return defineTool({
     name: opts.name,
     description: opts.description,
     parameters: opts.parameters,
@@ -2324,6 +2450,20 @@ function defineEgoTool(ctx: EgoContext, cfg: EgoRuntimeConfig, opts: EgoToolOpti
         if (typeof opts.gate === 'function') {
           const blocked = opts.gate(args)
           if (blocked !== null && blocked !== '') return { ok: false, text: blocked }
+        }
+        // on-demand 启动闸门（issue #14）：只有真碰页面的调用才允许拉起受管
+        // 浏览器。这是**执行期**判定 —— 注册期的分级信号（tiers.pulse /
+        // markEgoToolCall）回答的是「工具要不要注入给模型」，不是「这次调用
+        // 会不会碰页面」，拿它当启动闸门会把 bcdp_status 也当成启动器。
+        if (shouldLaunchOnCall(cfg.localLaunchPolicy, localBrowserPower, opts.name, args)) {
+          const started = await ensureManagedBrowser(ctx, cfg)
+          if (!started.ok) return { ok: false, text: started.message }
+        } else if (cfg.cdpMode === 'local' && !(await managedBrowserIsUp())) {
+          // 只读 op（`bcdp_tab op=list` / `bcdp_space op=list|close`）在受管
+          // 浏览器还没起时必须**不进 heredoc**：那条通道的初始化副作用就是
+          // ensureBrowser() 冷启动浏览器，等于「列个标签页把浏览器拉起来」
+          // （issue #14 点名的反例）。直接给空结果 + 可执行指引。
+          return emptyListResultFor(opts.name, args, cfg)
         }
         // P0-3 / Phase 3: the OPERATION face belongs to the runtime. A channel
         // that implements `exec` owns its own protocol and must NEVER fall
@@ -2547,6 +2687,7 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
     get allowLocalFallback() { return resolveConfig(bridge.source() as RawConfig).allowLocalFallback },
     get legacyEgoToolNames() { return resolveConfig(bridge.source() as RawConfig).legacyEgoToolNames },
     get localHeadless() { return resolveConfig(bridge.source() as RawConfig).localHeadless },
+    get localLaunchPolicy() { return resolveConfig(bridge.source() as RawConfig).localLaunchPolicy },
     get remoteEnabled() { return resolveConfig(bridge.source() as RawConfig).remoteEnabled },
     get localUserDataDir() { return resolveConfig(bridge.source() as RawConfig).localUserDataDir },
     get lightpandaArgs() { return resolveConfig(bridge.source() as RawConfig).lightpandaArgs },
@@ -2790,6 +2931,47 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
         }),
         poll: getCliPollStatus,
         watch: getWatchCounters,
+        // 受管本地浏览器的运行期开关（issue #14）。status 纯读：命令层查询
+        // 状态绝不能起浏览器 —— 这与 bcdp_status 的零副作用承诺同一条规则。
+        localBrowser: {
+          status: () => {
+            const attach = effectiveChannel(cfg).attach
+            return {
+              running: cfg.cdpMode === 'local' && attach.status === 'ready',
+              policy: cfg.localLaunchPolicy,
+              power: localBrowserPower,
+              endpoint: attach.status === 'ready' && attach.endpoint !== '' ? attach.endpoint : null,
+            }
+          },
+          // `on` / `start` 都解除本会话限制；真正起浏览器走 ensureManagedBrowser
+          // 的同一入口（幂等），避免命令面和工具面各有一套启动逻辑。
+          start: async () => {
+            if (cfg.cdpMode !== 'local') {
+              return { ok: false, reason: 'cdpMode is not local — the managed launcher only serves local mode' }
+            }
+            // 显式命令：先解除本会话的 off（否则 force 会绕过用户刚下过的关闭
+            // 意图），再用 force 跳过策略判定 —— manual 策略下 start 是唯一入口，
+            // 策略拒绝的是「隐式自动起」，不是「用户点名要起」。
+            localBrowserPower = 'auto'
+            const started = await ensureManagedBrowser(ctx, cfg, { force: true })
+            return started.ok ? { ok: true } : { ok: false, reason: started.message }
+          },
+          stop: async () => {
+            localBrowserPower = 'off'
+            try {
+              const { localBrowserInfo, stopLocalBrowser } = await import('./cdp/launcher.ts')
+              if (localBrowserInfo() === null) return { ok: true }
+              const out = await stopLocalBrowser()
+              if (out.ok) {
+                await refreshLocalProbe({ cache: defaultAttachCache })
+                void recycleWorker('local browser switched off').catch(() => null)
+              }
+              return out.ok ? { ok: true } : { ok: false, reason: out.code }
+            } catch (error) {
+              return { ok: false, reason: (error as Error).message }
+            }
+          },
+        },
         runTool: async (name, args) => {
           const handle = toolHandles.get(name)
           if (!handle) throw new Error(`tool ${name} 未注册（可能被分级注入封印）`)
@@ -3413,7 +3595,10 @@ bridge.onChange(() => tiers.reapply())
             userDataDir: resolved.localUserDataDir,
           },
           remoteEnabled: resolved.remoteEnabled,
-          useLauncher: true,
+          // 挂载闸门（issue #14）：localLaunchPolicy=on-demand（默认）时挂载
+          // 不再 spawn 受管浏览器，推迟到首个真碰页面的 bcdp_* 调用
+          // （defineEgoTool 的 ensureManagedBrowser）。eager 保留 1.12.2 行为。
+          useLauncher: shouldLaunchOnMount(resolved.localLaunchPolicy, localBrowserPower),
           // 探测冷启动闸门（默认关）：关 = ego-cli 探测绝不把背后的浏览器拉起来，
           // 挂载/改设置不再弹浏览器窗口；首个真实 bcdp_* 调用才冷启动。
           cliProbeColdStart: resolved.allowProbeColdStart === true,
@@ -3478,6 +3663,9 @@ bridge.onChange(() => tiers.reapply())
   ctx.effect?.(() => () => {
     triggerCdpRefresh.dispose()
     try { offSettingsChange() } catch { /* ignore */ }
+    // 运行期开关随挂载生命周期走：热重载/重挂后必须回到 `auto`，否则一次
+    // `/bcdp browser off` 会跨重载残留成「插件坏了」（它刻意不落盘）。
+    localBrowserPower = 'auto'
     // The executor closes over THIS mount's ctx/cfg; leaving it registered would
     // let a later dispatch run against a disposed context.
     setTabbitExecutor(null)
@@ -4007,6 +4195,10 @@ function registerEgoStatus(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool: T
         if (!wantsRefresh && cachedTerminal) {
           const face = tiers.surface()
           const kind = backendKindOf(resolveEffectiveLink(cfg.links, cfg.activeTargetId)?.link?.kind)
+          // on-demand 下「还没起」是一个终态，不是「探测没通」。合成 not-started
+          // 让模型知道该直接调页面工具（会自动起），而不是去排查连接。
+          // 复用既有 `raw` 字段：这是唯一常驻工具，新增 output 属性要按轮付费。
+          const notStarted = cfg.cdpMode === 'local' && cachedAttach.status === 'local'
           return {
             ok: true,
             available: cachedAttach.status === 'ready',
@@ -4014,9 +4206,11 @@ function registerEgoStatus(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool: T
             cached: true,
             // `raw` is already declared, so the cached verdict rides there
             // instead of buying two more output properties on every turn.
-            raw: cachedAttach.code === ''
-              ? `${cachedAttach.status}${cachedAttach.message === '' ? '' : `: ${cachedAttach.message}`}`
-              : `${cachedAttach.status}: ${cachedAttach.code}: ${cachedAttach.message}`,
+            raw: notStarted
+              ? `not-started: ${notStartedMessage(cfg.localLaunchPolicy, localBrowserPower)}`
+              : cachedAttach.code === ''
+                ? `${cachedAttach.status}${cachedAttach.message === '' ? '' : `: ${cachedAttach.message}`}`
+                : `${cachedAttach.status}: ${cachedAttach.code}: ${cachedAttach.message}`,
             backendKind: kind,
             toolFace: { live: face.live.length, sealed: face.sealed.length },
             ...(kind === 'tabbit-cli' ? { guidance: TABBIT_SEALED_GUIDANCE } : {}),
@@ -4025,7 +4219,18 @@ function registerEgoStatus(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool: T
         // Explicit refresh (or nothing probed yet): re-probe FIRST so the live
         // check below reports the new state instead of the old one, then fall
         // through to the existing per-channel probe.
-        if (wantsRefresh) await cfg.refreshAttach?.()
+        //
+        // `cdpMode=local` re-reads the LAUNCHER's state instead of running the
+        // attach pass: `refresh:true` on the always-resident status tool must
+        // never be the thing that starts a browser (issue #14 acceptance 1 —
+        // "只调 bcdp_status（含 refresh:true）… 浏览器进程数仍为 0").
+        if (wantsRefresh) {
+          if (cfg.cdpMode === 'local') {
+            await refreshLocalProbe({ cache: defaultAttachCache, timeoutMs: cfg.cdpProbeTimeoutMs })
+          } else {
+            await cfg.refreshAttach?.()
+          }
+        }
         return withEgoLock(async () => {
           // 注入面与通道类型先算一次：两个返回分支都要带上—— probe 失败时模型
           // 同样需要知道「工具不在列表」是 kind 收窄，不是插件坏了。

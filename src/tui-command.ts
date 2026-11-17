@@ -44,6 +44,15 @@ export interface BcdpCommandDeps {
   runTool(name: string, args: Record<string, unknown>): Promise<unknown>
   /** 切换激活连接项（写设置节的 activeTargetId；默认 dry，--yes 才落盘）。 */
   setActiveTarget(targetId: string, dry: boolean): Promise<{ ok: boolean; reason?: string }>
+  /**
+   * 受管本地浏览器的运行期开关（issue #14）。**不落盘** —— 它只覆盖本会话，
+   * 重启回到 `localLaunchPolicy`。`status` 必须只读：查询状态绝不能起浏览器。
+   */
+  localBrowser: {
+    status(): { running: boolean; policy: string; power: string; endpoint: string | null }
+    start(): Promise<{ ok: boolean; reason?: string }>
+    stop(): Promise<{ ok: boolean; reason?: string }>
+  }
 }
 
 const MAX_LINES = 40
@@ -196,6 +205,7 @@ const HELP_LINES = [
   '  /bcdp config          注入面开关与当前空间（只读）',
   '  /bcdp link            已配置链路与激活项',
   '  /bcdp doctor          静态体检（attach / cli / 工具面 / 帧轮询）',
+  '  /bcdp browser [on|off|start|status]  受管本地浏览器开关（本会话，不落盘）',
   '  flags                 --json 单行 JSON 输出',
   '  note                  其它页面动作仍走 bcdp_* 工具',
 ]
@@ -286,6 +296,55 @@ async function attachCommand(deps: BcdpCommandDeps, target: string, yes: boolean
     : ok([`bcdp attach — dry run：将切换到 ${hit.id}（当前 ${links.find((row) => row.active)?.id ?? '—'}）`, '  确认后加 --yes 执行'])
 }
 
+/**
+ * browser — 受管本地浏览器的运行期开关（issue #14）。
+ *
+ * 子命令语义：
+ *  - `status`（默认，只读）：浏览器是否在跑 + 配置策略 + 本会话开关；
+ *  - `off`：立刻停掉，且本会话不再自动起（不落盘）；
+ *  - `on`：解除本会话限制（回到 `auto`，仍听配置策略）；
+ *  - `start`：现在就起（manual 策略下的唯一入口）。
+ *
+ * `--yes` 对 off/start 不是必需（都不是破坏性写盘操作），但保留以和其它子命令
+ * 的手感一致；真正写盘的是 `attach --yes`。
+ */
+async function browserCommand(
+  deps: BcdpCommandDeps,
+  raw: string | undefined,
+  _yes: boolean,
+): Promise<CommandResult> {
+  const sub = (raw ?? 'status').toLowerCase()
+  const st = deps.localBrowser.status()
+  if (sub === 'status') {
+    return ok([
+      `bcdp browser — ${st.running ? 'running' : 'stopped'}`,
+      `  policy   ${st.policy}   （设置面板 localLaunchPolicy，持久）`,
+      `  power    ${st.power}    （本会话开关，不落盘）`,
+      `  endpoint ${st.endpoint ?? '—'}`,
+    ])
+  }
+  if (sub === 'off') {
+    const out = await deps.localBrowser.stop()
+    return out.ok
+      ? ok(['bcdp browser — 已停止，本会话不再自动启动', '  next /bcdp browser on 恢复'])
+      : fail(`bcdp browser off: ${out.reason ?? '停止失败'}`, 'next 手动结束 chrome.exe 后重试')
+  }
+  if (sub === 'on') {
+    // `on` 只解除本会话限制；是否真起仍由配置策略决定（manual 下需 start）。
+    const out = await deps.localBrowser.start()
+    return out.ok
+      ? ok([`bcdp browser — 本会话已允许启动（policy=${st.policy}）`])
+      : fail(`bcdp browser on: ${out.reason ?? '失败'}`, 'next /bcdp browser status 查看当前策略')
+  }
+  if (sub === 'start') {
+    const out = await deps.localBrowser.start()
+    return out.ok
+      ? ok(['bcdp browser — 已启动受管本地浏览器', '  next /bcdp tabs 看标签页'])
+      : fail(`bcdp browser start: ${out.reason ?? '启动失败'}`, 'next /bcdp doctor 看 Chrome 路径与端口')
+  }
+  return fail(`bcdp browser: 未知子命令 "${sub}"`, 'next /bcdp browser [on|off|start|status]')
+}
+
 /** 纯函数入口：单测直接打这里，不挂 cordis。tabs/shot/nav/attach 走异步 runTool。 */
 export async function runBcdpCommand(rawInput: string, deps: BcdpCommandDeps): Promise<CommandResult> {
   const parsed = parseBcdpArgs(rawInput)
@@ -320,6 +379,9 @@ export async function runBcdpCommand(rawInput: string, deps: BcdpCommandDeps): P
       break
     case 'doctor':
       result = doctorCommand(deps)
+      break
+    case 'browser':
+      result = await browserCommand(deps, parsed.argv[1], parsed.yes)
       break
     case 'help':
     case '?':

@@ -249,8 +249,16 @@ describe("decideAttach", () => {
     expect(d.kind).toBe("error");
   });
 
-  it("passes through to local control in local mode", () => {
+  it("hands the managed launcher's endpoint to the runtime when it is up", () => {
+    // issue #14 follow-up: local mode used to answer `local` unconditionally,
+    // so EGO_LINUX_CDP_URL was never written and the runtime cold-started a
+    // SECOND Chrome next to the launcher's instance.
     const d = decideAttach({ ...base, mode: "local" });
+    expect(d).toEqual({ kind: "inject", wsUrl: "ws://x/y", targetId: "", source: "local" });
+  });
+
+  it("passes through to local control in local mode while nothing is up yet", () => {
+    const d = decideAttach({ ...base, mode: "local", status: "idle", wsUrl: "" });
     expect(d.kind).toBe("local");
   });
 

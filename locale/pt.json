@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Navegador do agente",
+    "description": "Um navegador de agente visível para o DSH: controla o Chromium compatível com ego embarcado no pacote através de CDP, pode se conectar a um Chrome/Edge/Brave em execução e rotear por egolite, Tabbit ou Lightpanda; 34 ferramentas bcdp_* estruturadas, com apenas a bcdp_status residente por padrão; painel de observação em tempo real com entrada direta, e os canais não-CDP sincronizam quadros por sondagem a cada 3 s."
+  }
+}

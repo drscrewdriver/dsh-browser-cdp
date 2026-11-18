@@ -17,7 +17,7 @@
 >
 > Visible agent browser for DSH over CDP, also driving egolite / Tabbit / Chrome / Edge / Brave / Lightpanda. Only `bcdp_help` stays resident (504 chars, a zero-side-effect entry that also reports live state); the other 34 context-optimized `bcdp_*` tools unlock per activity batch, so non-browser sessions pay no schema tax (−98.1% vs the full surface; −89.9% vs the 1.5.0 4,978-char baseline). Realtime watch panel with direct click/scroll/IME, element picks quoted into the composer as `@"picks/*.json"`, human-verification notices; non-CDP channels (ego CLI / Tabbit CLI) sync frames by 3s polling. Host `>=0.1.7-rc.1 <0.3.0-0` (window era, production); the down-line `0.1.0-rc.2 ~ 0.1.5-rc.3` uses imperative installSection / module-level registration + describe/mutate bridge and a Gen-1 gear (experimental, pending per-line farm).
 
-[简体中文](README.md) | [Français](README.fr.md) | [Deutsch](README.de.md) | [Italiano](README.it.md) | [Русский](README.ru.md) | [Español](README.es.md)
+[简体中文](README.md) | [Français](README.fr.md) | [Deutsch](README.de.md) | [Italiano](README.it.md) | [Русский](README.ru.md) | [Español](README.es.md) | [Português](README.pt.md)
 
 
 > **仓库**：`github.com/drscrewdriver/dsh-browser-cdp`｜当前版本 **v1.10.0**｜版本历史见 [CHANGELOG.md](CHANGELOG.md)｜详情页：[dshfind](https://dshfind.com/zh/plugins/drscrewdriver/dsh-browser-cdp)

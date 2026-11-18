@@ -14,6 +14,7 @@
 
 门禁：`npm run typecheck` 干净；`npm test` **1331 passed / 13 skipped**（新增 10 用例：多目标并存、幂等 start、帧按会话分发 + 未知会话丢弃、整体集合差分、同 target 多 lease 不重复 start/stop、ffmpeg 单流边界、idle grace 只在最后一个 lease 消失后触发）；三产物 rebuild（`lib/index.js` / `lib/client.js` / `bin/cdp-cast-worker.mjs`）。
 
+- i18n: add Portuguese (pt-BR) locale — package metadata and README/CHANGELOG mirrors.
 ## 1.13.2 (2026-11-18)
 
 **发布通道改回 `latest`：修好「issue 关了但默认安装拿不到修复」。**

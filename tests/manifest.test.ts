@@ -102,9 +102,24 @@ describe("manifest version-line discipline", () => {
     }
   });
 
-  it("publishConfig.tag, when present, keeps the dsh-X.Y.Z shape (may lag the line: release passes --tag explicitly)", () => {
+  it("publishConfig.tag, when present, names a known dist-tag (never a typo)", () => {
+    // What this guard is actually for: catching a malformed tag that would
+    // publish the package to a junk dist-tag nobody installs from. It is NOT
+    // here to pin one particular tag name.
+    //
+    // History: this used to assert `/^dsh-\d+\.\d+\.\d+$/` only, because the
+    // repo published per host line (`dsh-0.2.1`, `dsh-0.2.1-rc.5`, …). That
+    // policy had a silent failure mode: `npm i dsh-browser-cdp` reads `latest`,
+    // and `latest` stopped moving the moment the tag switched — 1.12.x and
+    // 1.13.x shipped while `latest` still pointed at 1.11.0, so the default
+    // install path kept handing users a build without the fixes. The repo now
+    // publishes to `latest` like every sibling (input-traffic, session-guard,
+    // search-index, cookie-cleaner, perm-gate, prime-memory, sidebar-fold all
+    // use `latest`); per-host-line tags are still maintained alongside it.
+    //
+    // `next` stays allowed: it is a legitimate prerelease channel.
     if (pkg.publishConfig?.tag !== undefined) {
-      expect(pkg.publishConfig.tag).toMatch(/^dsh-\d+\.\d+\.\d+$/);
+      expect(pkg.publishConfig.tag).toMatch(/^(?:latest|next|dsh-\d+\.\d+\.\d+)$/);
     }
   });
 });

@@ -259,6 +259,8 @@ export interface ResolvedConfig {
   cdpBackstopIntervalMs: number
   /** CLI/Tabbit watch-panel tab tracking: 'active' = only the active tab, 'all' = every tab. */
   tabTracking: 'active' | 'all'
+  /** #15 — session-scoped observation: panels follow their own session's driven tab (default true). */
+  multiSessionWatch: boolean
   /** Fixed CSS viewport width; 0 = use the browser window size. */
   viewportWidth: number
   /** Fixed CSS viewport height; 0 = use the browser window size. */

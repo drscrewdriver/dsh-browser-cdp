@@ -90,6 +90,48 @@ export function createFocusStore(now: () => number = () => Date.now()): FocusSto
 export const defaultFocusStore: FocusStore = createFocusStore()
 
 /**
+ * #15 — per-session focus slots.
+ *
+ * ego's operation layer already isolates sessions (space derived from
+ * `sessionSpaceToken(sessionId)`), so each session's "driven tab" is a FACT
+ * worth recording separately. The global store stays for operator clicks and
+ * session-less callers (floating panel, old clients) — exactly the 1.13.x
+ * behavior when no session id is available.
+ */
+export interface SessionFocusStores {
+  /** Store for one session id; creates the slot on first use. */
+  for(sessionId: string): FocusStore
+  /** Drop every session slot (browser restart wipes runtime handles). */
+  clear(): void
+  /** All live session ids (for diagnostics). */
+  sessionIds(): string[]
+}
+
+export function createSessionFocusStores(): SessionFocusStores {
+  const slots = new Map<string, FocusStore>()
+  return {
+    for(sessionId: string) {
+      const key = String(sessionId ?? '').trim()
+      let store = slots.get(key)
+      if (!store) {
+        store = createFocusStore()
+        slots.set(key, store)
+      }
+      return store
+    },
+    clear() {
+      slots.clear()
+    },
+    sessionIds() {
+      return [...slots.keys()]
+    },
+  }
+}
+
+/** Process-wide session slots. */
+export const sessionFocusStores: SessionFocusStores = createSessionFocusStores()
+
+/**
  * Pull a target id out of a tool result, if it carries one.
  *
  * The operation face already knows which tab it just drove (`page.info()` and

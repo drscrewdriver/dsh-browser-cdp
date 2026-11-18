@@ -2,6 +2,11 @@ export interface CaptureStatus {
   backend: string
   state: string
   targetId: string | null
+  /** Multi-target (#15): every watched target. `targetId` stays = most recently started. */
+  targetIds?: string[]
+  /** ffmpeg single-stream boundary: only one target can be observed. */
+  singleStream?: boolean
+  singleStreamReason?: string
   generation: number
   code?: string | null
   message?: string | null
@@ -13,6 +18,10 @@ export interface CaptureBackend {
   start(opts: { targetId: string; generation: number }): Promise<void>
   stop(reason: string): Promise<void>
   dispose?(): void | Promise<void>
+  /** #15: stop exactly one target; other targets keep streaming. */
+  stopTarget?(targetId: string, reason?: string): Promise<void>
+  /** #15: all currently-watched target ids. */
+  targetIds?(): string[]
 }
 
 export type CaptureBackendFactory = (opts: {
@@ -82,6 +91,17 @@ export class CaptureManager {
     this.sweepTimer = this.setTimer(() => this.#sweep(), Math.min(5000, this.leaseTtlMs))
   }
 
+  /**
+   * #15 D7 — derive the desired target set from the lease set. NO reference
+   * counting: sweep-expired leases, in-place switchWatch retargets and
+   * stop/start-on-same-target all collapse into "recompute the set", which
+   * cannot leak (counting can: stale counts, orphaned old targets, flash on
+   * transient zero).
+   */
+  #activeTargets(): string[] {
+    return [...new Set([...this.leases.values()].map((lease) => lease.targetId))]
+  }
+
   #resolvedBackend(requested?: string): string {
     const value = requested || this.getConfig().captureBackend
     return value === 'auto' ? 'cdp' : value
@@ -92,14 +112,8 @@ export class CaptureManager {
     this.clearTimer(this.stopTimer!)
     this.stopTimer = null
     const requestedBackend = backend || this.getConfig().captureBackend
-    const existing = this.leases.get(clientId)
     this.leases.set(clientId, { clientId, backend: requestedBackend, targetId, expiresAt: this.now() + this.leaseTtlMs })
-    if (existing && existing.backend === requestedBackend && existing.targetId === targetId) {
-      const resolved = this.#resolvedBackend(requestedBackend)
-      if (this.targetId !== targetId || (this.backendName && this.backendName !== resolved)) return this.status()
-      if (this.backend && this.backendName === resolved) return this.status()
-    }
-    return this.#enqueue(async () => { await this.#activate(this.#resolvedBackend(backend), targetId); return this.status() })
+    return this.#enqueue(async () => { await this.#ensureWatched(this.#resolvedBackend(requestedBackend), this.#activeTargets()); return this.status() })
   }
 
   async switchWatch({ clientId, targetId }: { clientId: string; targetId: string }): Promise<Record<string, unknown>> {
@@ -107,7 +121,7 @@ export class CaptureManager {
     if (!lease) throw new Error('watch lease not found')
     lease.targetId = targetId
     lease.expiresAt = this.now() + this.leaseTtlMs
-    return this.#enqueue(async () => { await this.#activate(this.#resolvedBackend(lease.backend), targetId); return this.status() })
+    return this.#enqueue(async () => { await this.#ensureWatched(this.#resolvedBackend(lease.backend), this.#activeTargets()); return this.status() })
   }
 
   async stopWatch({ clientId }: { clientId: string }): Promise<Record<string, unknown>> {
@@ -119,6 +133,11 @@ export class CaptureManager {
           /* ignore */
         })
       }, this.idleGraceMs)
+    } else if (this.leases.size > 0) {
+      // Some leases remain: diff the derived set immediately so a stopped
+      // target's screencast ends without waiting for the grace timer.
+      const desiredBackend = this.#resolvedBackend([...this.leases.values()].sort((a, b) => b.expiresAt - a.expiresAt)[0].backend)
+      return this.#enqueue(async () => { await this.#ensureWatched(desiredBackend, this.#activeTargets()); return this.status() })
     }
     return this.status()
   }
@@ -127,12 +146,12 @@ export class CaptureManager {
     const desired = this.#resolvedBackend()
     if (!this.backend) {
       const lease = [...this.leases.values()].sort((a, b) => b.expiresAt - a.expiresAt)[0]
-      if (lease) return this.#enqueue(() => this.#activate(this.#resolvedBackend(lease.backend), lease.targetId, true))
+      if (lease) return this.#enqueue(() => this.#ensureWatched(this.#resolvedBackend(lease.backend), this.#activeTargets()))
       const fallbackReason = this.getConfig().ffmpegFallbackReason
       this.#setStatus({ backend: desired, state: 'idle', targetId: null, code: fallbackReason ? 'ffmpeg-fallback-cdp' : null, message: fallbackReason || 'config-updated' })
       return
     }
-    return this.#enqueue(() => this.#activate(desired, this.targetId!, true))
+    return this.#enqueue(() => this.#ensureWatched(desired, this.#activeTargets()))
   }
 
   async browserDisconnected(): Promise<void> {
@@ -143,64 +162,105 @@ export class CaptureManager {
   }
 
   async browserConnected(): Promise<void | Record<string, unknown>> {
-    const lease = [...this.leases.values()].sort((a, b) => b.expiresAt - a.expiresAt)[0]
-    if (lease) return this.#enqueue(() => this.#activate(this.#resolvedBackend(lease.backend), lease.targetId))
+    if (this.leases.size > 0) return this.#enqueue(() => this.#ensureWatched(this.#resolvedBackend(), this.#activeTargets()))
   }
 
-  async #activate(backendName: string, targetId: string, force = false): Promise<void> {
-    if (!force && this.backend && this.backendName === backendName && this.targetId === targetId) return
+  /**
+   * #15 — keep the backend watching EXACTLY the derived target set.
+   * Whole-set diff (D7): one call may both add and remove; per-lease
+   * start/stop would leak in that batch. Backend swap (global action) is the
+   * only path that tears the whole backend down.
+   */
+  async #ensureWatched(backendName: string, targetIds: string[]): Promise<void> {
     // Lightpanda backend gate: no screencast methods AND no window means NEITHER
     // backend can produce pixels. Refuse before touching the browser so the
     // observation window never hammers UnknownMethod every N seconds; the
     // status carries `engineUnsupported` for the panel's degraded-view banner.
     if (!this.screencastSupported) {
       await this.#stopBackend('engine-unsupported')
-      this.#setStatus({ backend: backendName, state: 'unsupported', targetId, code: 'engine-unsupported', message: 'the attached engine cannot capture frames (no screencast, no window)', engineUnsupported: true })
+      this.#setStatus({ backend: backendName, state: 'unsupported', targetId: targetIds[0] ?? null, code: 'engine-unsupported', message: 'the attached engine cannot capture frames (no screencast, no window)', engineUnsupported: true })
       return
     }
-    await this.#stopBackend('backend-change')
-    const factory = this.backendFactories[backendName]
-    if (!factory) {
-      const message = `${backendName} backend is unavailable`
-      this.#setStatus({ backend: backendName, state: 'failed', targetId, code: 'capture-backend-unavailable', message })
-      if (backendName === 'ffmpeg' && this.backendFactories.cdp) {
-        await this.#activate('cdp', targetId, true)
-        if (this.backend && this.backendName === 'cdp') this.#setStatus({ backend: 'cdp', code: 'ffmpeg-fallback-cdp', message: `FFmpeg unavailable; using CDP: ${message}` })
+    // ffmpeg single-stream boundary (C1): only one target observable.
+    const effective = backendName === 'ffmpeg' ? targetIds.slice(-1) : targetIds
+    if (backendName === 'ffmpeg' && targetIds.length > 1) {
+      this.#setStatus({ backend: backendName, singleStream: true, singleStreamReason: 'FFmpeg captures one window stream; only the newest watched target is observed', targetId: effective[0] ?? null, targetIds: effective })
+    }
+    // Backend swap: tear down and rebuild (factory re-reads config).
+    if (this.backend && this.backendName !== backendName) {
+      await this.#stopBackend('backend-change')
+    }
+    if (!this.backend) {
+      const factory = this.backendFactories[backendName]
+      if (!factory) {
+        const message = `${backendName} backend is unavailable`
+        this.#setStatus({ backend: backendName, state: 'failed', targetId: effective[0] ?? null, code: 'capture-backend-unavailable', message })
+        if (backendName === 'ffmpeg' && this.backendFactories.cdp) {
+          await this.#ensureWatched('cdp', targetIds)
+          if (this.backend && this.backendName === 'cdp') this.#setStatus({ backend: 'cdp', code: 'ffmpeg-fallback-cdp', message: `FFmpeg unavailable; using CDP: ${message}` })
+        }
+        return
+      }
+      try {
+        this.backendName = backendName
+        this.generation += 1
+        const generation = this.generation
+        const fallbackReason = backendName === 'cdp' ? this.getConfig().ffmpegFallbackReason : null
+        this.#setStatus({ backend: backendName, state: 'starting', targetId: effective[0] ?? null, generation, code: fallbackReason ? 'ffmpeg-fallback-cdp' : null, message: fallbackReason || null })
+        let candidate: CaptureBackend
+        candidate = factory({ generation, onStatus: (status) => {
+          if (this.backend !== candidate || this.generation !== generation) return
+          this.#setStatus({ ...status, generation })
+        } })
+        this.backend = candidate
+        for (const targetId of effective) await candidate.start({ targetId, generation })
+      } catch (error) {
+        const e = error as Error & { code?: string }
+        const failed = this.backend
+        this.backend = null
+        if (failed) {
+          await failed.stop?.('start-failed').catch(() => { /* ignore */ })
+          await Promise.resolve(failed.dispose?.()).catch(() => { /* ignore */ })
+        }
+        this.#setStatus({ backend: backendName, state: 'failed', targetId: effective[0] ?? null, generation: this.generation, code: e.code, message: e.message })
+        if (backendName === 'ffmpeg' && this.backendFactories.cdp) {
+          await this.#ensureWatched('cdp', targetIds)
+          if (this.backend && this.backendName === 'cdp') this.#setStatus({ backend: 'cdp', code: 'ffmpeg-fallback-cdp', message: `FFmpeg unavailable; using CDP: ${e.message}` })
+        }
       }
       return
     }
-    try {
-      this.backendName = backendName
-      this.targetId = targetId
-      this.generation += 1
-      const generation = this.generation
-      const fallbackReason = backendName === 'cdp' ? this.getConfig().ffmpegFallbackReason : null
-      this.#setStatus({ backend: backendName, state: 'starting', targetId, generation, code: fallbackReason ? 'ffmpeg-fallback-cdp' : null, message: fallbackReason || null })
-      let candidate: CaptureBackend
-      candidate = factory({ generation, onStatus: (status) => {
-        if (this.backend !== candidate || this.generation !== generation) return
-        this.#setStatus({ ...status, generation })
-      } })
-      this.backend = candidate
-      await candidate.start({ targetId, generation })
-    } catch (error) {
-      const e = error as Error & { code?: string }
-      const failed = this.backend
-      this.backend = null
-      if (failed) {
-        await failed.stop?.('start-failed').catch(() => {
-          /* ignore */
-        })
-        await Promise.resolve(failed.dispose?.()).catch(() => {
-          /* ignore */
-        })
-      }
-      this.#setStatus({ backend: backendName, state: 'failed', targetId, generation: this.generation, code: e.code, message: e.message })
-      if (backendName === 'ffmpeg' && this.backendFactories.cdp) {
-        await this.#activate('cdp', targetId, true)
-        if (this.backend && this.backendName === 'cdp') this.#setStatus({ backend: 'cdp', code: 'ffmpeg-fallback-cdp', message: `FFmpeg unavailable; using CDP: ${e.message}` })
+    // Same backend alive: diff the set. idempotent start() + per-target
+    // stopTarget() mean order does not matter and unchanged targets are
+    // untouched (no restart, no flicker).
+    const live = new Set(this.backend.targetIds?.() ?? (this.targetId ? [this.targetId] : []))
+    for (const targetId of effective) {
+      if (!live.has(targetId)) {
+        try { await this.backend.start({ targetId, generation: this.generation }) } catch (error) {
+          this.#setStatus({ backend: backendName, state: 'failed', targetId, code: (error as { code?: string }).code, message: (error as Error).message })
+        }
       }
     }
+    if (this.backend.stopTarget) {
+      for (const targetId of [...live]) {
+        if (!effective.includes(targetId)) await this.backend.stopTarget(targetId, 'lease-set-changed')
+      }
+    } else if (live.size > 0 && effective.length === 0) {
+      await this.#stopBackend('no-watchers')
+    }
+    if (effective.length === 0) {
+      await this.#stopBackend('no-watchers')
+      return
+    }
+    this.targetId = effective[effective.length - 1]
+    // Diff path changed the set without going through #setStatus: publish the
+    // new focus so status().targetId / targetIds reflect the derived set.
+    this.#setStatus({ targetId: this.targetId, targetIds: this.backend.targetIds?.() ?? effective })
+  }
+
+  async #activate(backendName: string, targetId: string, force = false): Promise<void> {
+    if (!force && this.backend && this.backendName === backendName && this.targetId === targetId) return
+    await this.#ensureWatched(backendName, [targetId])
   }
 
   async #stopBackend(reason = 'stopped'): Promise<void> {
@@ -212,7 +272,7 @@ export class CaptureManager {
       await backend.stop(reason)
       await backend.dispose?.()
     }
-    this.#setStatus({ backend: this.#resolvedBackend(), state: 'idle', targetId: null, generation: this.generation, message: reason })
+    this.#setStatus({ backend: this.#resolvedBackend(), state: 'idle', targetId: null, targetIds: [], generation: this.generation, message: reason })
   }
 
   stop(reason = 'stopped'): Promise<void> {
@@ -228,7 +288,8 @@ export class CaptureManager {
   }
 
   status(): Record<string, unknown> {
-    return { ...this.statusValue, watchers: this.leases.size }
+    const live = this.backend?.targetIds?.() ?? null
+    return { ...this.statusValue, watchers: this.leases.size, ...(live !== null ? { targetIds: live } : {}) }
   }
 
   #setStatus(status: Record<string, unknown>): void {
@@ -242,6 +303,12 @@ export class CaptureManager {
     if (this.leases.size === 0 && this.backend) this.stop('lease-expired').catch(() => {
       /* ignore */
     })
+    // D7 — no counting to sync: the next derivation from the remaining leases
+    // is automatically correct. Diff now so expired targets stop promptly.
+    if (this.leases.size > 0 && this.backend) {
+      const desiredBackend = this.#resolvedBackend([...this.leases.values()].sort((a, b) => b.expiresAt - a.expiresAt)[0].backend)
+      this.#enqueue(() => this.#ensureWatched(desiredBackend, this.#activeTargets())).catch(() => { /* ignore */ })
+    }
     this.sweepTimer = this.setTimer(() => this.#sweep(), Math.min(5000, this.leaseTtlMs))
   }
 

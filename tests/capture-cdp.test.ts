@@ -38,13 +38,48 @@ describe("CDP capture backend", () => {
     await backend.stop();
   });
 
-  it("stops the old target before starting a switched target", async () => {
+  it("keeps both targets streaming when a second one is watched (#15)", async () => {
     const cdp = new FakeCdp();
     const sessions = { ensure: async (targetId: string) => ({ targetId, sessionId: `session-${targetId}` }), get: () => null, updateViewport: async () => ({}) } as unknown as TargetSessions;
     const backend = new CdpCaptureBackend({ cdp: cdp as unknown as CdpClient, sessions, getConfig: () => ({ cdpFps: 20, cdpQuality: 55, cdpMaxWidth: 960, cdpBackstopIntervalMs: 10000 }), onStatus: () => {}, onJpegFrame: () => {} });
     await backend.start({ targetId: "a" });
-    await backend.switchTarget({ targetId: "b" });
-    expect(cdp.calls.filter((call) => call.method.includes("Screencast")).map((call) => [call.method, call.sessionId])).toEqual([["Page.startScreencast", "session-a"], ["Page.stopScreencast", "session-a"], ["Page.startScreencast", "session-b"]]);
+    await backend.start({ targetId: "b" });
+    // Both stay live: NO stop of a when b starts — that stop was the freeze.
+    expect(cdp.calls.filter((call) => call.method === "Page.stopScreencast")).toHaveLength(0);
+    expect(backend.targetIds().sort()).toEqual(["a", "b"]);
+    await backend.stopTarget("a");
+    // b still streaming: only a's screencast was stopped.
+    expect(cdp.calls.filter((call) => call.method === "Page.stopScreencast").map((call) => call.sessionId)).toEqual(["session-a"]);
+    expect(backend.targetIds()).toEqual(["b"]);
+    await backend.stop();
+  });
+
+  it("is idempotent per target: a second start on the same id neither restarts nor stops", async () => {
+    const cdp = new FakeCdp();
+    const sessions = { ensure: async (targetId: string) => ({ targetId, sessionId: `session-${targetId}` }), get: () => null, updateViewport: async () => ({}) } as unknown as TargetSessions;
+    const backend = new CdpCaptureBackend({ cdp: cdp as unknown as CdpClient, sessions, getConfig: () => ({ cdpFps: 20, cdpQuality: 55, cdpMaxWidth: 960, cdpBackstopIntervalMs: 10000 }), onStatus: () => {}, onJpegFrame: () => {} });
+    await backend.start({ targetId: "a" });
+    await backend.start({ targetId: "a" });
+    expect(cdp.calls.filter((call) => call.method === "Page.startScreencast")).toHaveLength(1);
+    expect(cdp.calls.filter((call) => call.method === "Page.stopScreencast")).toHaveLength(0);
+    await backend.stop();
+  });
+
+  it("routes frames per flattened session and drops unknown sessions (#15)", async () => {
+    const cdp = new FakeCdp();
+    const sessions = { ensure: async (targetId: string) => ({ targetId, sessionId: `session-${targetId}` }), get: () => null, updateViewport: async () => ({}) } as unknown as TargetSessions;
+    const frames: { targetId: string; data: string }[] = [];
+    const backend = new CdpCaptureBackend({ cdp: cdp as unknown as CdpClient, sessions, getConfig: () => ({ cdpFps: 20, cdpQuality: 55, cdpMaxWidth: 960, cdpBackstopIntervalMs: 10000 }), onStatus: () => {}, onJpegFrame: (frame: { targetId: string; data: string }) => frames.push(frame) });
+    await backend.start({ targetId: "a" });
+    await backend.start({ targetId: "b" });
+    cdp.emit("Page.screencastFrame", { sessionId: 1, data: "frame-a", metadata: {} }, "session-a");
+    cdp.emit("Page.screencastFrame", { sessionId: 2, data: "frame-b", metadata: {} }, "session-b");
+    cdp.emit("Page.screencastFrame", { sessionId: 3, data: "frame-x", metadata: {} }, "session-unknown");
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    const byTarget = Object.fromEntries(frames.map((frame) => [frame.targetId, frame.data]));
+    expect(byTarget["a"]).toBe("frame-a");
+    expect(byTarget["b"]).toBe("frame-b");
+    expect(frames.some((frame) => frame.data === "frame-x")).toBe(false);
     await backend.stop();
   });
 

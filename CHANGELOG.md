@@ -1,3 +1,19 @@
+## 1.14.0 (2026-11-18)
+
+**观察窗多会话路由（#15）：两个会话并行操作浏览器时，各自的观察窗各自显示自己的页面。**
+
+上游 issue [#15](https://github.com/drscrewdriver/dsh-browser-cdp/issues/15)（FFFengMJL，行号级定位）。三层一次做完：
+
+- **采集层**：`CdpCaptureBackend` 从单目标改为按 targetId 分槽的 `Map`。每个被观察的 target 各自维持一条 `Page.startScreencast`，互不 stop 对方 —— 旧实现里「新 watch 先 `stop('restart')` 再起」就是两个面板互相踢、表现为冻结的机制。多个 lease 指向同一 target 只 start 一次（派生集合，零引用计数 —— 计数在 sweep 过期 / switch 原地改 target / 归零闪断三处会泄漏）。帧按扁平会话 id 反查归属，未知会话的帧一律丢弃 —— 这是多目标的正确性核心。
+- **状态层**：`CaptureManager` 的 `#activate`（后到者顶掉先到者）改为 `#ensureWatched`（整体集合差分：新增 start、移除 stopTarget，集合不变零动作）。`status` 新增 `targetIds: string[]`（`targetId` 保留 = 最近激活目标，既有读取方不改）；`spaces` 的 `capturing` 对每个被观察 target 独立为 true。ffmpeg 后端天生单流（MSE 单视频），多目标只对 cdp 生效 —— ffmpeg 下只观察最新的一个 target，status 显式带 `singleStream: true` 与原因，不静默降级。
+- **路由层**：focus store 按会话分槽。每次 `bcdp_*` 工具调用已经知道调用会话（`callingSessionId(exec)`）和它驱动的 targetId，现在这两个事实被记进该会话的槽（`sessionFocusStores`），观察窗优先跟随「本会话驱动的 tab」而非浏览器前台。会话无记录 / floating panel / 老客户端时逐字保持 1.13.x 全局前台行为。
+
+**新配置 `multiSessionWatch`（默认开）**：关掉即整体退回 1.14 之前的全局前台行为 —— 一个一键回退开关，不发补丁版。
+
+**边界与诚实话**：ego 的操作层本来就按会话隔离（space 名由 `sessionSpaceToken(sessionId)` 推导），所以「两个会话抢同一个 tab」在 ego 下基本不会发生 —— 本次改的是观察层，它此前完全不知道会话存在。cdp / tabbit 不保证同 tab：两个会话真落在同一标签页时，两边面板指向同一 tab 是**正确反映现实**（面板用 `activeSource` 区分「跟随本会话」和「跟随前台」），不为它加特例。tabbit 的 `_tabbitLastTaskName` 进程级全局覆写是操作层问题，与本观察窗无关，另开 issue。
+
+门禁：`npm run typecheck` 干净；`npm test` **1331 passed / 13 skipped**（新增 10 用例：多目标并存、幂等 start、帧按会话分发 + 未知会话丢弃、整体集合差分、同 target 多 lease 不重复 start/stop、ffmpeg 单流边界、idle grace 只在最后一个 lease 消失后触发）；三产物 rebuild（`lib/index.js` / `lib/client.js` / `bin/cdp-cast-worker.mjs`）。
+
 ## 1.13.2 (2026-11-18)
 
 **发布通道改回 `latest`：修好「issue 关了但默认安装拿不到修复」。**

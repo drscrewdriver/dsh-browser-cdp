@@ -3869,6 +3869,15 @@ var TargetSessions = class {
 		await Promise.allSettled(current.map((session) => this.cdp.call("Target.detachFromTarget", { sessionId: session.sessionId })));
 	}
 };
+/**
+* Multi-target CDP capture backend (#15).
+*
+* One screencast session PER watched target: several watch leases pointing at
+* different tabs each keep their own `Page.startScreencast` stream, and none of
+* them stops the others. Multiple leases on the SAME targetId are collapsed by
+* the manager into one entry here (derived set, no reference counting — D7).
+* `stopTarget` removes exactly one; `stop` clears everything.
+*/
 var CdpCaptureBackend = class {
 	cdp;
 	sessions;
@@ -3879,11 +3888,16 @@ var CdpCaptureBackend = class {
 	now;
 	setTimer;
 	clearTimer;
-	current;
-	pendingFrame;
-	sendTimer;
-	backstopTimer;
+	/** targetId → live capture state. The multi-target replacement for `current`. */
+	captures;
+	/** targetId → newest undelivered frame (per-target pacing). */
+	pendingFrames;
+	/** targetId → throttle timer for that target's next flush. */
+	sendTimers;
+	/** targetId → timestamp of the last frame actually delivered. */
 	lastSentAt;
+	/** Single shared backstop timer: one tick screenshots every stale target. */
+	backstopTimer;
 	metrics;
 	offFrame;
 	offDestroyed;
@@ -3897,39 +3911,55 @@ var CdpCaptureBackend = class {
 		this.now = now;
 		this.setTimer = setTimer;
 		this.clearTimer = clearTimer;
-		this.current = null;
-		this.pendingFrame = null;
-		this.sendTimer = null;
+		this.captures = /* @__PURE__ */ new Map();
+		this.pendingFrames = /* @__PURE__ */ new Map();
+		this.sendTimers = /* @__PURE__ */ new Map();
+		this.lastSentAt = /* @__PURE__ */ new Map();
 		this.backstopTimer = null;
-		this.lastSentAt = 0;
 		this.metrics = {
 			sourceFrames: 0,
 			sentFrames: 0,
 			droppedFrames: 0,
-			ackErrors: 0
+			ackErrors: 0,
+			targets: 0
 		};
 		this.offFrame = cdp.on("Page.screencastFrame", (params, targetSessionId) => this.#onFrame(params, targetSessionId));
 		this.offDestroyed = sessions.onDestroyed?.((targetId) => {
-			if (this.current?.targetId !== targetId) return;
-			this.stop("target-destroyed").then(() => this.onStatus({
-				backend: "cdp",
-				state: "failed",
-				targetId,
-				code: "capture-target-destroyed",
-				message: "The watched target was closed"
-			})).catch(() => {});
+			if (!this.captures.has(targetId)) return;
+			const remaining = this.captures.size - 1;
+			this.stopTarget(targetId, "target-destroyed").then(() => {
+				if (remaining > 0) return;
+				this.onStatus({
+					backend: "cdp",
+					state: "failed",
+					targetId,
+					code: "capture-target-destroyed",
+					message: "The watched target was closed"
+				});
+			}).catch(() => {});
 		});
 	}
+	/** Reverse lookup: which watched target owns this flattened session id. */
+	#captureBySession(targetSessionId) {
+		if (!targetSessionId) return null;
+		for (const capture of this.captures.values()) if (capture.sessionId === targetSessionId) return capture;
+		return null;
+	}
+	/** All currently-watched target ids (manager derives the desired set from leases). */
+	targetIds() {
+		return [...this.captures.keys()];
+	}
 	async start({ targetId }) {
-		await this.stop("restart");
+		if (this.captures.has(targetId)) return;
 		const session = await this.sessions.ensure(targetId);
 		const config = this.getConfig();
-		this.current = {
+		this.captures.set(targetId, {
 			targetId,
 			sessionId: session.sessionId,
 			lastFrameAt: 0,
 			startedAt: this.now()
-		};
+		});
+		this.metrics.targets = this.captures.size;
 		this.onStatus({
 			backend: "cdp",
 			state: "starting",
@@ -3950,7 +3980,8 @@ var CdpCaptureBackend = class {
 			});
 			this.#scheduleBackstop();
 		} catch (error) {
-			this.current = null;
+			this.captures.delete(targetId);
+			this.metrics.targets = this.captures.size;
 			this.onStatus({
 				backend: "cdp",
 				state: "failed",
@@ -3961,6 +3992,7 @@ var CdpCaptureBackend = class {
 			throw error;
 		}
 	}
+	/** Keep legacy single-target shape for callers that only know "switch". */
 	async switchTarget({ targetId }) {
 		this.onStatus({
 			backend: "cdp",
@@ -3970,32 +4002,76 @@ var CdpCaptureBackend = class {
 		await this.start({ targetId });
 	}
 	async updateConfig() {
-		if (this.current) await this.start({ targetId: this.current.targetId });
+		for (const targetId of this.captures.keys()) {
+			const capture = this.captures.get(targetId);
+			await this.cdp.call("Page.stopScreencast", {}, capture.sessionId).catch(() => {});
+			const config = this.getConfig();
+			try {
+				await this.cdp.call("Page.startScreencast", {
+					format: this.imageFormat,
+					...this.imageFormat === "jpeg" ? { quality: config.cdpQuality } : {},
+					maxWidth: config.cdpMaxWidth,
+					everyNthFrame: 1
+				}, capture.sessionId);
+			} catch (error) {
+				this.captures.delete(targetId);
+				this.metrics.targets = this.captures.size;
+				this.onStatus({
+					backend: "cdp",
+					state: "failed",
+					targetId,
+					code: "cdp-start-failed",
+					message: error.message
+				});
+			}
+		}
+	}
+	/** Stop exactly one target's screencast; the others keep streaming. */
+	async stopTarget(targetId, reason = "stopped") {
+		this.#clearSendTimer(targetId);
+		this.pendingFrames.delete(targetId);
+		const capture = this.captures.get(targetId);
+		if (!capture) return;
+		this.captures.delete(targetId);
+		this.lastSentAt.delete(targetId);
+		this.metrics.targets = this.captures.size;
+		await this.cdp.call("Page.stopScreencast", {}, capture.sessionId).catch(() => {});
+		this.onStatus({
+			backend: "cdp",
+			state: this.captures.size > 0 ? "streaming" : "idle",
+			targetId: this.captures.size > 0 ? targetId : null,
+			message: reason,
+			metrics: this.metrics
+		});
 	}
 	async stop(reason = "stopped") {
-		this.clearTimer(this.sendTimer);
-		this.clearTimer(this.backstopTimer);
-		this.sendTimer = null;
-		this.backstopTimer = null;
-		this.pendingFrame = null;
-		const current = this.current;
-		this.current = null;
-		if (current) {
-			await this.cdp.call("Page.stopScreencast", {}, current.sessionId).catch(() => {});
-			this.onStatus({
-				backend: "cdp",
-				state: "idle",
-				targetId: null,
-				message: reason,
-				metrics: this.metrics
-			});
+		for (const targetId of [...this.captures.keys()]) {
+			this.#clearSendTimer(targetId);
+			const capture = this.captures.get(targetId);
+			this.captures.delete(targetId);
+			this.lastSentAt.delete(targetId);
+			await this.cdp.call("Page.stopScreencast", {}, capture.sessionId).catch(() => {});
 		}
+		this.pendingFrames.clear();
+		this.metrics.targets = 0;
+		if (this.backstopTimer) {
+			this.clearTimer(this.backstopTimer);
+			this.backstopTimer = null;
+		}
+		if (this.lastSentAt.size === 0) this.onStatus({
+			backend: "cdp",
+			state: "idle",
+			targetId: null,
+			message: reason,
+			metrics: this.metrics
+		});
 	}
 	status() {
 		return {
 			backend: "cdp",
-			state: this.current ? "streaming" : "idle",
-			targetId: this.current?.targetId || null,
+			state: this.captures.size > 0 ? "streaming" : "idle",
+			targetId: this.captures.size > 0 ? [...this.captures.keys()][this.captures.size - 1] : null,
+			targetIds: this.targetIds(),
 			metrics: { ...this.metrics }
 		};
 	}
@@ -4004,10 +4080,21 @@ var CdpCaptureBackend = class {
 		this.offFrame = null;
 		this.offDestroyed?.();
 		this.offDestroyed = null;
+		if (this.backstopTimer) {
+			this.clearTimer(this.backstopTimer);
+			this.backstopTimer = null;
+		}
+	}
+	#clearSendTimer(targetId) {
+		const timer = this.sendTimers.get(targetId);
+		if (timer) {
+			this.clearTimer(timer);
+			this.sendTimers.delete(targetId);
+		}
 	}
 	async #onFrame(params, targetSessionId) {
-		const current = this.current;
-		if (!current || current.sessionId !== targetSessionId) return;
+		const capture = this.#captureBySession(targetSessionId);
+		if (!capture) return;
 		this.metrics.sourceFrames += 1;
 		if (params.sessionId === void 0 || params.sessionId === null) this.metrics.ackErrors += 1;
 		else this.cdp.call("Page.screencastFrameAck", { sessionId: params.sessionId }, targetSessionId).catch((error) => {
@@ -4015,7 +4102,7 @@ var CdpCaptureBackend = class {
 			this.onStatus({
 				backend: "cdp",
 				state: "streaming",
-				targetId: current.targetId,
+				targetId: capture.targetId,
 				code: "cdp-ack-failed",
 				message: error.message,
 				metrics: this.metrics
@@ -4023,42 +4110,45 @@ var CdpCaptureBackend = class {
 		});
 		if (!params.data) return;
 		const metadata = params.metadata || {};
-		const session = this.sessions.get(current.targetId);
+		const session = this.sessions.get(capture.targetId);
 		if (session) {
 			if (Number.isFinite(metadata.visibleViewportWidth)) session.viewportW = metadata.visibleViewportWidth;
 			if (Number.isFinite(metadata.visibleViewportHeight)) session.viewportH = metadata.visibleViewportHeight;
 		}
-		this.pendingFrame = {
-			targetId: current.targetId,
+		this.pendingFrames.set(capture.targetId, {
+			targetId: capture.targetId,
 			data: params.data,
 			vw: session?.viewportW || null,
 			vh: session?.viewportH || null,
 			ts: this.now()
-		};
-		current.lastFrameAt = this.now();
+		});
+		capture.lastFrameAt = this.now();
 		const minGap = 1e3 / this.getConfig().cdpFps;
-		const delay = Math.max(0, minGap - (this.now() - (this.lastSentAt || 0)));
-		if (delay === 0) this.#flushLatest();
-		else if (!this.sendTimer) this.sendTimer = this.setTimer(() => this.#flushLatest(), delay);
+		const last = this.lastSentAt.get(capture.targetId) || 0;
+		const delay = Math.max(0, minGap - (this.now() - last));
+		if (delay === 0) this.#flushLatest(capture.targetId);
+		else if (!this.sendTimers.has(capture.targetId)) this.sendTimers.set(capture.targetId, this.setTimer(() => this.#flushLatest(capture.targetId), delay));
 		if (delay > 0) this.metrics.droppedFrames += 1;
 	}
-	#flushLatest() {
-		this.sendTimer = null;
-		const frame = this.pendingFrame;
-		this.pendingFrame = null;
-		if (!frame || !this.current || frame.targetId !== this.current.targetId) return;
-		this.lastSentAt = this.now();
+	#flushLatest(targetId) {
+		this.sendTimers.delete(targetId);
+		const frame = this.pendingFrames.get(targetId);
+		this.pendingFrames.delete(targetId);
+		const capture = this.captures.get(targetId);
+		if (!frame || !capture) return;
+		this.lastSentAt.set(targetId, this.now());
 		this.metrics.sentFrames += 1;
 		this.onJpegFrame(frame);
 	}
+	/** One shared timer: every tick, screenshot each target whose frames stalled. */
 	#scheduleBackstop() {
-		this.clearTimer(this.backstopTimer);
+		if (this.backstopTimer) return;
 		const interval = this.getConfig().cdpBackstopIntervalMs;
 		this.backstopTimer = this.setTimer(async () => {
-			const current = this.current;
-			if (!current) return;
-			if (this.now() - current.lastFrameAt >= interval) try {
-				const session = await this.sessions.updateViewport(current.targetId);
+			this.backstopTimer = null;
+			const stale = [...this.captures.values()].filter((capture) => this.now() - capture.lastFrameAt >= interval);
+			for (const capture of stale) try {
+				const session = await this.sessions.updateViewport(capture.targetId);
 				const scale = session.viewportW > this.getConfig().cdpMaxWidth ? this.getConfig().cdpMaxWidth / session.viewportW : 1;
 				const result = await this.cdp.call("Page.captureScreenshot", {
 					format: this.imageFormat,
@@ -4071,9 +4161,9 @@ var CdpCaptureBackend = class {
 						height: session.viewportH,
 						scale
 					} } : {}
-				}, current.sessionId);
+				}, capture.sessionId);
 				if (result.data) this.onJpegFrame({
-					targetId: current.targetId,
+					targetId: capture.targetId,
 					data: result.data,
 					vw: session.viewportW,
 					vh: session.viewportH,
@@ -4081,7 +4171,7 @@ var CdpCaptureBackend = class {
 					backstop: true
 				});
 			} catch {}
-			this.#scheduleBackstop();
+			if (this.captures.size > 0) this.#scheduleBackstop();
 		}, interval);
 	}
 };
@@ -4138,6 +4228,16 @@ var CaptureManager = class {
 		this.stopTimer = null;
 		this.sweepTimer = this.setTimer(() => this.#sweep(), Math.min(5e3, this.leaseTtlMs));
 	}
+	/**
+	* #15 D7 — derive the desired target set from the lease set. NO reference
+	* counting: sweep-expired leases, in-place switchWatch retargets and
+	* stop/start-on-same-target all collapse into "recompute the set", which
+	* cannot leak (counting can: stale counts, orphaned old targets, flash on
+	* transient zero).
+	*/
+	#activeTargets() {
+		return [...new Set([...this.leases.values()].map((lease) => lease.targetId))];
+	}
 	#resolvedBackend(requested) {
 		const value = requested || this.getConfig().captureBackend;
 		return value === "auto" ? "cdp" : value;
@@ -4147,20 +4247,14 @@ var CaptureManager = class {
 		this.clearTimer(this.stopTimer);
 		this.stopTimer = null;
 		const requestedBackend = backend || this.getConfig().captureBackend;
-		const existing = this.leases.get(clientId);
 		this.leases.set(clientId, {
 			clientId,
 			backend: requestedBackend,
 			targetId,
 			expiresAt: this.now() + this.leaseTtlMs
 		});
-		if (existing && existing.backend === requestedBackend && existing.targetId === targetId) {
-			const resolved = this.#resolvedBackend(requestedBackend);
-			if (this.targetId !== targetId || this.backendName && this.backendName !== resolved) return this.status();
-			if (this.backend && this.backendName === resolved) return this.status();
-		}
 		return this.#enqueue(async () => {
-			await this.#activate(this.#resolvedBackend(backend), targetId);
+			await this.#ensureWatched(this.#resolvedBackend(requestedBackend), this.#activeTargets());
 			return this.status();
 		});
 	}
@@ -4170,7 +4264,7 @@ var CaptureManager = class {
 		lease.targetId = targetId;
 		lease.expiresAt = this.now() + this.leaseTtlMs;
 		return this.#enqueue(async () => {
-			await this.#activate(this.#resolvedBackend(lease.backend), targetId);
+			await this.#ensureWatched(this.#resolvedBackend(lease.backend), this.#activeTargets());
 			return this.status();
 		});
 	}
@@ -4180,13 +4274,20 @@ var CaptureManager = class {
 			this.stopTimer = null;
 			if (this.leases.size === 0) this.stop("no-watchers").catch(() => {});
 		}, this.idleGraceMs);
+		else if (this.leases.size > 0) {
+			const desiredBackend = this.#resolvedBackend([...this.leases.values()].sort((a, b) => b.expiresAt - a.expiresAt)[0].backend);
+			return this.#enqueue(async () => {
+				await this.#ensureWatched(desiredBackend, this.#activeTargets());
+				return this.status();
+			});
+		}
 		return this.status();
 	}
 	async updateConfig() {
 		const desired = this.#resolvedBackend();
 		if (!this.backend) {
 			const lease = [...this.leases.values()].sort((a, b) => b.expiresAt - a.expiresAt)[0];
-			if (lease) return this.#enqueue(() => this.#activate(this.#resolvedBackend(lease.backend), lease.targetId, true));
+			if (lease) return this.#enqueue(() => this.#ensureWatched(this.#resolvedBackend(lease.backend), this.#activeTargets()));
 			const fallbackReason = this.getConfig().ffmpegFallbackReason;
 			this.#setStatus({
 				backend: desired,
@@ -4197,7 +4298,7 @@ var CaptureManager = class {
 			});
 			return;
 		}
-		return this.#enqueue(() => this.#activate(desired, this.targetId, true));
+		return this.#enqueue(() => this.#ensureWatched(desired, this.#activeTargets()));
 	}
 	async browserDisconnected() {
 		return this.#enqueue(async () => {
@@ -4212,99 +4313,144 @@ var CaptureManager = class {
 		});
 	}
 	async browserConnected() {
-		const lease = [...this.leases.values()].sort((a, b) => b.expiresAt - a.expiresAt)[0];
-		if (lease) return this.#enqueue(() => this.#activate(this.#resolvedBackend(lease.backend), lease.targetId));
+		if (this.leases.size > 0) return this.#enqueue(() => this.#ensureWatched(this.#resolvedBackend(), this.#activeTargets()));
 	}
-	async #activate(backendName, targetId, force = false) {
-		if (!force && this.backend && this.backendName === backendName && this.targetId === targetId) return;
+	/**
+	* #15 — keep the backend watching EXACTLY the derived target set.
+	* Whole-set diff (D7): one call may both add and remove; per-lease
+	* start/stop would leak in that batch. Backend swap (global action) is the
+	* only path that tears the whole backend down.
+	*/
+	async #ensureWatched(backendName, targetIds) {
 		if (!this.screencastSupported) {
 			await this.#stopBackend("engine-unsupported");
 			this.#setStatus({
 				backend: backendName,
 				state: "unsupported",
-				targetId,
+				targetId: targetIds[0] ?? null,
 				code: "engine-unsupported",
 				message: "the attached engine cannot capture frames (no screencast, no window)",
 				engineUnsupported: true
 			});
 			return;
 		}
-		await this.#stopBackend("backend-change");
-		const factory = this.backendFactories[backendName];
-		if (!factory) {
-			const message = `${backendName} backend is unavailable`;
-			this.#setStatus({
-				backend: backendName,
-				state: "failed",
-				targetId,
-				code: "capture-backend-unavailable",
-				message
-			});
-			if (backendName === "ffmpeg" && this.backendFactories.cdp) {
-				await this.#activate("cdp", targetId, true);
-				if (this.backend && this.backendName === "cdp") this.#setStatus({
-					backend: "cdp",
-					code: "ffmpeg-fallback-cdp",
-					message: `FFmpeg unavailable; using CDP: ${message}`
+		const effective = backendName === "ffmpeg" ? targetIds.slice(-1) : targetIds;
+		if (backendName === "ffmpeg" && targetIds.length > 1) this.#setStatus({
+			backend: backendName,
+			singleStream: true,
+			singleStreamReason: "FFmpeg captures one window stream; only the newest watched target is observed",
+			targetId: effective[0] ?? null,
+			targetIds: effective
+		});
+		if (this.backend && this.backendName !== backendName) await this.#stopBackend("backend-change");
+		if (!this.backend) {
+			const factory = this.backendFactories[backendName];
+			if (!factory) {
+				const message = `${backendName} backend is unavailable`;
+				this.#setStatus({
+					backend: backendName,
+					state: "failed",
+					targetId: effective[0] ?? null,
+					code: "capture-backend-unavailable",
+					message
 				});
+				if (backendName === "ffmpeg" && this.backendFactories.cdp) {
+					await this.#ensureWatched("cdp", targetIds);
+					if (this.backend && this.backendName === "cdp") this.#setStatus({
+						backend: "cdp",
+						code: "ffmpeg-fallback-cdp",
+						message: `FFmpeg unavailable; using CDP: ${message}`
+					});
+				}
+				return;
+			}
+			try {
+				this.backendName = backendName;
+				this.generation += 1;
+				const generation = this.generation;
+				const fallbackReason = backendName === "cdp" ? this.getConfig().ffmpegFallbackReason : null;
+				this.#setStatus({
+					backend: backendName,
+					state: "starting",
+					targetId: effective[0] ?? null,
+					generation,
+					code: fallbackReason ? "ffmpeg-fallback-cdp" : null,
+					message: fallbackReason || null
+				});
+				let candidate;
+				candidate = factory({
+					generation,
+					onStatus: (status) => {
+						if (this.backend !== candidate || this.generation !== generation) return;
+						this.#setStatus({
+							...status,
+							generation
+						});
+					}
+				});
+				this.backend = candidate;
+				for (const targetId of effective) await candidate.start({
+					targetId,
+					generation
+				});
+			} catch (error) {
+				const e = error;
+				const failed = this.backend;
+				this.backend = null;
+				if (failed) {
+					await failed.stop?.("start-failed").catch(() => {});
+					await Promise.resolve(failed.dispose?.()).catch(() => {});
+				}
+				this.#setStatus({
+					backend: backendName,
+					state: "failed",
+					targetId: effective[0] ?? null,
+					generation: this.generation,
+					code: e.code,
+					message: e.message
+				});
+				if (backendName === "ffmpeg" && this.backendFactories.cdp) {
+					await this.#ensureWatched("cdp", targetIds);
+					if (this.backend && this.backendName === "cdp") this.#setStatus({
+						backend: "cdp",
+						code: "ffmpeg-fallback-cdp",
+						message: `FFmpeg unavailable; using CDP: ${e.message}`
+					});
+				}
 			}
 			return;
 		}
-		try {
-			this.backendName = backendName;
-			this.targetId = targetId;
-			this.generation += 1;
-			const generation = this.generation;
-			const fallbackReason = backendName === "cdp" ? this.getConfig().ffmpegFallbackReason : null;
-			this.#setStatus({
-				backend: backendName,
-				state: "starting",
+		const live = new Set(this.backend.targetIds?.() ?? (this.targetId ? [this.targetId] : []));
+		for (const targetId of effective) if (!live.has(targetId)) try {
+			await this.backend.start({
 				targetId,
-				generation,
-				code: fallbackReason ? "ffmpeg-fallback-cdp" : null,
-				message: fallbackReason || null
-			});
-			let candidate;
-			candidate = factory({
-				generation,
-				onStatus: (status) => {
-					if (this.backend !== candidate || this.generation !== generation) return;
-					this.#setStatus({
-						...status,
-						generation
-					});
-				}
-			});
-			this.backend = candidate;
-			await candidate.start({
-				targetId,
-				generation
+				generation: this.generation
 			});
 		} catch (error) {
-			const e = error;
-			const failed = this.backend;
-			this.backend = null;
-			if (failed) {
-				await failed.stop?.("start-failed").catch(() => {});
-				await Promise.resolve(failed.dispose?.()).catch(() => {});
-			}
 			this.#setStatus({
 				backend: backendName,
 				state: "failed",
 				targetId,
-				generation: this.generation,
-				code: e.code,
-				message: e.message
+				code: error.code,
+				message: error.message
 			});
-			if (backendName === "ffmpeg" && this.backendFactories.cdp) {
-				await this.#activate("cdp", targetId, true);
-				if (this.backend && this.backendName === "cdp") this.#setStatus({
-					backend: "cdp",
-					code: "ffmpeg-fallback-cdp",
-					message: `FFmpeg unavailable; using CDP: ${e.message}`
-				});
-			}
 		}
+		if (this.backend.stopTarget) {
+			for (const targetId of [...live]) if (!effective.includes(targetId)) await this.backend.stopTarget(targetId, "lease-set-changed");
+		} else if (live.size > 0 && effective.length === 0) await this.#stopBackend("no-watchers");
+		if (effective.length === 0) {
+			await this.#stopBackend("no-watchers");
+			return;
+		}
+		this.targetId = effective[effective.length - 1];
+		this.#setStatus({
+			targetId: this.targetId,
+			targetIds: this.backend.targetIds?.() ?? effective
+		});
+	}
+	async #activate(backendName, targetId, force = false) {
+		if (!force && this.backend && this.backendName === backendName && this.targetId === targetId) return;
+		await this.#ensureWatched(backendName, [targetId]);
 	}
 	async #stopBackend(reason = "stopped") {
 		const backend = this.backend;
@@ -4319,6 +4465,7 @@ var CaptureManager = class {
 			backend: this.#resolvedBackend(),
 			state: "idle",
 			targetId: null,
+			targetIds: [],
 			generation: this.generation,
 			message: reason
 		});
@@ -4332,9 +4479,11 @@ var CaptureManager = class {
 		return run;
 	}
 	status() {
+		const live = this.backend?.targetIds?.() ?? null;
 		return {
 			...this.statusValue,
-			watchers: this.leases.size
+			watchers: this.leases.size,
+			...live !== null ? { targetIds: live } : {}
 		};
 	}
 	#setStatus(status) {
@@ -4348,6 +4497,10 @@ var CaptureManager = class {
 		const now = this.now();
 		for (const [clientId, lease] of this.leases) if (lease.expiresAt <= now) this.leases.delete(clientId);
 		if (this.leases.size === 0 && this.backend) this.stop("lease-expired").catch(() => {});
+		if (this.leases.size > 0 && this.backend) {
+			const desiredBackend = this.#resolvedBackend([...this.leases.values()].sort((a, b) => b.expiresAt - a.expiresAt)[0].backend);
+			this.#enqueue(() => this.#ensureWatched(desiredBackend, this.#activeTargets())).catch(() => {});
+		}
 		this.sweepTimer = this.setTimer(() => this.#sweep(), Math.min(5e3, this.leaseTtlMs));
 	}
 	async dispose() {
@@ -6551,7 +6704,9 @@ let currentStatus = {
 * the user made. Keeping them apart is what stops the panel highlight from
 * snapping back after a tab click (see src/runtime/focus.ts).
 */
-let focusTargetId = null;
+let focusTargetGlobal = null;
+/** #15 — per-session focus slots: session id → target id it last drove. */
+const focusTargetBySession = /* @__PURE__ */ new Map();
 let videoInit = null;
 function normalizeConfig(input) {
 	const next = { ...castConfig };
@@ -6816,15 +6971,22 @@ const proxyObserveCache = {
 *     observation", never an error.
 *   - the panel's own selection — belongs to the view focus, not here.
 *
-* Order: explicit host focus (validated against the live list) → foreground
-* observation (local port, else remote proxy) → none. `known` lets the caller
-* pass the target list it already fetched, so a closed tab cannot keep the
-* highlight.
+* Order: per-session focus (validated against the live list) → explicit host
+* focus → foreground observation (local port, else remote proxy) → none.
+* `known` lets the caller pass the target list it already fetched, so a closed
+* tab cannot keep the highlight.
 */
-async function activeTargetInfo(known) {
+async function activeTargetInfo(known, sessionId) {
 	const inKnown = (id) => known === void 0 || known.includes(id);
-	if (focusTargetId !== null && inKnown(focusTargetId)) return {
-		id: focusTargetId,
+	if (sessionId) {
+		const scoped = focusTargetBySession.get(sessionId);
+		if (scoped !== void 0 && inKnown(scoped)) return {
+			id: scoped,
+			source: "focus-session"
+		};
+	}
+	if (focusTargetGlobal !== null && inKnown(focusTargetGlobal)) return {
+		id: focusTargetGlobal,
 		source: "focus"
 	};
 	const target = await devtoolsBase(active);
@@ -6879,16 +7041,16 @@ async function activeTargetInfo(known) {
 	};
 }
 /** String-only view of `activeTargetInfo` for the single-target routes. */
-async function activeTargetId() {
-	return (await activeTargetInfo()).id;
+async function activeTargetId(sessionId) {
+	return (await activeTargetInfo(void 0, sessionId)).id;
 }
-async function snapshotSpaces() {
+async function snapshotSpaces(sessionId) {
 	const browser = active;
 	if (browser === null) return [];
 	const targets = await listTargets();
-	const activeInfo = await activeTargetInfo(targets.map((target) => target.targetId));
+	const activeInfo = await activeTargetInfo(targets.map((target) => target.targetId), sessionId);
 	const activeId = activeInfo.id;
-	const capturingId = currentStatus.targetId;
+	const capturingIds = new Set(currentStatus.targetIds ?? (currentStatus.targetId ? [currentStatus.targetId] : []));
 	const spaces = [];
 	for (const target of targets.slice(0, 30)) {
 		const frame = frameCache.get(target.targetId);
@@ -6911,7 +7073,7 @@ async function snapshotSpaces() {
 			title: target.title,
 			active: target.targetId === activeId,
 			activeSource: target.targetId === activeId ? activeInfo.source : "",
-			capturing: target.targetId === capturingId,
+			capturing: capturingIds.has(target.targetId),
 			lastActive: frame?.lastActive || 0,
 			viewportW: frame?.viewportW || session?.viewportW,
 			viewportH: frame?.viewportH || session?.viewportH,
@@ -7037,11 +7199,14 @@ async function main() {
 				browserConnected: !!active,
 				capture: manager.status()
 			});
-			if (req.method === "GET" && url.pathname === "/api/spaces") return sendJson(res, 200, {
-				ok: true,
-				spaces: active ? await snapshotSpaces() : [],
-				capture: manager.status()
-			});
+			if (req.method === "GET" && url.pathname === "/api/spaces") {
+				const sid = typeof url.searchParams.get("sessionId") === "string" ? url.searchParams.get("sessionId").trim() : "";
+				return sendJson(res, 200, {
+					ok: true,
+					spaces: active ? await snapshotSpaces(sid || void 0) : [],
+					capture: manager.status()
+				});
+			}
 			if (req.method === "GET" && url.pathname === "/api/watch/status") return sendJson(res, 200, {
 				ok: true,
 				...manager.status()
@@ -7064,15 +7229,25 @@ async function main() {
 					ok: false,
 					error: "no live browser"
 				});
+				const body = await readJson(req);
+				const status = await manager.startWatch(body);
+				const sid = typeof body.sessionId === "string" ? body.sessionId.trim() : "";
+				if (sid !== "" && typeof body.targetId === "string" && body.targetId !== "") focusTargetBySession.set(sid, body.targetId);
 				return sendJson(res, 200, {
 					ok: true,
-					...await manager.startWatch(await readJson(req))
+					...status
 				});
 			}
-			if (req.method === "POST" && url.pathname === "/api/watch/switch") return sendJson(res, 200, {
-				ok: true,
-				...await manager.switchWatch(await readJson(req))
-			});
+			if (req.method === "POST" && url.pathname === "/api/watch/switch") {
+				const body = await readJson(req);
+				const status = await manager.switchWatch(body);
+				const sid = typeof body.sessionId === "string" ? body.sessionId.trim() : "";
+				if (sid !== "" && typeof body.targetId === "string" && body.targetId !== "") focusTargetBySession.set(sid, body.targetId);
+				return sendJson(res, 200, {
+					ok: true,
+					...status
+				});
+			}
 			if (req.method === "POST" && url.pathname === "/api/watch/stop") return sendJson(res, 200, {
 				ok: true,
 				...await manager.stopWatch(await readJson(req))
@@ -7234,8 +7409,11 @@ async function main() {
 				});
 				const body = await readJson(req);
 				const targetId = typeof body?.targetId === "string" ? body.targetId.trim() : "";
+				const sessionId = typeof body?.sessionId === "string" ? body.sessionId.trim() : "";
 				if (targetId === "") {
-					focusTargetId = null;
+					focusTargetGlobal = null;
+					if (sessionId !== "") focusTargetBySession.delete(sessionId);
+					else focusTargetBySession.clear();
 					return sendJson(res, 200, {
 						ok: true,
 						cleared: true
@@ -7247,7 +7425,8 @@ async function main() {
 					error: "that target is gone",
 					targetId
 				});
-				focusTargetId = targetId;
+				if (sessionId !== "") focusTargetBySession.set(sessionId, targetId);
+				else focusTargetGlobal = targetId;
 				return sendJson(res, 200, {
 					ok: true,
 					targetId
@@ -7261,7 +7440,8 @@ async function main() {
 					error: "targetId required"
 				});
 				await active.cdp.call("Target.closeTarget", { targetId });
-				if (focusTargetId === targetId) focusTargetId = null;
+				if (focusTargetGlobal === targetId) focusTargetGlobal = null;
+				for (const [sid, tid] of focusTargetBySession) if (tid === targetId) focusTargetBySession.delete(sid);
 				return sendJson(res, 200, { ok: true });
 			}
 			if (req.method === "POST" && url.pathname === "/api/switch-tab") {
@@ -7273,7 +7453,7 @@ async function main() {
 				});
 				try {
 					await active.cdp.call("Target.activateTarget", { targetId });
-					focusTargetId = targetId;
+					focusTargetGlobal = targetId;
 					return sendJson(res, 200, {
 						ok: true,
 						targetId

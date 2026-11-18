@@ -4076,8 +4076,17 @@ clearTimeout((panel as any)._dshHideT)
 			}
 		}
 
-		function LivePreviewController(ctx: any) {
+		function LivePreviewController(ctx: any, sessionId?: string) {
 			this.ctx = ctx
+			// #15 — the session this panel belongs to. The sidebar tab passes its
+			// scope's session id; the floating panel (no scope) passes undefined
+			// and keeps the 1.13.x global-foreground behavior. A defined id makes
+			// watch bodies carry it so the worker can slot per-session focus.
+			this.sessionId = typeof sessionId === 'string' && sessionId !== '' ? sessionId : null
+			// Set from spaces rows marked activeSource === 'focus-session'.
+			this.sessionTargetId = null
+			// Host-side kill switch (multiSessionWatch); fetched in start().
+			this.multiSessionWatch = true
 			this.store = ensureSnapshotStoreCreator()(this._initialState())
 			this.frameCache = new Map()
 			this.pageMeta = new Map()
@@ -4194,7 +4203,12 @@ clearTimeout((panel as any)._dshHideT)
 					if (cached) currentSpace = Object.assign({}, currentSpace, { thumbnail: cached })
 				}
 			} else {
-				var activeMarked = this.lastList.find(function (s: any) { return s.active === true })
+				// #15 — session-first routing (kill switch: multiSessionWatch=false
+				// restores the pre-1.14 foreground behavior verbatim). Prefer the
+				// tab THIS session's tools last drove, then browser foreground, then MRU.
+				var sessionTarget = this.multiSessionWatch && this.sessionId ? this.sessionTargetId : null
+				var activeMarked = sessionTarget ? this.lastList.find(function (s: any) { return s.targetId === sessionTarget }) || null : null
+				if (!activeMarked) activeMarked = this.lastList.find(function (s: any) { return s.active === true })
 				if (!activeMarked && this.lastList.length > 0) {
 					activeMarked = this.lastList.slice().sort(function (a: any, b: any) { return (b.lastActive || 0) - (a.lastActive || 0) })[0]
 				}
@@ -4254,6 +4268,10 @@ clearTimeout((panel as any)._dshHideT)
 			// Adopt the host's tracking mode (全模式 / 仅激活) before the first render.
 			fetch(TRACKING_ROUTE, { cache: 'no-store' }).then(function (res) { return res.json().catch(function (): any { return null }) }).then(function (data: any) {
 				if (data && typeof data.all === 'boolean') { self.trackAll = data.all; self._recompute() }
+				// #15 — host decides whether session-scoped routing is on. Default
+				// true; false restores the pre-1.14 global-foreground behavior.
+				self.multiSessionWatch = data ? data.multiSessionWatch !== false : true
+				self._recompute()
 			}).catch(function () {})
 			this._recompute()
 			if (this.visible) { this.refresh(); this.openStream() }
@@ -4338,7 +4356,10 @@ clearTimeout((panel as any)._dshHideT)
 			if (this.watchStopTimer) { window.clearTimeout(this.watchStopTimer); this.watchStopTimer = null }
 			var route = this.watchStarted ? WATCH_SWITCH_ROUTE : WATCH_START_ROUTE
 			if (this.watchStarted && this.watchTargetId === targetId) return
-			var body = { clientId: this.clientId, targetId: targetId }
+			// #15 — session-scoped watch bodies: the worker slots per-session focus
+			// from this. Undefined (floating panel) sends nothing, preserving the
+			// 1.13.x global path verbatim.
+			var body = { clientId: this.clientId, targetId: targetId, ...(this.sessionId ? { sessionId: this.sessionId } : {}) }
 			var request = this._requestWatch(route, body)
 			if (!request) { this.watchRequest.finally(function () { self._syncWatch(targetId) }); return }
 			request.then(function (status: any) {
@@ -4447,6 +4468,11 @@ clearTimeout((panel as any)._dshHideT)
 			fc.forEach(function (_: any, id: any) { if (!liveIds.has(id)) fc.delete(id) })
 			var activeMarked = this.lastList.find(function (s: any) { return s.active === true })
 			if (activeMarked) this.agentActiveId = activeMarked.targetId
+			// #15 — remember which row the worker marked as THIS session's driven
+			// tab; _recompute prefers it over the browser foreground.
+			this.sessionTargetId = this.sessionId && this.multiSessionWatch
+				? (this.lastList.find(function (s: any) { return s.activeSource === 'focus-session' }) || null)?.targetId ?? null
+				: null
 			this.liveCount = this.lastList.length
 			// Busy signal: derived from whether any page was touched recently.
 			// Previously this lived in the now-removed polling scheduler; moved
@@ -4812,8 +4838,12 @@ clearTimeout((panel as any)._dshHideT)
 		function EgoBrowserTab(props: any) {
 			var visible = props.visible
 			var ctx = props.ctx
+			// #15 — scope.sessionId scopes this panel's watch: the worker prefers
+			// this session's driven tab over the browser foreground.
+			var scope = props.scope || {}
+			var sessionScopeId = typeof scope.sessionId === 'string' && scope.sessionId !== '' ? scope.sessionId : undefined
 			var controllerRef = React.useRef(null)
-			if (controllerRef.current === null) controllerRef.current = new (LivePreviewController as any)(ctx)
+			if (controllerRef.current === null) controllerRef.current = new (LivePreviewController as any)(ctx, sessionScopeId)
 			var controller = controllerRef.current
 
 			// Create the snapshot hook once per controller instance

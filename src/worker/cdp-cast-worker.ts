@@ -148,7 +148,9 @@ let currentStatus: Record<string, unknown> = { backend: 'cdp', state: 'idle', ta
  * the user made. Keeping them apart is what stops the panel highlight from
  * snapping back after a tab click (see src/runtime/focus.ts).
  */
-let focusTargetId: string | null = null
+let focusTargetGlobal: string | null = null
+/** #15 — per-session focus slots: session id → target id it last drove. */
+const focusTargetBySession = new Map<string, string>()
 let focusAt = 0
 let videoInit: { generation: number; mime: string; buffer: Buffer } | null = null
 
@@ -355,14 +357,21 @@ const proxyObserveCache: { at: number; id: string | null; failedUntil: number; b
  *     observation", never an error.
  *   - the panel's own selection — belongs to the view focus, not here.
  *
- * Order: explicit host focus (validated against the live list) → foreground
- * observation (local port, else remote proxy) → none. `known` lets the caller
- * pass the target list it already fetched, so a closed tab cannot keep the
- * highlight.
+ * Order: per-session focus (validated against the live list) → explicit host
+ * focus → foreground observation (local port, else remote proxy) → none.
+ * `known` lets the caller pass the target list it already fetched, so a closed
+ * tab cannot keep the highlight.
  */
-async function activeTargetInfo(known?: readonly string[]): Promise<{ id: string | null; source: 'focus' | 'foreground' | 'foreground-remote' | 'none' }> {
+async function activeTargetInfo(known?: readonly string[], sessionId?: string): Promise<{ id: string | null; source: 'focus-session' | 'focus' | 'foreground' | 'foreground-remote' | 'none' }> {
   const inKnown = (id: string): boolean => known === undefined || known.includes(id)
-  if (focusTargetId !== null && inKnown(focusTargetId)) return { id: focusTargetId, source: 'focus' }
+  // #15 — the calling session's own driven tab wins (synchronous Map.get, no
+  // new await point on this ~500ms hot path). ego's operation layer already
+  // isolates sessions, so this reads an existing fact rather than guessing.
+  if (sessionId) {
+    const scoped = focusTargetBySession.get(sessionId)
+    if (scoped !== undefined && inKnown(scoped)) return { id: scoped, source: 'focus-session' }
+  }
+  if (focusTargetGlobal !== null && inKnown(focusTargetGlobal)) return { id: focusTargetGlobal, source: 'focus' }
   const target = await devtoolsBase(active)
   if (target === null) return { id: null, source: 'none' }
   const now = Date.now()
@@ -393,22 +402,23 @@ async function activeTargetInfo(known?: readonly string[]): Promise<{ id: string
 }
 
 /** String-only view of `activeTargetInfo` for the single-target routes. */
-async function activeTargetId(): Promise<string | null> {
-  return (await activeTargetInfo()).id
+async function activeTargetId(sessionId?: string): Promise<string | null> {
+  return (await activeTargetInfo(undefined, sessionId)).id
 }
 
-async function snapshotSpaces(): Promise<Array<Record<string, unknown>>> {
+async function snapshotSpaces(sessionId?: string): Promise<Array<Record<string, unknown>>> {
   // Bind the live browser once: the module-level `active` may be replaced by a
   // reconnect between two awaits, and this snapshot must describe one connection.
   const browser = active
   if (browser === null) return []
   const targets = await listTargets()
   const ids = targets.map((target) => target.targetId)
-  const activeInfo = await activeTargetInfo(ids)
+  const activeInfo = await activeTargetInfo(ids, sessionId)
   const activeId = activeInfo.id
   // The capture lease travels separately: the panel outlines `active` while the
-  // watch keeps screencasting `capturing` (they are allowed to differ).
-  const capturingId = currentStatus.targetId as string | null
+  // watch keeps screencasting `capturing` (they are allowed to differ). #15 —
+  // multiple targets may be captured at once, so `capturing` is per-row now.
+  const capturingIds = new Set((currentStatus.targetIds as string[] | undefined) ?? (currentStatus.targetId ? [currentStatus.targetId as string] : []))
   const spaces: Array<Record<string, unknown>> = []
   for (const target of targets.slice(0, 30)) {
     const frame = frameCache.get(target.targetId)
@@ -418,7 +428,7 @@ async function snapshotSpaces(): Promise<Array<Record<string, unknown>>> {
       browser.sessions.call(target.targetId, 'Runtime.evaluate', { expression: HUMAN_PROBE_JS, returnByValue: true, awaitPromise: false }, 3000)
         .then((result: unknown) => { const r = result as { result?: { value?: unknown } }; probeCache.set(target.targetId, { at: Date.now(), human: r.result?.value || null }) }).catch(() => { /* ignore */ })
     }
-    spaces.push({ targetId: target.targetId, url: target.url, title: target.title, active: target.targetId === activeId, activeSource: target.targetId === activeId ? activeInfo.source : '', capturing: target.targetId === capturingId, lastActive: frame?.lastActive || 0, viewportW: frame?.viewportW || session?.viewportW, viewportH: frame?.viewportH || session?.viewportH, humanCheck: cached?.human || null })
+    spaces.push({ targetId: target.targetId, url: target.url, title: target.title, active: target.targetId === activeId, activeSource: target.targetId === activeId ? activeInfo.source : '', capturing: capturingIds.has(target.targetId), lastActive: frame?.lastActive || 0, viewportW: frame?.viewportW || session?.viewportW, viewportH: frame?.viewportH || session?.viewportH, humanCheck: cached?.human || null })
   }
   spaces.sort((a, b) => Number(b.active) - Number(a.active) || (b.lastActive as number) - (a.lastActive as number))
   return spaces
@@ -507,12 +517,30 @@ async function main(): Promise<void> {
     const url = new URL(req.url ?? '/', 'http://127.0.0.1')
     try {
       if (req.method === 'GET' && url.pathname === '/api/health') return sendJson(res, 200, { workerOk: true, browserConnected: !!active, capture: manager.status() })
-      if (req.method === 'GET' && url.pathname === '/api/spaces') return sendJson(res, 200, { ok: true, spaces: active ? await snapshotSpaces() : [], capture: manager.status() })
+      if (req.method === 'GET' && url.pathname === '/api/spaces') {
+        const sid = typeof url.searchParams.get('sessionId') === 'string' ? url.searchParams.get('sessionId')!.trim() : ''
+        return sendJson(res, 200, { ok: true, spaces: active ? await snapshotSpaces(sid || undefined) : [], capture: manager.status() })
+      }
       if (req.method === 'GET' && url.pathname === '/api/watch/status') return sendJson(res, 200, { ok: true, ...manager.status() })
       if (req.method === 'GET' && url.pathname === '/api/video/status') return sendJson(res, 200, { ok: true, ...manager.status(), mime: videoInit?.mime || null })
       if (req.method === 'POST' && url.pathname === '/api/config') { castConfig = normalizeConfig(await readJson(req)); await manager.updateConfig(); return sendJson(res, 200, { ok: true, config: castConfig }) }
-      if (req.method === 'POST' && url.pathname === '/api/watch/start') { if (!active) return sendJson(res, 409, { ok: false, error: 'no live browser' }); return sendJson(res, 200, { ok: true, ...await manager.startWatch(await readJson(req) as { clientId: string; targetId: string }) }) }
-      if (req.method === 'POST' && url.pathname === '/api/watch/switch') return sendJson(res, 200, { ok: true, ...await manager.switchWatch(await readJson(req) as { clientId: string; targetId: string }) })
+      if (req.method === 'POST' && url.pathname === '/api/watch/start') {
+        if (!active) return sendJson(res, 409, { ok: false, error: 'no live browser' })
+        const body = await readJson(req) as { clientId: string; targetId: string; sessionId?: string }
+        const status = await manager.startWatch(body)
+        // #15 — the lease remembers its session; agent-driven focus moves to
+        // that session's slot so activeTargetInfo can prefer it later.
+        const sid = typeof body.sessionId === 'string' ? body.sessionId.trim() : ''
+        if (sid !== '' && typeof body.targetId === 'string' && body.targetId !== '') focusTargetBySession.set(sid, body.targetId)
+        return sendJson(res, 200, { ok: true, ...status })
+      }
+      if (req.method === 'POST' && url.pathname === '/api/watch/switch') {
+        const body = await readJson(req) as { clientId: string; targetId: string; sessionId?: string }
+        const status = await manager.switchWatch(body)
+        const sid = typeof body.sessionId === 'string' ? body.sessionId.trim() : ''
+        if (sid !== '' && typeof body.targetId === 'string' && body.targetId !== '') focusTargetBySession.set(sid, body.targetId)
+        return sendJson(res, 200, { ok: true, ...status })
+      }
       if (req.method === 'POST' && url.pathname === '/api/watch/stop') return sendJson(res, 200, { ok: true, ...await manager.stopWatch(await readJson(req) as { clientId: string }) })
       if (req.method === 'POST' && url.pathname === '/api/input') {
         const body = await readJson(req)
@@ -626,15 +654,22 @@ async function main(): Promise<void> {
         if (!active) return sendJson(res, 409, { ok: false, error: 'no live browser' })
         const body = await readJson(req)
         const targetId = typeof body?.targetId === 'string' ? body.targetId.trim() : ''
+        const sessionId = typeof body?.sessionId === 'string' ? body.sessionId.trim() : ''
         if (targetId === '') {
-          focusTargetId = null
+          focusTargetGlobal = null
+          if (sessionId !== '') focusTargetBySession.delete(sessionId)
+          else focusTargetBySession.clear()
           return sendJson(res, 200, { ok: true, cleared: true })
         }
         const ids = (await listTargets()).map((target) => target.targetId)
         if (!ids.includes(targetId)) {
           return sendJson(res, 409, { ok: false, code: 'focus-stale', error: 'that target is gone', targetId })
         }
-        focusTargetId = targetId
+        // #15 — agent-driven writes carry a session id: slot per session. The
+        // global slot stays for operator clicks (switch-tab below) and old
+        // clients, which preserves 1.13.x behavior when no session is given.
+        if (sessionId !== '') focusTargetBySession.set(sessionId, targetId)
+        else focusTargetGlobal = targetId
         focusAt = Date.now()
         return sendJson(res, 200, { ok: true, targetId })
       }
@@ -645,7 +680,8 @@ async function main(): Promise<void> {
         await active.cdp.call('Target.closeTarget', { targetId })
         // A closed tab must not keep owning the focus, or every later snapshot
         // would either highlight nothing or highlight the wrong row.
-        if (focusTargetId === targetId) focusTargetId = null
+        if (focusTargetGlobal === targetId) focusTargetGlobal = null
+        for (const [sid, tid] of focusTargetBySession) if (tid === targetId) focusTargetBySession.delete(sid)
         return sendJson(res, 200, { ok: true })
       }
       // POST /api/switch-tab — make one tab the browser's active target. Unlike
@@ -660,7 +696,7 @@ async function main(): Promise<void> {
           await active.cdp.call('Target.activateTarget', { targetId })
           // Remember the choice: this is the one place where activating and
           // focusing are the same intent (the operator asked for it).
-          focusTargetId = targetId
+          focusTargetGlobal = targetId
           focusAt = Date.now()
           return sendJson(res, 200, { ok: true, targetId })
         } catch (error) {

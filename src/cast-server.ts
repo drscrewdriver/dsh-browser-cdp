@@ -1403,7 +1403,7 @@ export function initCastServer(
       }
       // The persisted setting is the source of truth; the panel toggle is a
       // session override on top of it (a settings save clears it).
-      return sendJson(res, 200, { ok: true, all: getCliTrackAll(cfg.tabTracking === 'all'), setting: cfg.tabTracking })
+      return sendJson(res, 200, { ok: true, all: getCliTrackAll(cfg.tabTracking === 'all'), setting: cfg.tabTracking, multiSessionWatch: cfg.multiSessionWatch !== false })
     },
   })
 

@@ -97,7 +97,7 @@ import { planCloseTasks, CLOSE_SCRATCH_TASK } from './runtime/close-plan.ts'
 import { bumpFrame, bumpProbe, bumpTick, bumpQueue, noteStatsError, resetStats, snapshotStats } from './runtime/stats.ts'
 import { createRunQueue } from './cast/run-queue.ts'
 import { createProbeScheduler } from './runtime/probe-scheduler.ts'
-import { defaultFocusStore, focusIdFrom } from './runtime/focus.ts'
+import { defaultFocusStore, focusIdFrom, sessionFocusStores } from './runtime/focus.ts'
 import { runtimeOfLink } from './runtime/backend-runtime.ts'
 import { setTabbitExecutor } from './runtime/tabbit-runtime.ts'
 import { assembleSystemOneBody, buildJudgeRuntime, describeJudge, sendJudge } from './jev/client.ts'
@@ -1211,6 +1211,8 @@ interface EgoRuntimeConfig {
   readonly cdpBackstopIntervalMs: number
   /** Watch-panel tab tracking: 'active' (default) or 'all' (全模式). */
   readonly tabTracking: 'active' | 'all'
+  /** #15 — session-scoped observation kill switch (default true). */
+  readonly multiSessionWatch: boolean
   readonly viewportWidth: number
   readonly viewportHeight: number
   readonly deviceScaleFactor: number
@@ -1803,13 +1805,15 @@ const commonOutputSchema = {
 /**
  * Move the operation focus to whatever tab the tool just reported.
  *
- * Deliberately best-effort: a tool that does not carry a target id simply does
- * not move anything, and a worker that answers `focus-stale` clears it rather
- * than pinning a dead row (see pushFocus in cast-server).
+ * #15 — a session id scopes the write into that session's focus slot; a call
+ * with no session (operator paths, old clients) keeps the global store. The
+ * global write stays best-effort exactly as before.
  */
-function noteToolFocus(value: unknown): void {
+function noteToolFocus(value: unknown, sessionId?: string): void {
   const targetId = focusIdFrom(value)
   if (targetId === null) return
+  const sid = typeof sessionId === 'string' ? sessionId.trim() : ''
+  if (sid !== '') sessionFocusStores.for(sid).set(targetId, 'agent')
   void pushFocus(targetId, 'agent').catch(() => null)
 }
 
@@ -2491,7 +2495,7 @@ function defineEgoTool(ctx: EgoContext, cfg: EgoRuntimeConfig, opts: EgoToolOpti
           if (typeof opts.afterExecute === 'function') opts.afterExecute(args, result.value)
           // The operation face just drove this tab: move the focus now, so the
           // panel follows without waiting for a click or the next spaces poll.
-          noteToolFocus(result.value)
+          noteToolFocus(result.value, callingSessionId(exec))
           return toolPayload(result)
         }
         const result = await runWithStaleSpaceRetry(ctx, cfg, exec, () => opts.buildScript(args))
@@ -2499,7 +2503,7 @@ function defineEgoTool(ctx: EgoContext, cfg: EgoRuntimeConfig, opts: EgoToolOpti
         if (typeof opts.afterExecute === 'function') opts.afterExecute(args, result.value)
         // The operation face just drove this tab: move the focus now, so the
         // panel follows without waiting for a click or the next spaces poll.
-        noteToolFocus(result.value)
+        noteToolFocus(result.value, callingSessionId(exec))
         // Value is JSON.parse output of our own payload — fits the tool JSON contract.
         return toolPayload(result)
       }),
@@ -2636,6 +2640,7 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
     get cdpMaxWidth() { return resolveConfig(bridge.source() as RawConfig).cdpMaxWidth },
     get cdpBackstopIntervalMs() { return resolveConfig(bridge.source() as RawConfig).cdpBackstopIntervalMs },
     get tabTracking() { return resolveConfig(bridge.source() as RawConfig).tabTracking },
+    get multiSessionWatch() { return resolveConfig(bridge.source() as RawConfig).multiSessionWatch },
         get viewportWidth() { return resolveConfig(bridge.source() as RawConfig).viewportWidth },
         get viewportHeight() { return resolveConfig(bridge.source() as RawConfig).viewportHeight },
         get deviceScaleFactor() { return resolveConfig(bridge.source() as RawConfig).deviceScaleFactor },

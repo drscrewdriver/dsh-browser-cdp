@@ -87,6 +87,11 @@ export const Config = z.object({
   idleTimeoutMin: z.number().min(0).max(1440).step(1).description('Auto-stop the backing browser after N minutes without an bcdp_* call (0 = off). Relaunches on demand at the next call.').volatile(),
   chromePath: z.string().description('Path to Chrome/Chromium. Empty = auto-detect.').volatile(),
   captureBackend: backend.description('Capture backend: auto, cdp, or ffmpeg.').volatile(),
+  // #15 — session-scoped observation. ON (default): each sidebar panel follows
+  // the tab ITS session last drove (ego's operation layer already isolates
+  // sessions, so this reads an existing fact). OFF: the pre-1.14 global
+  // foreground behavior — one kill switch if the routing ever misbehaves.
+  multiSessionWatch: z.boolean().description('Watch panel follows the tab the CURRENT session last drove (recommended; concurrent sessions each see their own page). Turn off to restore the pre-1.14 behavior where every panel follows the browser foreground tab.').volatile(),
   streamProfile: profile.description('Capture quality profile.').volatile(),
   cdpFps: z.number().min(5).max(30).step(1).description('CDP preview FPS.').volatile(),
   cdpQuality: z.number().min(1).max(100).step(1).description('CDP JPEG quality.').volatile(),
@@ -463,6 +468,8 @@ export function resolveConfig(config: RawConfig = {}): ResolvedConfig {
   return {
     chromePath: typeof config.chromePath === 'string' ? config.chromePath : '',
     captureBackend: oneOf(config.captureBackend, ['auto', 'cdp', 'ffmpeg'], 'auto'),
+    // #15 — default ON; a non-boolean dirt value falls back to the default.
+    multiSessionWatch: typeof config.multiSessionWatch === 'boolean' ? config.multiSessionWatch : true,
     streamProfile: selectedProfile,
     cdpFps: finiteIn(config.cdpFps, 5, 30) ? config.cdpFps : legacyFps,
     cdpQuality: finiteIn(config.cdpQuality, 1, 100) ? config.cdpQuality : (finiteIn(config.screencastQuality, 1, 100) ? config.screencastQuality : 55),

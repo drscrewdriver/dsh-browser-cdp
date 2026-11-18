@@ -2,6 +2,121 @@ import { describe, it, expect } from "vitest";
 import { CaptureManager } from "../src/worker/capture-manager.ts";
 
 describe("CaptureManager", () => {
+  it("keeps both targets watched across a second lease (#15)", async () => {
+    const events: string[] = [];
+    let gen = 0;
+    const live = new Set<string>();
+    const factory = () => {
+      gen += 1;
+      const myGen = gen;
+      return {
+        start: async ({ targetId }: { targetId: string }) => { events.push(`start-${targetId}`); live.add(targetId); },
+        stop: async (reason: string) => { events.push(`stop-${reason}`); live.clear(); },
+        stopTarget: async (targetId: string) => { events.push(`stopTarget-${targetId}`); live.delete(targetId); },
+        targetIds: () => [...live],
+        generation: myGen,
+        updateConfig: async () => {},
+      };
+    };
+    const manager = new CaptureManager({ backendFactories: { cdp: factory }, getConfig: () => ({ captureBackend: "cdp" }), onStatus: () => {}, leaseTtlMs: 60000 });
+    await manager.startWatch({ clientId: "one", targetId: "a" });
+    await manager.startWatch({ clientId: "two", targetId: "b" });
+    // Both stay watched — no backend stop between the two leases.
+    expect(events.filter((event) => event.startsWith("stop"))).toEqual([]);
+    expect(manager.status().targetIds).toEqual(["a", "b"]);
+    // Remove one lease: only that target's screencast stops.
+    await manager.stopWatch({ clientId: "one" });
+    expect(events).toContain("stopTarget-a");
+    expect(manager.status().targetIds).toEqual(["b"]);
+    await manager.dispose();
+  });
+
+  it("does not restart an unchanged target when another lease joins it (#15 D7)", async () => {
+    const starts: string[] = [];
+    const stops: string[] = [];
+    const live = new Set<string>();
+    const factory = () => ({
+      start: async ({ targetId }: { targetId: string }) => { starts.push(targetId); live.add(targetId); },
+      stop: async (reason: string) => { stops.push(reason); live.clear(); },
+      stopTarget: async (targetId: string) => { stops.push(`target:${targetId}`); live.delete(targetId); },
+      targetIds: () => [...live],
+      updateConfig: async () => {},
+    });
+    const manager = new CaptureManager({ backendFactories: { cdp: factory }, getConfig: () => ({ captureBackend: "cdp" }), onStatus: () => {}, leaseTtlMs: 60000 });
+    await manager.startWatch({ clientId: "one", targetId: "a" });
+    await manager.startWatch({ clientId: "two", targetId: "a" });
+    // Same target twice: exactly one start, zero stops.
+    expect(starts).toEqual(["a"]);
+    expect(stops).toEqual([]);
+    // One of the two leases leaves: the target must KEEP streaming (other lease alive).
+    await manager.stopWatch({ clientId: "two" });
+    expect(starts).toEqual(["a"]);
+    expect(stops).toEqual([]);
+    await manager.dispose();
+  });
+
+  it("diffs the whole set: a batch with both additions and removals leaks nothing (#15 D7)", async () => {
+    const starts: string[] = [];
+    const stops: string[] = [];
+    const live = new Set<string>();
+    const factory = () => ({
+      start: async ({ targetId }: { targetId: string }) => { starts.push(targetId); live.add(targetId); },
+      stop: async (reason: string) => { stops.push(`all:${reason}`); live.clear(); },
+      stopTarget: async (targetId: string) => { stops.push(`target:${targetId}`); live.delete(targetId); },
+      targetIds: () => [...live],
+      updateConfig: async () => {},
+    });
+    const manager = new CaptureManager({ backendFactories: { cdp: factory }, getConfig: () => ({ captureBackend: "cdp" }), onStatus: () => {}, leaseTtlMs: 60000 });
+    await manager.startWatch({ clientId: "one", targetId: "a" });
+    await manager.startWatch({ clientId: "two", targetId: "b" });
+    // one switches a→c while two stays on b: add c, remove a, keep b.
+    await manager.switchWatch({ clientId: "one", targetId: "c" });
+    expect(starts).toEqual(["a", "b", "c"]);
+    expect(stops).toEqual(["target:a"]);
+    expect((manager.status().targetIds as string[]).sort()).toEqual(["b", "c"]);
+    await manager.dispose();
+  });
+
+  it("marks the ffmpeg single-stream boundary when multiple targets are watched (C1)", async () => {
+    const live = new Set<string>();
+    const factory = () => ({
+      start: async ({ targetId }: { targetId: string }) => { live.add(targetId); },
+      stop: async () => { live.clear(); },
+      stopTarget: async (targetId: string) => { live.delete(targetId); },
+      targetIds: () => [...live],
+      updateConfig: async () => {},
+    });
+    const manager = new CaptureManager({ backendFactories: { ffmpeg: factory }, getConfig: () => ({ captureBackend: "ffmpeg" }), onStatus: () => {}, leaseTtlMs: 60000 });
+    await manager.startWatch({ clientId: "one", targetId: "a" });
+    await manager.startWatch({ clientId: "two", targetId: "b" });
+    const status = manager.status();
+    expect(status.singleStream).toBe(true);
+    expect(status.targetIds).toEqual(["b"]); // newest watched target only
+    await manager.dispose();
+  });
+
+  it("stops the whole backend only after the LAST lease is gone (idle grace intact)", async () => {
+    const stops: string[] = [];
+    const factory = () => ({
+      start: async () => {},
+      stop: async (reason: string) => { stops.push(reason); },
+      stopTarget: async () => {},
+      targetIds: () => ["a"],
+      updateConfig: async () => {},
+    });
+    const manager = new CaptureManager({ backendFactories: { cdp: factory }, getConfig: () => ({ captureBackend: "cdp" }), onStatus: () => {}, leaseTtlMs: 60000, idleGraceMs: 10 });
+    await manager.startWatch({ clientId: "one", targetId: "a" });
+    await manager.startWatch({ clientId: "two", targetId: "b" });
+    await manager.stopWatch({ clientId: "one" });
+    await new Promise<void>((resolve) => setTimeout(resolve, 30));
+    // one lease still alive → no global stop despite the grace window elapsing.
+    expect(stops).toEqual([]);
+    await manager.stopWatch({ clientId: "two" });
+    await new Promise<void>((resolve) => setTimeout(resolve, 30));
+    expect(stops).toEqual(["no-watchers"]);
+    await manager.dispose();
+  });
+
   it("keeps leases alive across background timer throttling", async () => {
     const now = 1000;
     const manager = new CaptureManager({ backendFactories: {}, getConfig: () => ({ captureBackend: "cdp" }), onStatus: () => {}, now: () => now, leaseTtlMs: 120000 });
@@ -10,18 +125,23 @@ describe("CaptureManager", () => {
     await manager.dispose();
   });
 
-  it("runs one backend and increments generation on target switch", async () => {
-    const events: [string, string, number][] = [];
-    const factory = ({ generation }: { generation: number }) => ({
-      start: async ({ targetId }: { targetId: string }) => { events.push(["start", targetId, generation]); },
-      stop: async (reason: string) => { events.push(["stop", reason, generation]); },
+  it("runs one backend and keeps it alive across a target switch (#15)", async () => {
+    const events: [string, string][] = [];
+    const live = new Set<string>();
+    const factory = () => ({
+      start: async ({ targetId }: { targetId: string }) => { events.push(["start", targetId]); live.add(targetId); },
+      stop: async (reason: string) => { events.push(["stop", reason]); live.clear(); },
+      stopTarget: async (targetId: string) => { events.push(["stopTarget", targetId]); live.delete(targetId); },
+      targetIds: () => [...live],
       updateConfig: async () => {},
     });
     const manager = new CaptureManager({ backendFactories: { cdp: factory }, getConfig: () => ({ captureBackend: "cdp" }), onStatus: () => {}, leaseTtlMs: 60000 });
     await manager.startWatch({ clientId: "one", targetId: "a" });
     await manager.switchWatch({ clientId: "one", targetId: "b" });
-    expect(events.slice(0, 3)).toEqual([["start", "a", 1], ["stop", "backend-change", 1], ["start", "b", 2]]);
-    expect(manager.status().generation).toBe(2);
+    // One lease switching a→b: add b, remove a, backend NEVER torn down.
+    expect(events).toEqual([["start", "a"], ["start", "b"], ["stopTarget", "a"]]);
+    expect(manager.status().targetId).toBe("b");
+    expect(manager.status().targetIds).toEqual(["b"]);
     await manager.dispose();
   });
 
@@ -71,23 +191,40 @@ describe("CaptureManager", () => {
 
   it("renews an existing lease without stealing the shared target", async () => {
     const starts: string[] = [];
-    const factory = () => ({ start: async ({ targetId }: { targetId: string }) => { starts.push(targetId); }, stop: async () => {}, updateConfig: async () => {} });
+    const live = new Set<string>();
+    const factory = () => ({
+      start: async ({ targetId }: { targetId: string }) => { starts.push(targetId); live.add(targetId); },
+      stop: async () => { live.clear(); },
+      stopTarget: async (targetId: string) => { live.delete(targetId); },
+      targetIds: () => [...live],
+      updateConfig: async () => {},
+    });
     const manager = new CaptureManager({ backendFactories: { cdp: factory }, getConfig: () => ({ captureBackend: "cdp" }), onStatus: () => {}, leaseTtlMs: 60000 });
     await manager.startWatch({ clientId: "one", targetId: "a" });
     await manager.startWatch({ clientId: "two", targetId: "b" });
     await manager.startWatch({ clientId: "one", targetId: "a" });
+    // Renewal of an already-watched target adds nothing new (D7 derived set).
     expect(starts).toEqual(["a", "b"]);
     await manager.dispose();
   });
 
-  it("serializes overlapping activations", async () => {
+  it("serializes overlapping activations (#15: no backend stop between two leases)", async () => {
     const events: string[] = [];
     let releaseFirst!: () => void;
     const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
-    const factory = ({ generation }: { generation: number }) => ({
-      start: async ({ targetId }: { targetId: string }) => { events.push(`start-${targetId}`); if (generation === 1) await firstGate; events.push(`finish-${targetId}`); },
-      stop: async () => { events.push(`stop-${generation}`); }, updateConfig: async () => {},
-    });
+    let gen = 0;
+    const live = new Set<string>();
+    const factory = () => {
+      gen += 1;
+      const myGen = gen;
+      return {
+        start: async ({ targetId }: { targetId: string }) => { events.push(`start-${targetId}`); live.add(targetId); if (myGen === 1) await firstGate; events.push(`finish-${targetId}`); },
+        stop: async (reason: string) => { events.push(`stop-${reason}`); live.clear(); },
+        stopTarget: async (targetId: string) => { events.push(`stopTarget-${targetId}`); live.delete(targetId); },
+        targetIds: () => [...live],
+        updateConfig: async () => {},
+      };
+    };
     const manager = new CaptureManager({ backendFactories: { cdp: factory }, getConfig: () => ({ captureBackend: "cdp" }), onStatus: () => {}, leaseTtlMs: 60000 });
     const first = manager.startWatch({ clientId: "one", targetId: "a" });
     const second = manager.startWatch({ clientId: "two", targetId: "b" });
@@ -95,7 +232,9 @@ describe("CaptureManager", () => {
     expect(events).toEqual(["start-a"]);
     releaseFirst();
     await Promise.all([first, second]);
-    expect(events).toEqual(["start-a", "finish-a", "stop-1", "start-b", "finish-b"]);
+    // Serialized after start-a completes; then diff adds b — NO stop of a.
+    expect(events).toEqual(["start-a", "finish-a", "start-b", "finish-b"]);
+    expect((manager.status().targetIds as string[]).sort()).toEqual(["a", "b"]);
     await manager.dispose();
   });
 

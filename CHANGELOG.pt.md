@@ -34,7 +34,7 @@
 
 **Corrige o `×` do painel sem efeito no canal ego-cli.**
 
-- A causa não era permissão, era um portão duro: `closeCliTab` retornava `channel-cannot-close` sempre em ego-cli (409实测). Novo `buildEgoCloseTabScript` fecha pelo mesmo heredoc de painel das ações size/navigate/switch.
+- A causa não era permissão, era um portão duro: `closeCliTab` retornava `channel-cannot-close` sempre em ego-cli (409 medido). Novo `buildEgoCloseTabScript` fecha pelo mesmo heredoc de painel das ações size/navigate/switch.
 
 ## 1.12.0 (2026-11-15)
 
@@ -61,7 +61,7 @@
 
 **O ↻ do painel agora sincroniza de fato o «alvo ativo» — e sem efeitos colaterais.**
 
-- `#dsh-ego-refresh` tinha DOM desde o 1.9.x mas nunca ganhou listener de click; rota nova `POST /api/bcdp/sync` com分流 por canal no host.
+- `#dsh-ego-refresh` tinha DOM desde o 1.9.x mas nunca ganhou listener de click; rota nova `POST /api/bcdp/sync` com roteamento por canal no host.
 
 ## 1.9.21 (2026-11-13)
 
@@ -83,9 +83,9 @@
 
 ## 1.9.18 (2026-11-13)
 
-**A face de observação para de gastar a cota da face de操作: ledger de receipts do Tabbit +回收 ativo + não queima quando ninguém olha.**
+**A face de observação para de gastar a cota da face de operação: ledger de receipts do Tabbit + recuperação ativa + não queima quando ninguém olha.**
 
-- Limites实测 do tabbit-cli 1.21.21: 1024 receipts por task, depois todo `nodejs` devolve stdout vazio e o CLI só entra, não sai. Ledger local por task (`src/cdp/tabbit-receipts.ts`) + reciclagem proativa.
+- Limites medidos do tabbit-cli 1.21.21: 1024 receipts por task, depois todo `nodejs` devolve stdout vazio e o CLI só entra, não sai. Ledger local por task (`src/cdp/tabbit-receipts.ts`) + reciclagem proativa.
 
 ## 1.9.17 (2026-11-13)
 
@@ -104,7 +104,7 @@
 
 **Causa do «painel mostra um segundo e volta ao vazio»: duas fontes de dados brigando no mesmo SSE.**
 
--取证 por gravação: assinante SSE falso + subprocesso real + tabbit real, 18 s de eventos gravados (`.tempscript/probe-panel-events.mjs`). O worker de gravação CDP era içado sem portão de canal e retransmitia `spaces: []` a cada ~5,5 s com um targetId morto.
+- Evidência por gravação: assinante SSE falso + subprocesso real + tabbit real, 18 s de eventos gravados (`.tempscript/probe-panel-events.mjs`). O worker de gravação CDP era içado sem portão de canal e retransmitia `spaces: []` a cada ~5,5 s com um targetId morto.
 
 ## 1.9.14 (2026-11-12)
 
@@ -219,7 +219,7 @@
 
 **macOS pronto para usar + `bcdp_wait_for_human` + hideCursor + viewport fixo + contagem real do flush (vantagens do dsh-ego-browser absorvidas).**
 
-- `installPathCandidates()` no runtime varre `/Applications` + `~/Applications` (Chrome/Chromium/Edge/Brave/Tungsten Edge) após falha do `which`; `ensureXDisplay()` isenta `darwin` (Aqua/Quartz nunca exporta `$DISPLAY`, era误判 headless e tentava Xvfb).
+- `installPathCandidates()` no runtime varre `/Applications` + `~/Applications` (Chrome/Chromium/Edge/Brave/Tungsten Edge) após falha do `which`; `ensureXDisplay()` isenta `darwin` (Aqua/Quartz nunca exporta `$DISPLAY`, era classificado por engano como headless e tentava Xvfb).
 
 ## 1.7.12 (2026-11-08)
 
@@ -241,7 +241,7 @@
 
 ## 1.7.8 (2026-11-04)
 
-**Corrige dois bugs实测 do 1.7.7: fonte de quadros degradada no espaço errado + sem feedback de imagem na janela.**
+**Corrige dois bugs medidos do 1.7.7: fonte de quadros degradada no espaço errado + sem feedback de imagem na janela.**
 
 - O poller lia `cfg.activeSpace ?? cfg.defaultSpace` e caía no bucket `__global__` → espaço literal `default`, registrando um espaço extra; correção com o espaço da sessão chamante.
 - `/api/bcdp/stream` sem worker era fluxo mudo; o cliente só começava o polling depois de *ver* `cliFrameMode` (ovo-galinha). Polling do lado do cliente desde o mount.
@@ -266,7 +266,7 @@ Adendo de enumeração de hosts para DSH 0.2.1-rc.4 (bump só de declaração; p
 
 **Duas coisas: P0 de roteamento de canal («ego desabilitado e tudo ainda passa por ego, endpoint CDP ativo único inalcançável») e remoção do interruptor useSdkPath (OFF só garantia quebrar).**
 
-- O cache de attach parava de herdar campos de roteamento de `previous`: um único探测 bem-sucedido do ego-cli colava `linkKind`/`cliPath`/`cliShape`/`endpointSource` no cache do processo para sempre.
+- O cache de attach parava de herdar campos de roteamento de `previous`: uma única sonda bem-sucedida do ego-cli colava `linkKind`/`cliPath`/`cliShape`/`endpointSource` no cache do processo para sempre.
 - Novo `resolveEffectiveLink` reconfirma o canal prioritário após eventos links: item ativo disponível vence; ativo pendurado (aponta para linha desabilitada/apagada) → **primeiro link enabled da ordem assume** (priority-fallback, logado + linha `channel:` no doctor, nunca em silêncio).
 
 ## 1.7.0 (2026-10-25)
@@ -304,7 +304,7 @@ Nomenclatura de espaços e isolamento concorrente endurecidos (grupo de plano `b
 ## 1.2.4 (2026-10-21)
 
 - **`--sdk-path` atravessa até a execução das ferramentas**: antes só a sonda carregava o flag, `runEgoScript` não — todo script começava com `ReferenceError: taskSpaces is not defined` sob `ego-cli` + `useSdkPath: true`.
-- **`bcdp_status` vira sonda de fachada**: nada de `--status` (não existe no CLI oficial); sonda `nodejs` no mesmo canal do trabalho real checando `taskSpaces`/`browser`/`page`; campo `facades` na saída; timeout 25 s → 15 s (~300 ms实测).
+- **`bcdp_status` vira sonda de fachada**: nada de `--status` (não existe no CLI oficial); sonda `nodejs` no mesmo canal do trabalho real checando `taskSpaces`/`browser`/`page`; campo `facades` na saída; timeout 25 s → 15 s (~300 ms medidos).
 - **Sonda de prontidão sem falso positivo**: com `useSdkPath` ligado exige `taskSpaces`/`browser` ambos `object` além do sentinela; desligado mantém o critério antigo, runtime vendored intocado.
 
 ## 1.2.2 (2026-10-18)
@@ -367,14 +367,14 @@ Nomenclatura de espaços e isolamento concorrente endurecidos (grupo de plano `b
 
 ## [0.18.13] - 2026-10-03 — 包装卡挂官方 dock 缝（todo 同级 order 0）+ 投递模型变更：块体归档为文件（同 0.17.15/0.17.16 反向同源）
 
-- Cartão registrado como contribuidor da lista `conversation.input.dock` (id `dsh-browser-cdp.picks`, **order 0,同级 do todo**); `✕` remove a referência do rascunho (input vazio não deixa texto). O pendure body-mount do 0.18.9 sai.
+- Cartão registrado como contribuidor da lista `conversation.input.dock` (id `dsh-browser-cdp.picks`, **order 0, mesmo nível do todo**); `✕` remove a referência do rascunho (input vazio não deixa texto). O pendure body-mount do 0.18.9 sai.
 - Modelo de entrega muda (igual ao paste-dock): o bloco de picks é arquivado por `picks-save` em `<stateDir>/picks/<file>.json`, o composer guarda só a linha curta de referência; o modelo lê pelo caminho (`backendNodeId` alimenta `bcdp_cdp` diretamente). Mesma página mesclada.
 - Leitura de rascunho corrigida: o valor vivo está no campo de fachada `input.draft`; `input.state.getSnapshot()` não tem a chave `draft` — a leitura desde 0.18.4 devolvia string vazio sempre; `readDraftText(input)` cobre as três costuras.
 
 ## [0.18.11] - 2026-10-03 — 包装卡定位诊断补丁（同 0.17.14 反向同源）
 
 - Registro do dock leva `locale: 'dsh-browser-cdp'` + escreve `__dshBrowserCdpDeco.stage='registered'`; falha da fábrica de inject registrada como `inject-failed` + sessionId.
-- Regex do cartão de picks放宽: whitespace/quebras permitidos entre atributos da linha-cabeçalho (a forma quebrada do composer não escapa).
+- Regex do cartão de picks relaxada: whitespace/quebras permitidos entre atributos da linha-cabeçalho (a forma quebrada do composer não escapa).
 - typecheck ok; 691 passed / 11 skipped.
 
 ## [0.18.10] - 2026-10-03 — 包装卡改挂官方 dock 缝：与 todo 同级（order 0）、浮在对话区一侧（同 0.17.13 反向同源）
@@ -460,7 +460,7 @@ Nomenclatura de espaços e isolamento concorrente endurecidos (grupo de plano `b
 
 - **Lançamento local gerenciado**: com `allowLocalFallback` ligado e o endpoint ativo inalcançável, inicia automaticamente o Chrome/Chromium/Edge local (descoberta explícita → tabela de candidatos por plataforma), injeta `http://127.0.0.1:<porta>` e segue trabalhando; badge de attach marca `endpointSource: local-fallback`.
 - **Reuso de singleton** (T2.13): `launcher.json` grava pid/porta/profile; só reusa instância que o próprio plugin lançou e ainda responde.
-- **Parada e回收** (T2.14): win32 `taskkill /T /F` mata a árvore inteira (0 órfãos实测); o reaper de ociosidade回收 instâncias locais junto.
+- **Parada e recuperação** (T2.14): win32 `taskkill /T /F` mata a árvore inteira (0 órfãos medidos); o reaper de ociosidade recupera instâncias locais junto.
 
 ## [0.14.0] - 2026-09-23 — 点选引用按页聚合为字典块，附来源 CDP 连接
 
@@ -488,7 +488,7 @@ Nomenclatura de espaços e isolamento concorrente endurecidos (grupo de plano `b
 
 - **Entrega do resultado da seleção na conversa (M1.6 / T5.6–T5.7)**: as duas ações da barra flutuante escrevem de fato — «comentar na conversa» escreve a descrição no rascunho (usuário completa e envia); «adicionar à conversa» escreve e **envia automaticamente** (mesmo caminho de adjudicação do botão de envio). Validação de `phase === 'plain'` antes de enviar; cada seleção entrega uma vez.
 - **Caminho degradado de seleção por coordenada (T5.1b)**: no modo seleção, clicar na captura ao vivo da janela = selecionar — coordenada convertida e enviada ao worker, hit-test por `DOM.getNodeForLocation` (sem depender do canal de eventos Overlay), mesma esteira de descrição/medição/UI. Sidebar e flutuante suportam.
-- Worker ganha `POST /api/pick/click {targetId, x, y}`; host expõe `/api/ego/pick/click` como转发.
+- Worker ganha `POST /api/pick/click {targetId, x, y}`; host expõe `/api/ego/pick/click` como encaminhamento.
 
 ## [0.10.0] - 2026-09-23 — CDP P0 底座 + 元素点选（R6 主体）+ Set-of-Marks（R4）
 
@@ -510,12 +510,12 @@ Nomenclatura de espaços e isolamento concorrente endurecidos (grupo de plano `b
 ## [0.8.5] - 2026-09-18 — 登录态导入 + 空闲回收 + 观察窗修复群
 
 - **Importar estado de login dos navegadores do sistema (#46)**: nova ferramenta `ego_login_import` + bloco no cartão de ajustes + rota `POST /api/ego/login-import`. Copia cookies por domínio do Chrome/Edge/Brave cotidiano ao navegador do agente (binário real headless + leitura transparente por CDP, compatível com App-Bound Encryption do Chrome 127+).
-- **回收 automático por ociosidade (#47, opt-in)**: `idleTimeoutMin` (padrão 0 = desligado). N minutos sem chamadas `ego_*` param elegantemente (`--stop`) o navegador em segundo plano (~425 MB ocioso实测); reabre em 2-4 s. Olhar a janela não conta como atividade (dito no texto do ajuste).
+- **Recuperação automática por ociosidade (#47, opt-in)**: `idleTimeoutMin` (padrão 0 = desligado). N minutos sem chamadas `ego_*` param elegantemente (`--stop`) o navegador em segundo plano (~425 MB ociosos medidos); reabre em 2-4 s. Olhar a janela não conta como atividade (dito no texto do ajuste).
 - **Botão «janela pop-out» (#51)**: chama `ego-browser --open` — a instância headless é trocada no lugar por janela com interface do mesmo Profile (abas preservadas); se já com interface, traz à frente.
 
 ## [0.8.4] - 2026-09-15 — 观察窗 worker 启动链修复 + 社区 PR 合并
 
-- **Janela nunca iniciava em DSH ≥ 0.1.5 (#34 / #38 / #43)**: o spawn do worker não levava o必填 `cwd` do provider de subprocesso do 0.1.5, e o `catch` nu engolia a exceção — `ensureWorker()` eternamente null. `cwd` adicionado.
+- **Janela nunca iniciava em DSH ≥ 0.1.5 (#34 / #38 / #43)**: o spawn do worker não levava o `cwd` obrigatório do provider de subprocesso do 0.1.5, e o `catch` nu engolia a exceção — `ensureWorker()` eternamente null. `cwd` adicionado.
 - **Worker se matava ao iniciar (#34 defeito 2 / #40)**: o matching frouxo de `stopSiblingWorkers()` tomava o runner de subprocesso do DSH como colega e o `taskkill /T` matava a própria árvore antes de escrever `ego-cast.json`. Matching restringido ao filho direto do node.
 - **Todos os `ego_*` com `no @@DSH_RESULT@@` no host Electron (DSH Desktop) (#42)**: env explícito no spawn sem `ELECTRON_RUN_AS_NODE` iniciava um segundo Electron. `resolveEgoEnv` e o spawn do worker cobrem `process.versions.electron`.
 
@@ -535,7 +535,7 @@ Nomenclatura de espaços e isolamento concorrente endurecidos (grupo de plano `b
 
 Janela de observação ganha a esteira de tela dupla: correção da raiz do protocolo CDP e backend FFmpeg H.264/fMP4 opcional.
 
-- **Parâmetros de inicialização自定义 pelo usuário**: o cartão de ajustes ganha «argumentos adicionais do ego-browser CLI» e «argumentos adicionais do Chrome». O primeiro é anexado ao argv do `ego-browser nodejs` (efeito na próxima chamada `ego_*`); o segundo cruza pela env `EGO_LINUX_EXTRA_ARGS` à runtime vendored.
+- **Parâmetros de inicialização personalizados pelo usuário**: o cartão de ajustes ganha «argumentos adicionais do ego-browser CLI» e «argumentos adicionais do Chrome». O primeiro é anexado ao argv do `ego-browser nodejs` (efeito na próxima chamada `ego_*`); o segundo cruza pela env `EGO_LINUX_EXTRA_ARGS` à runtime vendored.
 - FFmpeg passa a ser baixado explicitamente: o CDP não depende nem instala `ffmpeg-static`. A página de ajustes detecta primeiro caminho personalizado, PATH do sistema e cache gerenciado; a opção FFmpeg fica desabilitada até a checagem de compatibilidade passar, com download one-click de versão fixa + verificação SHA-256.
 
 ## [v0.8.0] - 2026-08
@@ -583,7 +583,7 @@ Transmissão ao vivo + operação direta do navegador na janela de monitoramento
 
 Multiplataforma (suporte Windows consolidado).
 
-- Suporte nativo Windows: `IS_WIN` + `windowsChromeCandidates()`探测 automaticamente diretórios de instalação Chrome/Edge/Brave e `PATH`/`%PATHEXT%`.
+- Suporte nativo Windows: `IS_WIN` + `windowsChromeCandidates()` sonda automaticamente diretórios de instalação Chrome/Edge/Brave e `PATH`/`%PATHEXT%`.
 - Injeção de serviço passa a escolher entre `webServer`/`httpServer`, permitindo montar a janela de observação também no Windows.
 
 ## [v0.3.0] - 2026-04

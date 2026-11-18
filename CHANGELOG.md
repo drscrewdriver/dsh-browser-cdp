@@ -1,3 +1,18 @@
+## 1.13.2 (2026-11-18)
+
+**发布通道改回 `latest`：修好「issue 关了但默认安装拿不到修复」。**
+
+按宿主线发版（`publishConfig.tag = dsh-0.2.1`）有一个静默失效面：`npm i dsh-browser-cdp` 读的是 `latest`，而 tag 一旦切走，`latest` 就不再前进。结果是 1.12.0 / 1.12.1 / 1.12.2 / 1.13.0 / 1.13.1 五次发版期间，`latest` 一直停在 **1.11.0** —— #14 修好并关单了，按默认方式装的人拿到的仍是不带修复的旧构建。按宿主线装的用户同样停在 1.11.0，九条版本线全都没跟上。
+
+本仓是工作区内唯一不用 `latest` 的仓库（input-traffic / session-guard / search-index / cookie-cleaner / perm-gate / prime-memory / sidebar-fold 全部是 `latest`）。现在改回 `latest`，按宿主线的 tag 在发布时用 `--tag` 显式维护。
+
+**顺带修正了那条门禁的真实目的**：`tests/manifest.test.ts` 原断言 `/^dsh-\d+\.\d+\.\d+$/`，把「tag 必须是宿主线格式」当成了不变量 —— 而它真正要防的是「写成垃圾 dist-tag，没人从那条线装」。改为只校验已知形状（`latest` / `next` / `dsh-X.Y.Z`）：既允许 `latest`，也仍然拦住拼写错误（实测：tag 改成 `dsh-0.2.1-typo` 时该用例变红）。
+
+- 纯元数据变更，运行时代码零 diff。
+- 门禁：1324 passed / 13 skipped，typecheck 干净。
+
+> 兼容性说明：`engines.dsh` 与 peer 面在 1.11.0 → 1.13.2 之间完全一致，本次通道迁移不引入兼容面变化。但 1.13 把 `cdpMode=local` 的默认启动策略从 `eager` 改成了 `on-demand` —— 按 `latest` 升级的人会看到「开机不再弹窗、首次页面操作才起浏览器」。这是 #14 要的行为；要回退到旧行为，把 `localLaunchPolicy` 设成 `eager`。
+
 ## 1.13.1 (2026-11-17)
 
 > 1.13.0 因 npm registry 的 staged-publish 元数据残留（`409 Cannot publish over previously staged version`，同 npm/cli#9889）无法落地，改用 1.13.1 发布。代码与 1.13.0 完全一致。

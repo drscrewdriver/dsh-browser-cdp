@@ -39,7 +39,8 @@
           "title": "Agent 浏览器",
           "titles": {
             "en": "Agent Browser",
-            "zh": "Agent 浏览器"
+            "zh": "Agent 浏览器",
+            "pt": "Navegador do agente"
           }
         }
       },
@@ -53,7 +54,8 @@
           "title": "Agent 浏览器",
           "titles": {
             "en": "Agent Browser",
-            "zh": "Agent 浏览器"
+            "zh": "Agent 浏览器",
+            "pt": "Navegador do agente"
           },
           "fields": [
             {

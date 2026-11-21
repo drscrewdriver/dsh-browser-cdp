@@ -1,3 +1,17 @@
+## 1.14.4 (2026-11-22)
+
+**点击未映射点位按 unverified 放行（#18）：`Number(undefined)` 的 NaN 比较不再把「未知」折叠成「确定 miss」。**
+
+上游 issue [#18](https://github.com/drscrewdriver/dsh-browser-cdp/issues/18)（同 #16/#17 报告者）。pre/post 两处 `getNodeForLocation` 判定用 `Number(hit?.backendNodeId) !== backendNodeId` 比较——点位解析不到节点时 `Number(undefined)` 是 NaN，`NaN !== x` 恒真，`nodeContains(target, NaN)` 又在 `Number.isFinite` 守卫处短路返回 false：**「那里没有节点」被当成「有东西挡在上面」**。pre-check 由此不派发点击；post-check 报 miss 诱发上层重试 → 重复点击（#9 #5 同款失败模式，afterHref 分支只救了导航场景）。
+
+- **与 #17 不重复**：#17 修在 `nodeContains` 内部（push 前补 getDocument，1.14.3），NaN 路径在 `Number.isFinite` 短路处**根本走不到 push**——1.14.3 之后本 issue 依旧存在；本版修在调用侧，两者无交集。报告者建议中的双向 `nodeContains(hitId, targetId)` 未采纳：点到祖先容器算命中的语义放宽无实证场景，且弱化 overlay 防护。
+- **修复**：两处判定引入 `hitId`/`hitMissing`（`!Number.isFinite(hitId) || hitId <= 0`）守卫——`!hitMissing && hitId !== backendNodeId && !nodeContains(...)` 才判 miss。pre-check 未映射点位放行点击（盒模型刚量到目标确实在；点空由 jev verify 兜底）；post-check 放行落到 `ok:true`（点击已派发无法撤销）。hitId 有效但不匹配时 miss 分支原样保留——overlay 防护零弱化。
+- **stub 代理 E2E 三组对照**（确定性复现：本地 CDP 代理仅把 `getNodeForLocation` 响应改写后转发）：旧 worker(v1.14.3) + 空改写 → `click-missed "…backendNodeId undefined"`（issue 原文逐字）；新 worker + 空改写 → `ok=True code=ok`（点击派发）；新 worker + 改写为其他有效节点(424242) → 仍 `click-missed`（防护保住）。
+- **契约测试**：worker-dispatch 套件新增用例——hitMissing/afterMissing 守卫存在、旧 NaN 比较式消失、守卫先于 nodeContains 判定。
+- **边界**：post-check 的 afterHref 导航判定分支零改动；`navigated` 标志 src 侧无消费方，hitMissing 放行路径不造无人读的 flag。
+
+门禁：`npm run typecheck` 干净；`npm test` **1338 passed / 13 skipped**（+1 契约用例）；worker 为直维护 .mjs 无构建面，lib 未动。
+
 ## 1.14.3 (2026-11-22)
 
 **img-in-link 点击误报收口（#17）：`nodeContains` 先请求 document，祖先/后代容错从死代码变回活防护。**

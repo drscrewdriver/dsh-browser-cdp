@@ -422,13 +422,21 @@ async function actOnCandidate(params) {
   const hit = await call('DOM.getNodeForLocation', {
     x: Math.round(measured.centre.x), y: Math.round(measured.centre.y), includeUserAgentShadowDOM: false,
   })
-  if (Number(hit?.backendNodeId) !== backendNodeId && !(await nodeContains(backendNodeId, Number(hit?.backendNodeId)))) {
+  const hitId = Number(hit?.backendNodeId)
+  const hitMissing = !Number.isFinite(hitId) || hitId <= 0
+  // "No node at that point" is UNVERIFIED, not a miss (issue #18): the NaN
+  // comparison folded an unknown answer into "something is on top of it".
+  // An overlay answers with a NODE; an unmapped point (mutation race between
+  // the box model and this read, renderer-mapping limits) must not block the
+  // click the box model just measured — and in the post-check below it must
+  // not trigger a caller retry that double-clicks (issue #9 #5's failure mode).
+  if (!hitMissing && hitId !== backendNodeId && !(await nodeContains(backendNodeId, hitId))) {
     const at = Math.round(measured.centre.x) + ',' + Math.round(measured.centre.y)
     return {
       ok: false,
       code: 'click-missed',
       message: 'candidate measured to ' + at + ' but that point resolves to backendNodeId ' +
-        String(hit?.backendNodeId) + ' - something is on top of it or the page moved',
+        String(hitId) + ' - something is on top of it or the page moved',
     }
   }
 
@@ -453,7 +461,12 @@ async function actOnCandidate(params) {
   const after = await call('DOM.getNodeForLocation', {
     x: Math.round(measured.centre.x), y: Math.round(measured.centre.y), includeUserAgentShadowDOM: false,
   })
-  if (Number(after?.backendNodeId) !== backendNodeId && !(await nodeContains(backendNodeId, Number(after?.backendNodeId)))) {
+  const afterId = Number(after?.backendNodeId)
+  const afterMissing = !Number.isFinite(afterId) || afterId <= 0
+  // Same rule as the pre-check: an unmapped point is unverified (issue #18),
+  // not evidence that something is on top of the target — a miss here would
+  // make the caller retry an already-dispatched click.
+  if (!afterMissing && afterId !== backendNodeId && !(await nodeContains(backendNodeId, afterId))) {
     // The node changed. If the URL changed too, the click navigated — that is a
     // success, not a miss. Only report click-missed when neither the node family
     // nor the URL accounts for the change.

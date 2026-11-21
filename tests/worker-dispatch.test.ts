@@ -127,3 +127,28 @@ describe('render worker nodeContains document contract', () => {
     expect(getDocAt).toBeLessThan(pushAt)
   })
 })
+
+describe('render worker hit-missing guard contract', () => {
+  const act = source.slice(source.indexOf('async function actOnCandidate'), source.indexOf('/** A current box model'))
+
+  it('treats an unmapped hit-test point as unverified, not as a miss (issue #18)', () => {
+    // `Number(undefined)` is NaN and `NaN !== x` is always true, so the old
+    // `Number(hit?.backendNodeId) !== backendNodeId` shape turned "the point
+    // resolves to no node" into a guaranteed click-missed — an unknown answer
+    // folded into a definite miss, in the pre-check blocking the click and in
+    // the post-check triggering a caller retry that double-clicks.
+    const preAt = act.indexOf('const hitMissing')
+    const postAt = act.indexOf('const afterMissing')
+    expect(preAt, 'pre-check lost its hitMissing guard').toBeGreaterThan(-1)
+    expect(postAt, 'post-check lost its afterMissing guard').toBeGreaterThan(-1)
+    expect(act).not.toMatch(/Number\(hit\?\.backendNodeId\) !== backendNodeId/)
+    expect(act).not.toMatch(/Number\(after\?\.backendNodeId\) !== backendNodeId/)
+    // Guards must decide BEFORE nodeContains is consulted.
+    const preGuardAt = act.indexOf('if (!hitMissing &&')
+    const postGuardAt = act.indexOf('if (!afterMissing &&')
+    const preContainsAt = act.indexOf('await nodeContains(backendNodeId, hitId)')
+    const postContainsAt = act.indexOf('await nodeContains(backendNodeId, afterId)')
+    expect(preGuardAt).toBeLessThan(preContainsAt)
+    expect(postGuardAt).toBeLessThan(postContainsAt)
+  })
+})

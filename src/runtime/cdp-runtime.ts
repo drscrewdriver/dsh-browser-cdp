@@ -19,10 +19,13 @@ async function probe({ input, cache, suggested, link, now }: ProbeContext): Prom
     return cache.patch({ ...suggested, status: 'unreachable', code: 'runtime-kind-mismatch', message: 'cdp runtime received a non-cdp link', resolvedAt: now() })
   }
   const previous = cache.get()
-  const sameTarget = previous.targetId === link.id && previous.endpoint === link.endpoint
+  const sameTarget = previous.linkId === link.id && previous.endpoint === link.endpoint
   const suggestedProbe: AttachState = {
     ...suggested,
-    targetId: link.id,
+    linkId: link.id,
+    // A real CDP page target id is unknowable at probe time (pages come and
+    // go); '' hands page choice to the worker, which prefers an http(s) page.
+    targetId: '',
     endpoint: link.endpoint,
     status: 'probing',
     code: '',

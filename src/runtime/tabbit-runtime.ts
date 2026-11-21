@@ -41,7 +41,7 @@ async function probe({ input, cache, suggested, link, now }: ProbeContext): Prom
   }
   const base: AttachState = {
     ...suggested,
-    targetId: link.id,
+    linkId: link.id,
     linkKind: 'tabbit-cli',
     ownsBrowser: true,
   }

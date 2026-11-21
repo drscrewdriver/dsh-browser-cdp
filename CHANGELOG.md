@@ -1,3 +1,15 @@
+## 1.14.2 (2026-11-22)
+
+**jev_* 捕获必失败修复（#16）：`linkId` 与 `targetId` 语义分离 + 不再丢弃已产出的捕获。**
+
+上游 issue [#16](https://github.com/drscrewdriver/dsh-browser-cdp/issues/16)（三断链根因 + 行号级定位 + 修复建议）。病根是 `AttachState.targetId` 被双重复用：`attachMatchesLink` 与 cdp runtime 的 `sameTarget` 拿它当**缓存行归属键**（与 link.id 比较），jev 转发链（`effectsOf` / 第二处 `makeJudgeEffects`）又把它当 **CDP 页面 target id** 送进 worker 的 `attachPage` 严格匹配 —— 配置 link id（如 `cdp-local-chrome`）匹配 32-hex 必败，`connect` 必挂，宿主再在 `connected === null` 时把 worker 惰性 attach 已成功产出的截图整帧丢弃。
+
+- **归属键分离**：`AttachState` 新增 `linkId` 字段（缓存行归属键 = 配置 link id）；`targetId` 语义收紧为「真实 CDP 页面 target id，探针期未知为 `''`」。四个 runtime probe 写点改写 `linkId`，cdp runtime 的 `sameTarget` 同步改字段；`attachMatchesLink` 只比 `linkId`，`targetId` 不再参与归属判定。空 `targetId` 在 worker 侧本来就有回退（优先 http(s) 页面），所以 worker 零改动 —— 这正是修复成立的机制。
+- **丢弃防御**：`src/jev/effects.ts` 的 capture / navigate 两处改为「step.ok 优先采用」——worker 的步骤自带惰性 attach，「connect 败、step 成」是真实可达态（#16 的 Proof 即此态）；步骤本身失败时错误信息优先 `step.error`，旧错误文案逐分支兼容。
+- **显示面**：`/bcdp` TUI status 的 `target=` 与 status JSON 均补 `linkId`（显示优先 `linkId`，`targetId` 键保留兼容形状）。注意：`/bcdp_status` JSON 与 gateway 暴露的 attach 里 `targetId` 值语义变化（配置 id → `''`/真实 id），外部读取方请改读 `linkId`。
+
+门禁：`npm run typecheck` 干净；`npm test` **1336 passed / 13 skipped**（新增 5 用例：attachMatchesLink 的 linkId 判定与 targetId 不参与、probe 后 `linkId===link.id` 且 `targetId===''`、connect 败 step 成的 capture/navigate 不丢弃、step.error 优先与缺 reply 物化错误）；`lib/` rebuild 并随提交。
+
 ## 1.14.0 (2026-11-18)
 
 **观察窗多会话路由（#15）：两个会话并行操作浏览器时，各自的观察窗各自显示自己的页面。**

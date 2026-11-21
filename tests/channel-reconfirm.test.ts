@@ -27,7 +27,7 @@ const cfgOf = (ls: BrowserLink[], activeTargetId: string): Partial<ResolvedConfi
 const egoReadyRow = {
   ...emptyAttachState(),
   status: "ready" as const,
-  targetId: "cli",
+  linkId: "cli",
   linkKind: "ego-cli" as const,
   cliPath: "C:\\ego\\ego-browser.exe",
   cliShape: "direct" as const,
@@ -53,7 +53,7 @@ describe("decideCdpAttach re-confirms the channel after links events", () => {
     defaultAttachCache.patch({
       ...emptyAttachState(),
       status: "ready",
-      targetId: "a",
+      linkId: "a",
       endpoint: "http://127.0.0.1:9222",
       wsUrl: "ws://127.0.0.1:9222/devtools/browser/zzz",
     });
@@ -72,7 +72,7 @@ describe("decideCdpAttach re-confirms the channel after links events", () => {
     defaultAttachCache.patch({
       ...emptyAttachState(),
       status: "ready",
-      targetId: "a",
+      linkId: "a",
       endpoint: "http://127.0.0.1:9222",
       wsUrl: "ws://127.0.0.1:9222/devtools/browser/zzz",
     });

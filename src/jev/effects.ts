@@ -140,13 +140,14 @@ export function makeJudgeEffects(deps: EffectsDeps): JudgeEffects {
         },
       ],
     })
-    if (call.connected === null) {
-      error = call.steps[0]?.error ?? 'the render worker could not attach to the page'
-      throw new Error(error)
-    }
+    // The worker's steps attach lazily (capture/navigate re-run attachPage when
+    // no session is held), so a failed `connect` does NOT mean the requested
+    // step produced nothing — issue #16 lost a fully rendered screenshot this
+    // way. Judge by the step itself; only a failed STEP is fatal.
     const step = call.steps[0]
     if (step === undefined || !step.ok) {
-      error = step?.error ?? 'the render worker returned no capture'
+      error = step?.error
+        ?? (call.connected === null ? 'the render worker could not attach to the page' : 'the render worker returned no capture')
       throw new Error(error)
     }
     const reply = step.result as CaptureReply
@@ -212,14 +213,17 @@ export function makeJudgeEffects(deps: EffectsDeps): JudgeEffects {
         ...(deps.targetId === undefined || deps.targetId === '' ? {} : { targetId: deps.targetId }),
         steps: [{ method: 'navigate', params: { url, timeoutMs } }],
       })
+      // Same rule as the capture path: a usable step result wins over a failed
+      // connect (lazy attach makes "connect failed, step ok" reachable).
       const step = call.steps[0]
-      if (call.connected === null || step === undefined || !step.ok) {
-        const why = step?.error ?? 'the render worker could not attach to the page'
-        error = why
-        return { ok: false, url: '', loaded: false, error: why }
+      if (step !== undefined && step.ok) {
+        const reply = step.result as { url: string; loaded: boolean }
+        return { ok: true, url: reply.url, loaded: reply.loaded }
       }
-      const reply = step.result as { url: string; loaded: boolean }
-      return { ok: true, url: reply.url, loaded: reply.loaded }
+      const why = step?.error
+        ?? (call.connected === null ? 'the render worker could not attach to the page' : 'the render worker returned no result')
+      error = why
+      return { ok: false, url: '', loaded: false, error: why }
     },
 
     async capture(): Promise<CaptureResult> {

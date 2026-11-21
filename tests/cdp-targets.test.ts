@@ -305,7 +305,7 @@ describe("refreshAttach + cache", () => {
 
   it("local mode short-circuits and clears any prior ws url", async () => {
     const cache = createAttachCache();
-    cache.patch({ status: "ready", wsUrl: "ws://stale/b", targetId: "a", endpoint: "http://a:1" });
+    cache.patch({ status: "ready", wsUrl: "ws://stale/b", linkId: "a", targetId: "", endpoint: "http://a:1" });
     const out = await refreshAttach({
       targets: [{ kind: "cdp" as const, id: "a", label: "A", endpoint: "http://a:1", enabled: true, note: "" }],
       activeTargetId: "a",
@@ -639,13 +639,22 @@ describe("resolveEffectiveLink", () => {
 });
 
 describe("attachMatchesLink", () => {
-  it("requires the same id, and for a cdp link the same endpoint", () => {
+  it("requires the same linkId, and for a cdp link the same endpoint", () => {
     const link = cdp("a", "http://a:1");
-    expect(attachMatchesLink({ status: "ready", mode: "auto", targetId: "a", endpoint: "http://a:1", wsUrl: "ws://a:1/b", code: "", message: "", latencyMs: 0, resolvedAt: 0 }, link)).toBe(true);
-    expect(attachMatchesLink({ status: "ready", mode: "auto", targetId: "a", endpoint: "http://edited:9", wsUrl: "", code: "", message: "", latencyMs: 0, resolvedAt: 0 }, link)).toBe(false);
-    expect(attachMatchesLink({ status: "ready", mode: "auto", targetId: "other", endpoint: "http://a:1", wsUrl: "", code: "", message: "", latencyMs: 0, resolvedAt: 0 }, link)).toBe(false);
+    expect(attachMatchesLink({ status: "ready", mode: "auto", linkId: "a", targetId: "", endpoint: "http://a:1", wsUrl: "ws://a:1/b", code: "", message: "", latencyMs: 0, resolvedAt: 0 }, link)).toBe(true);
+    expect(attachMatchesLink({ status: "ready", mode: "auto", linkId: "a", targetId: "", endpoint: "http://edited:9", wsUrl: "", code: "", message: "", latencyMs: 0, resolvedAt: 0 }, link)).toBe(false);
+    expect(attachMatchesLink({ status: "ready", mode: "auto", linkId: "other", targetId: "", endpoint: "http://a:1", wsUrl: "", code: "", message: "", latencyMs: 0, resolvedAt: 0 }, link)).toBe(false);
     // Singleton kinds are keyed by id alone.
-    expect(attachMatchesLink({ status: "ready", mode: "auto", targetId: "cli", endpoint: "", wsUrl: "", code: "", message: "", latencyMs: 0, resolvedAt: 0 }, cliLink())).toBe(true);
+    expect(attachMatchesLink({ status: "ready", mode: "auto", linkId: "cli", targetId: "", endpoint: "", wsUrl: "", code: "", message: "", latencyMs: 0, resolvedAt: 0 }, cliLink())).toBe(true);
+  });
+
+  // Issue #16: targetId is a real CDP page target id (worker auto-picks when
+  // ''), NOT the cache row's owner key — ownership is decided by linkId alone.
+  it("linkId decides ownership; targetId does not participate", () => {
+    const link = cdp("a", "http://a:1");
+    expect(attachMatchesLink({ status: "ready", mode: "auto", linkId: "a", targetId: "0123abcd0123abcd0123abcd0123abcd", endpoint: "http://a:1", wsUrl: "ws://a:1/b", code: "", message: "", latencyMs: 0, resolvedAt: 0 }, link)).toBe(true);
+    expect(attachMatchesLink({ status: "ready", mode: "auto", linkId: "b", targetId: "a", endpoint: "http://a:1", wsUrl: "ws://a:1/b", code: "", message: "", latencyMs: 0, resolvedAt: 0 }, link)).toBe(false);
+    expect(attachMatchesLink({ status: "ready", mode: "auto", linkId: "", targetId: "a", endpoint: "http://a:1", wsUrl: "", code: "", message: "", latencyMs: 0, resolvedAt: 0 }, link)).toBe(false);
   });
 });
 
@@ -718,7 +727,8 @@ describe("refreshAttach re-derives routing on links events", () => {
       fetchVersion: fetchCdpOk, now: () => 1,
     });
     expect(out.status).toBe("ready");
-    expect(out.targetId).toBe("a");
+    expect(out.linkId).toBe("a");
+    expect(out.targetId).toBe("");
     expect(out.endpoint).toBe("http://127.0.0.1:9222");
     const decision = runtimeDecision(cache.get(), links, "cli");
     expect(decision).toMatchObject({ kind: "inject" });
@@ -736,7 +746,8 @@ describe("refreshAttach re-derives routing on links events", () => {
       fetchVersion: fetchCdpOk, now: () => 1,
     });
     expect(out.status).toBe("ready");
-    expect(out.targetId).toBe("a");
+    expect(out.linkId).toBe("a");
+    expect(out.targetId).toBe("");
     const decision = runtimeDecision(cache.get(), links, "cli");
     expect(decision).toMatchObject({ kind: "inject" });
   });

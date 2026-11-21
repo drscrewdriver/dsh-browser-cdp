@@ -287,7 +287,7 @@ export function resolveEffectiveLink(links: readonly BrowserLink[], activeTarget
  * that leak is how a deactivated ego-cli kept driving every bcdp_* call.
  */
 export function attachMatchesLink(attach: AttachState, link: BrowserLink): boolean {
-  if (attach.targetId !== link.id) return false
+  if ((attach.linkId ?? '') !== link.id) return false
   return link.kind !== 'cdp' || attach.endpoint === link.endpoint
 }
 
@@ -424,6 +424,14 @@ export type AttachStatus = 'idle' | 'probing' | 'ready' | 'unreachable' | 'no-ac
 export interface AttachState {
   status: AttachStatus
   mode: CdpMode
+  /**
+   * 缓存行归属键 = 配置 link id（如 `cdp-local-chrome`），由 runtime probe 写入，
+   * `attachMatchesLink` 用它判定「这行缓存描述的是哪条 link」。
+   * 与 `targetId` 是两回事：后者才是真实 CDP 页面 target id（32-hex），jev 转发链
+   * 会把它送进 worker 的 `attachPage` 严格匹配。两者曾共用一个字段，导致 connect
+   * 拿配置 id 去匹配 CDP targetId 必败（issue #16）。
+   */
+  linkId?: string
   targetId: string
   endpoint: string
   wsUrl: string
@@ -458,6 +466,7 @@ export function emptyAttachState(): AttachState {
   return {
     status: 'idle',
     mode: 'auto',
+    linkId: '',
     targetId: '',
     endpoint: '',
     wsUrl: '',

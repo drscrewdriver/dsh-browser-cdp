@@ -120,7 +120,7 @@ function statusCommand(deps: BcdpCommandDeps): CommandResult {
   const status = attach.status || 'unknown'
   const lines = [
     `bcdp status — ${status}${attach.message ? `: ${clip(attach.message, 48)}` : ''}`,
-    `  channel   mode=${attach.mode || '—'}  backend=${link?.kind ?? 'none'}  target=${attach.targetId || '—'}`,
+    `  channel   mode=${attach.mode || '—'}  backend=${link?.kind ?? 'none'}  target=${attach.linkId || attach.targetId || '—'}`,
     `  endpoint  ${attach.endpoint || '—'}${attach.endpointSource ? `  (${attach.endpointSource})` : ''}`,
     `  cli       ${attach.cliPath || cfg.egoBin || '—'}${attach.latencyMs ? `  ${attach.latencyMs}ms` : ''}`,
     `  tools     live ${face.live.length} / sealed ${face.sealed.length}  injection=${cfg.toolInjection}`,
@@ -401,7 +401,7 @@ export async function runBcdpCommand(rawInput: string, deps: BcdpCommandDeps): P
         cmd: 'bcdp',
         sub,
         data: {
-          attach: { status: attach.status, mode: attach.mode, targetId: attach.targetId, code: attach.code, message: attach.message },
+          attach: { status: attach.status, mode: attach.mode, linkId: attach.linkId ?? '', targetId: attach.targetId, code: attach.code, message: attach.message },
           link: deps.link() ? { id: deps.link()!.id, kind: deps.link()!.kind } : null,
           face: { live: face.live.length, sealed: face.sealed.length },
           frames: { running: polls.running, ageMs: polls.lastFrameAgeMs, seq: polls.frameSeq },

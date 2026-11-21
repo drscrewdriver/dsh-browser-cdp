@@ -1,6 +1,23 @@
 /** Injected by the DSH ModuleLoader factory wrapper (tsdown banner). */
 declare function require(id: string): any
 
+// DSH can be mounted under a reverse-proxy prefix (e.g. /app/dsh/).
+// Root-absolute /api/bcdp/* would then hit the proxy root (upstream
+// dsh-ego-browser #100 parallel); resolve every panel route against the
+// deployment's <base href> instead. No <base> (desktop root deployment)
+// keeps the behaviour byte-identical to before.
+const bcdpRouteBase = (function () {
+	try {
+		const base = document.querySelector('base[href]')
+		if (!base) return ''
+		const url = new URL(base.getAttribute('href') || './', document.baseURI)
+		const path = url.pathname.replace(/\/+$/, '')
+		return path === '/' ? '' : path
+	} catch (e) { return '' }
+})()
+const bcdpRoute = function (path: string) { return bcdpRouteBase + path }
+const fetchBcdp = function (path: string, init?: RequestInit) { return fetch(bcdpRoute(path), init) }
+
 import { addRow, applyProbe, buildCdpRow, buildCliRow, buildLpRow, buildTabbitRow, hasCliLink, hasLpLink, hasTabbitLink, isFull, isValidEndpoint, MAX_LINKS, moveRow, removeRow, updateRow } from './fam-links'
 import { fromRatio, normalizeStored, toRatio, type RatioPos, type Viewport } from './fab-pos'
 import { commitField } from './fam-write'
@@ -412,19 +429,19 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 			return kind !== 'ego-cli' && kind !== 'tabbit-cli' && kind !== 'lightpanda'
 		}
 
-		const SPACES_ROUTE = '/api/bcdp/spaces'
-		const TRACKING_ROUTE = '/api/bcdp/tracking'
-		const SWITCH_TAB_ROUTE = '/api/bcdp/switch-tab'
-		const EGO_CLOSE_ROUTE = '/api/bcdp/close'
-		const WATCH_START_ROUTE = '/api/bcdp/watch/start'
-		const WATCH_SWITCH_ROUTE = '/api/bcdp/watch/switch'
-		const WATCH_STOP_ROUTE = '/api/bcdp/watch/stop'
-		const WATCH_STATUS_ROUTE = '/api/bcdp/watch/status'
-		const VIDEO_ROUTE = '/api/bcdp/video'
+		const SPACES_ROUTE = bcdpRoute('/api/bcdp/spaces')
+		const TRACKING_ROUTE = bcdpRoute('/api/bcdp/tracking')
+		const SWITCH_TAB_ROUTE = bcdpRoute('/api/bcdp/switch-tab')
+		const EGO_CLOSE_ROUTE = bcdpRoute('/api/bcdp/close')
+		const WATCH_START_ROUTE = bcdpRoute('/api/bcdp/watch/start')
+		const WATCH_SWITCH_ROUTE = bcdpRoute('/api/bcdp/watch/switch')
+		const WATCH_STOP_ROUTE = bcdpRoute('/api/bcdp/watch/stop')
+		const WATCH_STATUS_ROUTE = bcdpRoute('/api/bcdp/watch/status')
+		const VIDEO_ROUTE = bcdpRoute('/api/bcdp/video')
 		// ego-cli degraded frame source (no CDP screencast): one viewport PNG served at
 		// this route, refreshed by re-fetching /spaces on a timer. Synthetic target id
 		// of the single fallback space.
-		const CLI_FRAME_ROUTE = '/api/bcdp/cli-frame'
+		const CLI_FRAME_ROUTE = bcdpRoute('/api/bcdp/cli-frame')
 		const CLI_FRAME_TARGET_ID = '__cli_frame__'
 
 		function postJson(path: any, body: any) {
@@ -1812,14 +1829,14 @@ h('button', { type: 'button', disabled: !writable || isFull(links) || hasCliLink
 				const captchaEl = panel.querySelector('#dsh-ego-captcha')
 				const captchaKindEl = panel.querySelector('#dsh-ego-captcha-kind')
 				const captchaHintEl = panel.querySelector('#dsh-ego-captcha-hint')
-				const FLUSH_ROUTE = '/api/bcdp/flush'
+				const FLUSH_ROUTE = bcdpRoute('/api/bcdp/flush')
 				// Panel ⟳ = "sync the active object now". Until 1.9.22 the header
 				// button had NO handler at all, so after a host restart the panel
 				// stayed empty until a tool call created a task.
-				const SYNC_ROUTE = '/api/bcdp/sync'
+				const SYNC_ROUTE = bcdpRoute('/api/bcdp/sync')
 				// Per-object capture: frames used to follow only the ACTIVE tab, so a
 				// tab that was never active stayed on "暂无截图" forever.
-				const CAPTURE_ROUTE = '/api/bcdp/capture'
+				const CAPTURE_ROUTE = bcdpRoute('/api/bcdp/capture')
 				const captureTab = (targetId: string): Promise<Response | null> => fetch(CAPTURE_ROUTE, {
 					method: 'POST',
 					headers: { 'content-type': 'application/json' },
@@ -1832,7 +1849,7 @@ h('button', { type: 'button', disabled: !writable || isFull(links) || hasCliLink
 				// exactly once per target build (sessionStorage guard = no loop).
 				// The handshake also LOGS this build on the host: that line is the
 				// out-of-band proof of which bundle the panel really runs.
-				void fetch('/api/bcdp/hello', {
+				void fetchBcdp('/api/bcdp/hello', {
 					method: 'POST',
 					headers: { 'content-type': 'application/json' },
 					cache: 'no-store',
@@ -2059,7 +2076,7 @@ h('button', { type: 'button', disabled: !writable || isFull(links) || hasCliLink
 				}
 
 				// ── browser interaction: map panel pointer → real browser pixels ──
-				const INPUT_ROUTE = '/api/bcdp/input'
+				const INPUT_ROUTE = bcdpRoute('/api/bcdp/input')
 				let inputBusy = false
 				/**
 				 * Send a pointer/wheel intention to the agent browser. Coordinates
@@ -2582,7 +2599,7 @@ h('button', { type: 'button', disabled: !writable || isFull(links) || hasCliLink
 					raiseBtn.title = wt('raiseWindowHint')
 					raiseBtn.textContent = wt('raiseWindow')
 					raiseBtn.addEventListener('click', () => {
-						fetch('/api/bcdp/raise', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
+						fetchBcdp('/api/bcdp/raise', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
 							.then((r) => r.json().catch((): any => null))
 							.catch((): any => null)
 					})
@@ -2849,7 +2866,7 @@ h('button', { type: 'button', disabled: !writable || isFull(links) || hasCliLink
 					fetch(WATCH_STATUS_ROUTE, { cache: 'no-store' }).then((res) => res.ok ? res.json() : null).then(applyCaptureStatus).catch(() => {})
 					try { if (sse) sse.close() } catch {}
 					doConnected = false
-					sse = new EventSource('/api/bcdp/stream')
+					sse = new EventSource(bcdpRoute('/api/bcdp/stream'))
 					sse.onopen = () => { doConnected = true }
 					// A frame event looks like: { targetId, data (base64 jpeg), ts, vw, vh }.
 					sse.addEventListener('frame', (ev: any) => {
@@ -3149,10 +3166,10 @@ clearTimeout((panel as any)._dshHideT)
 		// is available. The Tab reuses the same /api/bcdp/spaces + /api/bcdp/stream
 		// data sources as the floating panel but renders through React into the
 		// sidebar's tab content area instead of a fixed-position overlay.
-		var INPUT_ROUTE = '/api/bcdp/input'
-		var FLUSH_ROUTE = '/api/bcdp/flush'
-		var WINDOW_SIZE_ROUTE = '/api/bcdp/window-size'
-		var PANEL_NAVIGATE_ROUTE = '/api/bcdp/navigate'
+		var INPUT_ROUTE = bcdpRoute('/api/bcdp/input')
+		var FLUSH_ROUTE = bcdpRoute('/api/bcdp/flush')
+		var WINDOW_SIZE_ROUTE = bcdpRoute('/api/bcdp/window-size')
+		var PANEL_NAVIGATE_ROUTE = bcdpRoute('/api/bcdp/navigate')
 		var FRAME_FOLLOW_MIN_MS = 350
 
 		// ── Panel size → real browser window (size sync) ────────────────────────
@@ -3996,7 +4013,7 @@ clearTimeout((panel as any)._dshHideT)
 			function post(enabledNow: any, targetId: any) {
 				var body: { enabled: unknown; targetId?: string } = { enabled: enabledNow }
 				if (targetId) body.targetId = targetId
-				return fetch('/api/bcdp/pick', {
+				return fetchBcdp('/api/bcdp/pick', {
 					method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
 				}).then(function (r) { return r.json().catch(function (): any { return null }) }).catch(function (): any { return null })
 			}
@@ -4034,7 +4051,7 @@ clearTimeout((panel as any)._dshHideT)
 			}
 			function pollOnce() {
 				if (request) return
-				request = fetch('/api/bcdp/pick').then(function (r) { return r.json().catch(function (): any { return null }) }).catch(function (): any { return null })
+				request = fetchBcdp('/api/bcdp/pick').then(function (r) { return r.json().catch(function (): any { return null }) }).catch(function (): any { return null })
 				request.then(function (res: any) {
 					request = null
 					if (res && res.ok !== false && res.state) applyState(res.state)
@@ -4070,7 +4087,7 @@ clearTimeout((panel as any)._dshHideT)
 			// via a server-side hit test instead of an Overlay inspect event.
 			function clickAt(x: any, y: any, targetId: any) {
 				if (!enabled || !targetId) return
-				fetch('/api/bcdp/pick/click', {
+				fetchBcdp('/api/bcdp/pick/click', {
 					method: 'POST', headers: { 'content-type': 'application/json' },
 					body: JSON.stringify({ targetId: targetId, x: x, y: y }),
 				}).then(function (r) { return r.json().catch(function (): any { return null }) }).catch(function (): any { return null })
@@ -4503,7 +4520,7 @@ clearTimeout((panel as any)._dshHideT)
 			var self = this
 			fetch(WATCH_STATUS_ROUTE, { cache: 'no-store' }).then(function (res) { return res.ok ? res.json() : null }).then(function (status) { self._applyCaptureStatus(status) }).catch(function () {})
 			try {
-				this.sse = new EventSource('/api/bcdp/stream')
+				this.sse = new EventSource(bcdpRoute('/api/bcdp/stream'))
 			} catch (e) { return }
 			this.sse.addEventListener('frame', function (ev: any) {
 				try {
@@ -5265,7 +5282,7 @@ clearTimeout((panel as any)._dshHideT)
 								className: 'dsh-ego-side-back', type: 'button',
 								title: wt('raiseWindowHint'),
 								onClick: function () {
-									fetch('/api/bcdp/raise', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
+									fetchBcdp('/api/bcdp/raise', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
 										.then(function (r) { return r.json().catch(function (): any { return null }) })
 										.catch(function (): any { return null })
 								},
@@ -5460,7 +5477,7 @@ clearTimeout((panel as any)._dshHideT)
 			// opens its OWN EventSource so it works even before the Tab is
 			// mounted (the Tab's controller only connects after the Tab opens).
 			var probeSse: any = null
-			try { probeSse = new EventSource('/api/bcdp/stream') } catch (e) {}
+			try { probeSse = new EventSource(bcdpRoute('/api/bcdp/stream')) } catch (e) {}
 			if (probeSse) {
 				probeSse.addEventListener('tool-call', function (ev: any) {
 					if (probeDisposed) return

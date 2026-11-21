@@ -29,3 +29,20 @@ describe('client live-frame flush contract', () => {
     expect(source).toContain('self2.liveImg.src = frame')
   })
 })
+
+describe('client route base contract', () => {
+  it('resolves every panel route against <base href>, with an identical desktop fallback', () => {
+    // DSH under a reverse-proxy prefix breaks root-absolute /api/bcdp/*
+    // fetches (upstream dsh-ego-browser #100 parallel). Every route must go
+    // through bcdpRoute/fetchBcdp, which resolve against <base href> and fall
+    // back to '' when none exists — byte-identical desktop behaviour.
+    expect(source).toContain('const bcdpRouteBase')
+    expect(source).toContain("document.querySelector('base[href]')")
+    expect(source).toContain('document.baseURI')
+    // No bare root-absolute API calls may remain.
+    expect(source, 'a bare fetch(\'/api/bcdp survived').not.toMatch(/fetch\('\/api\/bcdp/)
+    expect(source, 'a bare const route survived').not.toMatch(/= '\/api\/bcdp/)
+    // SSE streams ride the same base.
+    expect(source).toMatch(/new EventSource\(bcdpRoute\('\/api\/bcdp\/stream'\)\)/)
+  })
+})

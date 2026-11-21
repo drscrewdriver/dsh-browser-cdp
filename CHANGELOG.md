@@ -1,3 +1,15 @@
+## 1.14.8 (2026-11-22)
+
+**面板路由 base 化（上游 #100 同构，修法沿用）：反向代理子路径部署下 `/api/bcdp/*` 不再打到代理根。**
+
+反向审计确认的第四个平行面。client 内 27 处根绝对路径 `/api/bcdp/...`（18 个路由常量 + 6 处散装 fetch + 3 处 EventSource）在 DSH 被挂在反向代理前缀（如 `/app/dsh/`）下时全部指向代理根——上游 #100 已实证并修复。
+
+- **修复**：client 顶部加 `bcdpRouteBase`/`bcdpRoute`/`fetchBcdp`（沿用上游已验证形态）：读部署页 `<base href>`，经 `new URL(href, document.baseURI)` 取 pathname 作前缀；**无 `<base>` 时回退 `''`**——桌面根路径部署行为逐字节不变，子路径部署自动生效。全部路由常量值包 `bcdpRoute(...)`，散装 fetch 改 `fetchBcdp(...)`，`EventSource('/api/bcdp/stream')` 改 `EventSource(bcdpRoute(...))`。
+- **契约测试**：client-render-contract 套件新增 route base 用例——bcdpRouteBase 存在（base href + document.baseURI 回退）、**无裸 `fetch('/api/bcdp` / 裸 `= '/api/bcdp` 残留**、SSE 走 bcdpRoute。
+- **实施注记**：批量替换在多行 fetch（URL 后跟 `, {init}`）处产生孤立括号——tsc 语法错 25 处当场暴露，两类定向修复（孤立 init、多余右括号）后归零；typecheck 是这类批量改形的真实门禁。
+
+门禁：`npm run typecheck` 干净（修复后）；`npm test` **1344 passed / 13 skipped**（+1 route base 契约用例）；`npm run build` 后 lib/client.js 含 bcdpRouteBase ×2。
+
 ## 1.14.7 (2026-11-22)
 
 **观察窗帧解码预换（上游 #82/#81 同构，预防性）：`img.src` 直换的解码空白窗口收口。**

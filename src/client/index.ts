@@ -2797,8 +2797,24 @@ h('button', { type: 'button', disabled: !writable || isFull(links) || hasCliLink
 							liveFlushRaf = window.requestAnimationFrame(() => {
 								liveFlushRaf = null
 								if (disposed || !liveImg || pendingLiveFrame == null) return
-								try { liveImg.src = pendingLiveFrame } catch {}
-								pendingLiveFrame = null
+								// Pre-decode BEFORE swapping src: a direct img.src
+								// assignment drops the old bitmap while the new frame
+								// decodes — the per-frame blank window upstream
+								// dsh-ego-browser measured as panel black-flash
+								// (#82/#81). The detached probe decodes off-screen and
+								// the swap happens only once the new bitmap is ready;
+								// a decode() rejection falls back to the direct swap,
+								// which is no worse than before.
+								const frame = pendingLiveFrame
+								const apply = () => {
+									if (disposed || !liveImg) return
+									try { liveImg.src = frame } catch {}
+									if (pendingLiveFrame === frame) pendingLiveFrame = null
+								}
+								const probe = new window.Image()
+								probe.src = frame
+								if (typeof probe.decode === 'function') probe.decode().then(apply, apply)
+								else apply()
 							})
 						}
 						return
@@ -4562,8 +4578,20 @@ clearTimeout((panel as any)._dshHideT)
 					this.liveFlushRaf = window.requestAnimationFrame(function () {
 						self2.liveFlushRaf = null
 						if (self2.disposed || !self2.liveImg || self2.pendingLiveFrame == null) return
-						try { self2.liveImg.src = self2.pendingLiveFrame } catch (e) {}
-						self2.pendingLiveFrame = null
+						// Pre-decode BEFORE swapping src (upstream #82/#81 parallel):
+						// a direct img.src assignment drops the old bitmap while the
+						// new frame decodes. The detached probe decodes off-screen;
+						// a decode() rejection falls back to the direct swap.
+						var frame = self2.pendingLiveFrame
+						var apply = function () {
+							if (self2.disposed || !self2.liveImg) return
+							try { self2.liveImg.src = frame } catch (e) {}
+							if (self2.pendingLiveFrame === frame) self2.pendingLiveFrame = null
+						}
+						var probe = new window.Image()
+						probe.src = frame
+						if (typeof probe.decode === 'function') probe.decode().then(apply, apply)
+						else apply()
 					})
 				}
 				return

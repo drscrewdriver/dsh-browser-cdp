@@ -1,3 +1,15 @@
+## 1.14.7 (2026-11-22)
+
+**观察窗帧解码预换（上游 #82/#81 同构，预防性）：`img.src` 直换的解码空白窗口收口。**
+
+反向审计确认的第三个平行面。两处实时帧 flush（浮动观察窗 + 侧栏控制器）此前直接 `img.src = dataUrl`——换帧瞬间旧位图被丢弃、新帧解码期间出现空白窗口，即上游在有头 macOS（M1/M5）实测的面板黑闪（他们以 canvas 合成修复）。我们的 flush 已有 rAF 合帧（一展示一解码，频次已降），但单次直换的空白窗口仍在。
+
+- **修复**：两处 flush 改为先经 detached `Image` + `decode()` 预解码新帧，成功后才换 `liveImg.src`——旧画面保留到新位图就绪；`decode()` 不可用或失败时降级为原直换（不劣于从前）。解码期间新到帧保持 `pendingLiveFrame` 语义（apply 只清自己那一帧），最新帧由下一次 rAF 呈现，不丢帧。
+- **诚实声明**：黑闪是视觉缺陷，本地无 DSH 宿主可自动目验——验收 = 构建 + 契约测试 + 所有者目验三段承担；修复取上游同面板架构的实证结论，归类预防性。
+- **契约测试**：新增 `tests/client-render-contract.test.ts`——两处 flush 均须走 `probe.decode().then(apply, apply)`、降级路径存在、`apply` 内换帧仍在。
+
+门禁：`npm run typecheck` 干净；`npm test` **1343 passed / 13 skipped**（+1 契约用例）；`npm run build` 后 lib/client.js 含 decode ×2。
+
 ## 1.14.6 (2026-11-22)
 
 **JS 弹窗可见性（上游 #104 同构）：卡住的步骤从裸超时变成自带「dialog 类型 + 页面 message + 处置指引」的诊断。**

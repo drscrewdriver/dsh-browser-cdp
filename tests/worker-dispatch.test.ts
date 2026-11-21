@@ -110,3 +110,20 @@ describe('render worker reload recovery', () => {
     expect(measure).toContain('rect.y - scroll.y')
   })
 })
+
+describe('render worker nodeContains document contract', () => {
+  const fn = source.slice(source.indexOf('async function nodeContains'), source.indexOf('async function actOnCandidate'))
+
+  it('requests the document before pushing backend ids (issue #17)', () => {
+    // `DOM.pushNodesByBackendIdsToFrontend` answers -32000 "Document needs to
+    // be requested first" until `DOM.getDocument` has been called. Nothing
+    // else in the worker requests one, so without this the push threw on every
+    // invocation, the ancestor/descendant tolerance was dead code, and an
+    // <a> wrapping an <img> was misreported as click-missed.
+    const getDocAt = fn.indexOf("call('DOM.getDocument'")
+    const pushAt = fn.indexOf("call('DOM.pushNodesByBackendIdsToFrontend'")
+    expect(getDocAt, 'nodeContains never requests a DOM document').toBeGreaterThan(-1)
+    expect(pushAt, 'nodeContains lost its pushNodesByBackendIdsToFrontend call').toBeGreaterThan(-1)
+    expect(getDocAt).toBeLessThan(pushAt)
+  })
+})

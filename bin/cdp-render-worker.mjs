@@ -330,6 +330,14 @@ async function nodeContains(targetBackendId, hitBackendId) {
   if (!Number.isFinite(hitBackendId) || hitBackendId <= 0) return false
   if (hitBackendId === targetBackendId) return true
   try {
+    // `pushNodesByBackendIdsToFrontend` refuses until a document has been
+    // requested (-32000 "Document needs to be requested first"). Nothing else
+    // in this worker ever asks for one, so every call here used to throw and
+    // the ancestor/descendant tolerance was dead code — an <a> wrapping an
+    // <img> was misreported as click-missed (issue #17). Uncached on purpose:
+    // a navigation inside this process invalidates the mapping, and this path
+    // runs at most twice per click.
+    await call('DOM.getDocument', {})
     const pushed = await call('DOM.pushNodesByBackendIdsToFrontend', { backendNodeIds: [targetBackendId, hitBackendId] })
     const [targetNodeId, hitNodeId] = pushed?.nodeIds ?? []
     if (!targetNodeId || !hitNodeId) return false

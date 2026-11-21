@@ -1,3 +1,16 @@
+## 1.14.3 (2026-11-22)
+
+**img-in-link 点击误报收口（#17）：`nodeContains` 先请求 document，祖先/后代容错从死代码变回活防护。**
+
+上游 issue [#17](https://github.com/drscrewdriver/dsh-browser-cdp/issues/17)（同 #16 报告者，-32000 行号级定位）。worker 的 `nodeContains()` 调 `DOM.pushNodesByBackendIdsToFrontend` 前从未 `DOM.getDocument`（`grep -c getDocument` = 0），Chrome 一律回 `-32000 Document needs to be requested first`，被 try/catch 吞掉后恒返回 false —— 「命中点可能是目标的后代」这层容错整段失效。裸目标的点击不受影响（`hitBackendId === targetBackendId` 有短路），只有**目标中心点最顶层是其后代元素**时才走死路：`<a><img></a>`、svg-in-button 等嵌套结构在 pre-check 就被判 `click-missed`，**点击根本没派发**。
+
+- **修复**：`nodeContains` 内、push 之前补 `await call('DOM.getDocument', {})`（worker 免构建产物，改文件即生效）。不缓存是刻意的：同进程导航会使映射失效，而本路径每次点击至多两次（pre/post 各一），depth=1 的 getDocument 开销可忽略 —— 缓存反而要为 worker 不处理事件的消循环引入 `DOM.documentUpdated` 监听。
+- **实测转绿**（Chrome 158 headless，issue 复现法）：修复前 `ok=False code=click-missed`（"candidate measured to 40,20 but that point resolves to backendNodeId 8"）；修复后同一锚点 `ok=True code=ok`，点击真实派发并带 recorded 忠实记录。
+- **契约测试**：worker-dispatch 套件新增序数断言（getDocument 先于 push），防回归方式与既有 reload-before-guard 用例一致。
+- **边界**：跨文档导航后 post-check 的降级路径（afterHref 导航判定）零改动；backendNodeId 跨文档复用的理论边角在 effects 契约层两种路径都产出 `ok:true`（`navigated` 标志 src 侧无消费方），无回归。
+
+门禁：`npm run typecheck` 干净；`npm test` **1337 passed / 13 skipped**（+1 契约用例）；worker 为直维护 .mjs 无构建面，lib 未动。
+
 ## 1.14.2 (2026-11-22)
 
 **jev_* 捕获必失败修复（#16）：`linkId` 与 `targetId` 语义分离 + 不再丢弃已产出的捕获。**

@@ -382,10 +382,15 @@ async function actOnCandidate(params) {
     }
   }
 
-  if (!Number.isFinite(backendNodeId) || backendNodeId <= 0) {
-    return { ok: false, code: 'no-candidate', message: 'act needs a positive backendNodeId' }
-  }
-
+  // Scroll is a PAGE-level action like reload: the caller sends no candidate
+  // (backendNodeId 0), so it must be decided BEFORE the candidate guard —
+  // otherwise every loop-driven scroll dies as `no-candidate`. The wheel
+  // dispatch is fire-and-forget at the protocol level (the renderer applies it
+  // asynchronously), so the offsets are read before the dispatch and after a
+  // short settle, and `moved` says whether THIS event actually scrolled the
+  // page — a success that a page which cannot scroll still reports honestly,
+  // with moved:false (the same reporting fix upstream dsh-ego-browser shipped
+  // for ego_scroll, their issue #109).
   if (action === 'scroll') {
     const deltaY = Number(params.deltaY)
     if (!Number.isFinite(deltaY) || deltaY === 0) {
@@ -394,10 +399,35 @@ async function actOnCandidate(params) {
     // A wheel event needs a point; the viewport centre is neutral and needs no
     // measurement.
     const centre = await viewportCentre()
+    const before = await readScroll()
     await call('Input.dispatchMouseEvent', {
       type: 'mouseWheel', x: centre.x, y: centre.y, deltaX: 0, deltaY, button: 'none', buttons: 0, clickCount: 0,
     })
-    return { ok: true, code: 'ok', action: 'scroll', backendNodeId: 0, point: centre, measured: null, drift: 0 }
+    // One fixed settle can read before the renderer applies the wheel (observed
+    // once as moved:false on a page that provably scrolled). Poll until the
+    // offset holds stable across two consecutive reads, bounded at ~600ms —
+    // cheap insurance for a scroll action that is rare in the loop.
+    let after = await readScroll()
+    for (let stable = 0, i = 0; i < 4 && stable < 2; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 150))
+      const next = await readScroll()
+      stable = next.x === after.x && next.y === after.y ? stable + 1 : 0
+      after = next
+    }
+    return {
+      ok: true,
+      code: 'ok',
+      action: 'scroll',
+      backendNodeId: 0,
+      point: centre,
+      measured: null,
+      drift: 0,
+      scroll: { moved: before.x !== after.x || before.y !== after.y, before, after },
+    }
+  }
+
+  if (!Number.isFinite(backendNodeId) || backendNodeId <= 0) {
+    return { ok: false, code: 'no-candidate', message: 'act needs a positive backendNodeId' }
   }
 
   if (action === 'fill') {

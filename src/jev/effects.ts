@@ -61,6 +61,8 @@ interface ActReply {
   point?: { x: number; y: number }
   measured?: { x: number; y: number; width: number; height: number } | null
   drift?: number
+  /** Scroll honesty (upstream #109 parallel): whether THIS wheel event moved the page. */
+  scroll?: { moved: boolean; before: { x: number; y: number }; after: { x: number; y: number } }
   /** Faithful record of the element acted on (class preserved). Worker-only. */
   recorded?: ActedOn
 }
@@ -277,6 +279,7 @@ export function makeJudgeEffects(deps: EffectsDeps): JudgeEffects {
         point: reply.point ?? { x: 0, y: 0 },
         measured: reply.measured ?? { x: 0, y: 0, width: 0, height: 0 },
         drift: reply.drift ?? 0,
+        ...(reply.scroll === undefined ? {} : { scroll: reply.scroll }),
         ...(reply.recorded === undefined ? {} : { recorded: reply.recorded }),
       }
     },

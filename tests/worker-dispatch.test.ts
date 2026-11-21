@@ -152,3 +152,36 @@ describe('render worker hit-missing guard contract', () => {
     expect(postGuardAt).toBeLessThan(postContainsAt)
   })
 })
+
+describe('render worker scroll honesty contract', () => {
+  const act = source.slice(source.indexOf('async function actOnCandidate'), source.indexOf('/** A current box model'))
+
+  it('decides scroll BEFORE the candidate guard — the loop sends backendNodeId 0', () => {
+    // Scroll is a page-level action like reload; the judge loop sends
+    // backendNodeId 0 for it. Behind the `backendNodeId <= 0` guard every
+    // loop-driven scroll would die as `no-candidate` — dead code through the
+    // only caller that exists.
+    const scrollAt = act.indexOf("action === 'scroll'")
+    const guardAt = act.indexOf('Number.isFinite(backendNodeId)')
+    expect(scrollAt).toBeGreaterThan(-1)
+    expect(guardAt).toBeGreaterThan(-1)
+    expect(scrollAt).toBeLessThan(guardAt)
+  })
+
+  it('reads the offset before and after the wheel event, and reports moved (upstream #109 parallel)', () => {
+    // The wheel dispatch is fire-and-forget: reading only AFTER it would
+    // report the PREVIOUS scroll position as this one's result, and a page
+    // that cannot scroll would still claim success. before/after + moved is
+    // the honest contract; the post-dispatch read is a STABILITY POLL (two
+    // consecutive equal reads, bounded) because a single fixed settle can
+    // read before the renderer applies the wheel.
+    const scrollFn = act.slice(act.indexOf("action === 'scroll'"), act.indexOf("action === 'fill'"))
+    const dispatchAt = scrollFn.indexOf("type: 'mouseWheel'")
+    expect(scrollFn.indexOf('const before = await readScroll()')).toBeGreaterThan(-1)
+    expect(scrollFn.indexOf('const before = await readScroll()')).toBeLessThan(dispatchAt)
+    const pollAt = scrollFn.indexOf('let after = await readScroll()')
+    expect(pollAt).toBeGreaterThan(dispatchAt)
+    expect(scrollFn).toContain('stable = next.x === after.x && next.y === after.y ? stable + 1 : 0')
+    expect(scrollFn).toContain('moved')
+  })
+})

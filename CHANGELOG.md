@@ -1,3 +1,17 @@
+## 1.14.5 (2026-11-22)
+
+**scroll 行为诚实化（上游 #109 同构）+ 修复 jev 循环 scroll 全灭的潜伏缺陷。**
+
+反向审计上游 `omdsh-dev/dsh-ego-browser` 的 issue 历史时确认的平行面（他们 #109 → PR #110）：
+
+- **潜伏缺陷（更硬）**：worker 把 scroll 分支放在 `backendNodeId <= 0` 守卫**之后**，而 jev 循环的 act 对 scroll 发送 `backendNodeId: 0`（页面级动作无目标）——**每一条循环驱动的 scroll 都以 `no-candidate` 失败**，scroll 分支经唯一调用方是完全的死代码。reload 同为页面级动作却在守卫前（其注释明言理由），scroll 漏了同样的待遇。
+- **修复一**：scroll 分支移到守卫之前，与 reload 同序。
+- **修复二（报告语义）**：wheel 派发是协议层 fire-and-forget——渲染器异步生效。现在 wheel 前后各读一次 `readScroll()`（基建已有），派发后做**双稳定读轮询**（连续两次相同才停，有界 ~600ms；单次固定 settle 观测到过一次读早于生效），回包新增 `scroll: { moved, before, after }`——页面滚不动时**如实报 `moved:false` 而非谎报成功**；jev verify 兜底语义不变。契约类型：`ActOk.scroll?`（act.ts）/ `ActReply.scroll?`（effects.ts）透传。
+
+**E2E 实测**（Chrome 158 headless）：长页（3000px 可滚）→ `ok=True moved=true after={0,600}`，后续 capture 复核 `viewport.scrollY=600`；短页（无溢出）→ `ok=True moved=false`（诚实报告，不再谎报成功）。原生 CDP 分时间点取证：wheel 50ms 内生效，证明双稳定轮询覆盖。
+
+门禁：`npm run typecheck` 干净；`npm test` **1340 passed / 13 skipped**（+2 契约用例：scroll 先于守卫序位、wheel 前后读序 + 稳定轮询形态）；worker 为直维护 .mjs 无构建面，lib 因 act.ts/effects.ts 契约字段重建。
+
 ## 1.14.4 (2026-11-22)
 
 **点击未映射点位按 unverified 放行（#18）：`Number(undefined)` 的 NaN 比较不再把「未知」折叠成「确定 miss」。**

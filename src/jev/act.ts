@@ -59,6 +59,8 @@ export interface ActOk {
   measured: { x: number; y: number; width: number; height: number }
   /** How far the element moved between capture and action, in CSS px. Diagnostic. */
   drift: number
+  /** Scroll honesty (upstream #109 parallel): whether THIS wheel event moved the page. Scroll actions only. */
+  scroll?: { moved: boolean; before: { x: number; y: number }; after: { x: number; y: number } }
   /** The faithful record of the element acted on (class preserved). Best-effort. */
   recorded?: ActedOn
 }

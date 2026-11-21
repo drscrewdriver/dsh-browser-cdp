@@ -49,6 +49,8 @@ interface CaptureReply {
   viewport: { width: number; height: number; scrollX: number; scrollY: number; devicePixelRatio: number }
   targetId: string
   targetUrl: string
+  /** Present when a JavaScript dialog is open — the page is frozen behind it (upstream #104 parallel). */
+  dialog?: { type: string; message: string; url: string }
 }
 
 /** The worker's `act` reply. */
@@ -63,6 +65,8 @@ interface ActReply {
   drift?: number
   /** Scroll honesty (upstream #109 parallel): whether THIS wheel event moved the page. */
   scroll?: { moved: boolean; before: { x: number; y: number }; after: { x: number; y: number } }
+  /** Present when a JavaScript dialog is open — the page is frozen behind it (upstream #104 parallel). */
+  dialog?: { type: string; message: string; url: string }
   /** Faithful record of the element acted on (class preserved). Worker-only. */
   recorded?: ActedOn
 }

@@ -185,3 +185,24 @@ describe('render worker scroll honesty contract', () => {
     expect(scrollFn).toContain('moved')
   })
 })
+
+describe('render worker dialog visibility contract', () => {
+  it('tracks the JavaScript dialog lifecycle from the event stream (upstream #104 parallel)', () => {
+    // The worker's message loop otherwise ignores events. Page.enable is
+    // already on, so javascriptDialogOpening/Closed are flowing — recording
+    // them is what lets a frozen step say "a dialog is open" instead of a
+    // bare timeout.
+    expect(source).toContain("message.method === 'Page.javascriptDialogOpening'")
+    expect(source).toContain("message.method === 'Page.javascriptDialogClosed'")
+    expect(source).toContain('state.dialog = null')
+  })
+
+  it('surfaces the open dialog on failed steps and page-facing replies', () => {
+    const chain = source.slice(source.indexOf("rl.on('line'"))
+    // The failure note names the dismissal command, so the agent can act on it.
+    expect(chain).toContain('Page.handleJavaScriptDialog')
+    expect(chain).toContain('state.dialog')
+    // Successful page-facing replies carry the dialog state, not silently drop it.
+    expect(chain).toContain('{ ...result, dialog: state.dialog }')
+  })
+})

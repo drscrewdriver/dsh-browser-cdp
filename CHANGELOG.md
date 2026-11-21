@@ -1,3 +1,16 @@
+## 1.14.6 (2026-11-22)
+
+**JS 弹窗可见性（上游 #104 同构）：卡住的步骤从裸超时变成自带「dialog 类型 + 页面 message + 处置指引」的诊断。**
+
+反向审计确认的第二个平行面：worker 的消息循环忽略一切事件，`Page.javascriptDialogOpening/Closed` 从未被消费——而弹窗打开时渲染器主线程冻结，后续页面型 CDP 调用全部挂起，agent 看到的只是莫名超时（`Input.dispatchMouseEvent timed out after 15000ms`），没有任何线索指向弹窗。手动处置工具（`Page.handleJavaScriptDialog`）一直存在，缺的是「知道要去找它」。
+
+- **修复**：worker 在事件流上跟踪弹窗生命周期（`Page.enable` 已在 attachPage 开启，事件本就在流上）：`javascriptDialogOpening` → `state.dialog = { type, message, url }`，`Closed` 清空。**失败路径**：步骤错误消息追加 `(a JavaScript dialog (type "alert", message "…") is open on the page - dismiss it with Page.handleJavaScriptDialog before retrying)`。**成功路径**：capture/act/navigate/interactive 回包在弹窗打开时携带 `dialog` 字段（页面冻结状态如实呈现）。effects 侧 `CaptureReply.dialog?` / `ActReply.dialog?` 契约字段。
+- **决策**：只可见性、不自动 dismiss——agent 保留知情权，自动关闭可能吞掉页面必需的 confirm 流程；手动工具是正道。
+- **E2E 实测**（Chrome 158 headless）：alert 按钮页点击 → `Input.dispatchMouseEvent timed out after 15000ms (a JavaScript dialog (type "alert", message "blocked!") is open on the page - dismiss it with Page.handleJavaScriptDialog before retrying)`（修复前 = 裸超时零诊断）；无弹窗对照 → `ok=True` 且无 dialog 字段泄漏。
+- **测试设计注记**：gather 与 act 必须同文档（跨进程重导航会使 backendNodeId 失效）——首轮 E2E 的 no-box-model 假阴性即此因。
+
+门禁：`npm run typecheck` 干净；`npm test` **1342 passed / 13 skipped**（+2 契约用例：弹窗生命周期跟踪、失败消息与成功回包的 dialog 面）；worker 为直维护 .mjs 无构建面，lib 因 effects.ts 契约字段重建。
+
 ## 1.14.5 (2026-11-22)
 
 **scroll 行为诚实化（上游 #109 同构）+ 修复 jev 循环 scroll 全灭的潜伏缺陷。**

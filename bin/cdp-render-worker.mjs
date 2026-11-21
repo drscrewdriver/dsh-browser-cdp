@@ -47,6 +47,8 @@ let state = {
   sessionId: '',
   targetId: '',
   targetUrl: '',
+  /** Open JavaScript dialog (alert/confirm/prompt), if any — see the event interceptor below. */
+  dialog: null,
 }
 
 function log(message) {
@@ -133,7 +135,25 @@ async function connect(wsUrl, timeoutMs) {
   ws.addEventListener('message', (event) => {
     let message
     try { message = JSON.parse(String(event.data)) } catch { return }
-    if (typeof message.id !== 'number') return // an event, not a reply
+    if (typeof message.id !== 'number') {
+      // An EVENT, not a reply. The only family this worker cares about is the
+      // JavaScript dialog lifecycle: while a dialog is open the renderer's
+      // main thread is frozen, so every page-facing call would hang into an
+      // opaque timeout. Recording it here is what lets a failing step SAY
+      // "a dialog is open" instead of a bare timeout (upstream dsh-ego-browser
+      // issue #104's failure mode). Page.enable is already on (attachPage),
+      // so these events are already flowing.
+      if (message.method === 'Page.javascriptDialogOpening') {
+        state.dialog = {
+          type: String(message.params?.type || 'unknown'),
+          message: String(message.params?.message || ''),
+          url: String(message.params?.url || ''),
+        }
+      } else if (message.method === 'Page.javascriptDialogClosed') {
+        state.dialog = null
+      }
+      return
+    }
     const entry = state.pending.get(message.id)
     if (!entry) return
     clearTimeout(entry.timer)
@@ -754,9 +774,22 @@ rl.on('line', (line) => {
     const id = request.id ?? null
     try {
       const result = await handle(String(request.method || ''), request.params || {})
-      reply(id, true, { result })
+      // A page-facing reply while a dialog is open carries the dialog state:
+      // the screenshot/script went through, but the page is frozen behind it.
+      const method = String(request.method || '')
+      const withDialog = state.dialog && (method === 'capture' || method === 'act' || method === 'navigate' || method === 'interactive')
+        ? { ...result, dialog: state.dialog }
+        : result
+      reply(id, true, { result: withDialog })
     } catch (error) {
-      reply(id, false, { error: { code: 'call-failed', message: error instanceof Error ? error.message : String(error) } })
+      const message = error instanceof Error ? error.message : String(error)
+      // The renderer is frozen behind the dialog, so a failing step is far
+      // more likely to BE the dialog than an ordinary timeout — say so where
+      // the caller can read it, instead of an opaque hang.
+      const dialogNote = state.dialog
+        ? ` (a JavaScript dialog (type "${state.dialog.type}", message "${state.dialog.message}") is open on the page - dismiss it with Page.handleJavaScriptDialog before retrying)`
+        : ''
+      reply(id, false, { error: { code: 'call-failed', message: message + dialogNote } })
     }
   })
 })

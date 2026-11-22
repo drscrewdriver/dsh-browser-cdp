@@ -139,6 +139,9 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 			noScreenshot: '(no screenshot — about:blank or browser not rendering)',
 			engineUnsupportedBanner: '(live view unsupported on this engine — Lightpanda renders text; use bcdp_snapshot / bcdp_screenshot instead)',
 			engineUnsupportedPick: 'picking is unsupported on this engine (no Overlay / no live view) — use bcdp_snapshot to locate elements',
+			streamMseUnsupported: "This browser can't play this H.264 stream (MSE unsupported)",
+			streamDisconnected: 'Video stream disconnected',
+			streamConnectFailed: 'Video stream connect failed',
 			noActivePages: 'No active browser pages',
 			noActiveHint: 'Pages will appear here as the agent browses with bcdp_*',
 			openExternal: 'Open real page',
@@ -150,9 +153,11 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 			picked: 'Element captured',
 			pickFailed: 'Pick failed',
 			pickQuoted: '✓ Quoted to composer',
+			pickBarQuote: 'Quote to chat Ctrl+J',
 			pickDeliverFailed: 'Delivery failed',
 			noUrl: 'No URL to open',
 			closeTab: 'Close tab',
+			closeFailed: 'Close failed: ',
 			newTab: '(new tab)',
 			history: 'Browsing history',
 			historyHide: 'Hide history',
@@ -183,6 +188,7 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 			loginSelfPersist: 'This browser keeps the login in its own profile — nothing to save here.',
 			captchaDismiss: 'Dismiss',
 			hintReset: 'Reset · scroll to pan · Ctrl+scroll to zoom · double-click to reset',
+			liveImgHint: 'Wheel zooms · hold-drag pans · zoom all the way out or double-click to reset',
 			hintPan: 'Ctrl+scroll to zoom · Ctrl+drag to pan · double-click to reset',
 			hintScroll: 'Ctrl+drag to pan · scroll to pan',
 			hintNotCaptured: 'Not captured · operation not delivered · click again to recover',
@@ -201,6 +207,7 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 			linksEmpty: 'No targets yet — add the first one with the form below',
 			linksEnabled: 'Enabled',
 			linksActive: 'active',
+			badgeLpHeadless: 'LP·headless',
 			linksAddCdp: 'Add CDP endpoint',
 			linksAddCli: 'Add local ego CLI',
 			linksAddLp: 'Add Lightpanda (managed)',
@@ -269,6 +276,9 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 			noScreenshot: '（暂无截图 — about:blank 或浏览器未渲染）',
 			engineUnsupportedBanner: '（当前引擎不支持实时画面 — Lightpanda 为文本渲染，可用 bcdp_snapshot / bcdp_screenshot 查看）',
 			engineUnsupportedPick: '当前引擎不支持面板点选（无 Overlay/无实时画面）— 请用 bcdp_snapshot 定位元素',
+			streamMseUnsupported: '当前浏览器不支持此 H.264 流',
+			streamDisconnected: '视频流已断开',
+			streamConnectFailed: '视频流连接失败',
 			noActivePages: '暂无活跃浏览器页',
 			noActiveHint: '当 agent 开始用 bcdp_* 操作网页时，这里会实时显示',
 			openExternal: '⧉ 打开真实页',
@@ -280,9 +290,11 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 			picked: '已捕获元素',
 			pickFailed: '点选失败',
 			pickQuoted: '✓ 已引用到输入框',
+			pickBarQuote: '引用到对话 Ctrl+J',
 			pickDeliverFailed: '投递失败',
 			noUrl: '无可打开的地址',
 			closeTab: '关闭标签',
+			closeFailed: '关闭失败：',
 			newTab: '(新标签页)',
 			history: '历史浏览轨迹',
 			historyHide: '收起历史轨迹',
@@ -313,6 +325,7 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 			loginSelfPersist: '登录态保存在该浏览器自己的 profile 里，无需手动落盘。',
 			captchaDismiss: '关闭提示',
 			hintReset: '已复位 · 滚轮滚动页面 · Ctrl+滚轮缩放 · 双击复位',
+			liveImgHint: '滚轮缩放 · 按住拖动平移 · 缩小到最小或双击复位',
 			hintPan: 'Ctrl+滚轮缩放 · Ctrl+拖动平移 · 双击复位',
 			hintScroll: 'Ctrl+拖动平移 · 滚轮滚动页面',
 			hintNotCaptured: '画面未接管 · 本次操作未送达 · 再点一次即可恢复',
@@ -331,6 +344,7 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 			linksEmpty: '暂无目标——用下方表单添加第一个连接目标',
 			linksEnabled: '启用',
 			linksActive: '已激活',
+			badgeLpHeadless: 'LP·无头',
 			linksAddCdp: '添加 CDP 端点',
 			linksAddCli: '添加本机 ego CLI',
 			linksAddLp: '添加 Lightpanda（受管）',
@@ -584,7 +598,7 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 		}
 
 		function createMsePlayer(video: any, generation: any, mime: any, onFailure: any) {
-			if (!window.MediaSource || !window.MediaSource.isTypeSupported(mime)) { onFailure('当前浏览器不支持此 H.264 流'); return function () {} }
+			if (!window.MediaSource || !window.MediaSource.isTypeSupported(mime)) { onFailure(wt('streamMseUnsupported')); return function () {} }
 			var mediaSource = new MediaSource()
 			var objectUrl = URL.createObjectURL(mediaSource)
 			var abort = new AbortController()
@@ -602,7 +616,7 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 				reader.read().then(function (part: any) {
 					reading = false
 					if (disposed) return
-					if (part.done) { onFailure('视频流已断开'); return }
+					if (part.done) { onFailure(wt('streamDisconnected')); return }
 					queue.push(part.value); queuedBytes += part.value.byteLength; appendNext(); pump()
 				}).catch(function (error: any) { reading = false; if (!disposed && error.name !== 'AbortError') onFailure(error.message) })
 			}
@@ -619,7 +633,7 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 					appendNext(); pump()
 				})
 				fetch(VIDEO_ROUTE + '?generation=' + encodeURIComponent(generation), { signal: abort.signal }).then(function (res) {
-					if (!res.ok || !res.body) throw new Error('视频流连接失败 (' + res.status + ')')
+					if (!res.ok || !res.body) throw new Error(wt('streamConnectFailed') + ' (' + res.status + ')')
 					reader = res.body.getReader(); pump()
 				}).catch(function (error) { if (!disposed && error.name !== 'AbortError') onFailure(error.message) })
 			})
@@ -1611,7 +1625,7 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 								h(FamSwitch, { checked: row.enabled === true, writable: writable,
 									title: wt('linksEnabled'),
 									onToggle: function (next: boolean) { writeLinks(updateRow(links, row.id, { enabled: next })) } }),
-								h('span', { style: badgeStyle }, isCli ? 'CLI' : isLp ? 'LP·无头' : isTabbit ? 'TABBIT' : 'CDP'),
+								h('span', { style: badgeStyle }, isCli ? 'CLI' : isLp ? wt('badgeLpHeadless') : isTabbit ? 'TABBIT' : 'CDP'),
 								h(FamRowInput, { v: row.label || '', writable: writable, placeholder: wt('linksLabel'),
 									onCommit: function (v: any) { writeLinks(updateRow(links, row.id, { label: v })) } }),
 								probeBadge,
@@ -2144,7 +2158,7 @@ h('button', { type: 'button', disabled: !writable || isFull(links) || hasCliLink
 					img.className = 'dsh-ego-liveimg'
 					if (tagName === 'img') img.draggable = false
 					else { img.muted = true; img.autoplay = true; img.playsInline = true }
-					img.title = '滚轮缩放 · 按住拖动平移 · 缩小到最小或双击复位'
+					img.title = wt('liveImgHint')
 					// Hint swap: remember the real URL, show a tip while operating,
 					// restore it after a short quiet period.
 					const realText = urlEl ? urlEl.textContent : ''
@@ -2364,7 +2378,7 @@ h('button', { type: 'button', disabled: !writable || isFull(links) || hasCliLink
 										const reason = body && typeof body.reason === 'string' ? body.reason : ('http-' + res.status)
 										const err = document.createElement('span')
 										err.className = 'dsh-ego-taberr'
-										err.textContent = '关闭失败：' + reason
+										err.textContent = wt('closeFailed') + reason
 										;(tabsEl as HTMLElement).appendChild(err)
 										window.setTimeout(() => { err.remove() }, 5000)
 									}
@@ -2516,7 +2530,7 @@ h('button', { type: 'button', disabled: !writable || isFull(links) || hasCliLink
 					// view — otherwise the standing poll snaps it back to live.
 					if (pinned) return
 					if (lastList.length === 0) {
-						setTitle('Agent 浏览器')
+						setTitle(wt('title'))
 						body.innerHTML = `<div class="dsh-ego-empty">${wt('noActivePages')}<br><span style="font-size:11px;">${wt('noActiveHint')}</span></div>`
 						liveCount = 0
 						fab.classList.remove('dsh-ego-live', 'dsh-ego-busy')
@@ -4011,7 +4025,12 @@ clearTimeout((panel as any)._dshHideT)
 				if (timer) { window.clearInterval(timer); timer = null }
 			}
 			function post(enabledNow: any, targetId: any) {
-				var body: { enabled: unknown; targetId?: string } = { enabled: enabledNow }
+				var body: { enabled: unknown; targetId?: string; labels?: { quote: string; quoted: string } } = {
+					enabled: enabledNow,
+					// The injected page overlay is drawn by the worker — pass the
+					// localized bar labels so en users don't get a zh button.
+					labels: { quote: wt('pickBarQuote'), quoted: wt('pickQuoted') },
+				}
 				if (targetId) body.targetId = targetId
 				return fetchBcdp('/api/bcdp/pick', {
 					method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),

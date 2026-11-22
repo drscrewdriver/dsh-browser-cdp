@@ -30,6 +30,18 @@ export interface PickUiOutcome {
   message: string
 }
 
+/**
+ * Locale-dependent strings for the injected bar, passed by the panel (the only
+ * party that knows the user's locale) through the pick channel. Missing fields
+ * fall back to the historical zh literals so the overlay is never blank.
+ */
+export interface PickUiLabels {
+  /** Bar button — quote the element into the composer. */
+  quote?: string
+  /** Bar text after the quote is delivered (confirm state). */
+  quoted?: string
+}
+
 async function evaluate(call: PageCall, sessionId: string, expression: string): Promise<PickUiOutcome> {
   try {
     const result = (await call('Runtime.evaluate', {
@@ -52,15 +64,20 @@ async function evaluate(call: PageCall, sessionId: string, expression: string): 
   }
 }
 
+/** zh fallbacks — the panel normally supplies localized PickUiLabels. */
+const FALLBACK_QUOTE = '引用到对话 Ctrl+J'
+const FALLBACK_QUOTED = '✓ 已引用到输入框'
+
 /**
  * The page-side program. Kept as one string so it survives `Runtime.evaluate`
  * with no bundler involved. Idempotent: re-running replaces the previous UI.
  */
-function uiExpression(element: PickElement): string {
+function uiExpression(element: PickElement, labels?: PickUiLabels): string {
   const payload = JSON.stringify({
     rect: element.rect,
     describe: element.describe,
     binding: PICK_BINDING,
+    ui: { quote: labels?.quote ?? '', quoted: labels?.quoted ?? '' },
   })
   return `(() => {
 const data = ${payload};
@@ -102,7 +119,7 @@ const desc = document.createElement('span');
 desc.className = 'dsh-pick-desc';
 desc.textContent = data.describe;
 const btnComment = document.createElement('button');
-btnComment.textContent = '引用到对话 Ctrl+J';
+btnComment.textContent = data.ui.quote || ${JSON.stringify(FALLBACK_QUOTE)};
 bar.appendChild(desc); bar.appendChild(btnComment);
 const below = rect.y + rect.height + 10;
 const barH = 36;
@@ -125,12 +142,13 @@ window.__dshPickUiDone = () => done;
 })()`
 }
 
-/** T5.11's "✓ 已传输到对话" confirm, collapsed in place after 2.5s. */
-function confirmExpression(): string {
+/** T5.11's quoted-state confirm, collapsed in place after 2.5s. */
+function confirmExpression(labels?: PickUiLabels): string {
+  const quoted = JSON.stringify(labels?.quoted || FALLBACK_QUOTED)
   return `(() => {
 const bar = document.getElementById('__dsh-pick-bar');
 if (bar) {
-  bar.textContent = '✓ 已引用到输入框';
+  bar.textContent = ${quoted};
   setTimeout(() => { bar.remove(); }, 2500);
 }
 const box = document.getElementById('__dsh-pick-box');
@@ -147,15 +165,15 @@ for (const id of ['__dsh-pick-box', '__dsh-pick-bar', '__dsh-pick-style']) {
 }
 
 /** Draw the frame + bar and arm the binding that reports the chosen action. */
-export async function showPickUi(call: PageCall, sessionId: string, element: PickElement): Promise<PickUiOutcome> {
+export async function showPickUi(call: PageCall, sessionId: string, element: PickElement, labels?: PickUiLabels): Promise<PickUiOutcome> {
   const arm = await armBinding(call, sessionId)
   if (!arm.ok) return arm
-  return evaluate(call, sessionId, uiExpression(element))
+  return evaluate(call, sessionId, uiExpression(element, labels))
 }
 
 /** Swap the bar to the quoted state; the page collapses it after 2.5s. */
-export async function confirmPickUi(call: PageCall, sessionId: string): Promise<PickUiOutcome> {
-  return evaluate(call, sessionId, confirmExpression())
+export async function confirmPickUi(call: PageCall, sessionId: string, labels?: PickUiLabels): Promise<PickUiOutcome> {
+  return evaluate(call, sessionId, confirmExpression(labels))
 }
 
 /** Remove every trace of the picker UI (panel unmount / tab switch / disable). */

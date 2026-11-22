@@ -32,7 +32,7 @@ import {
 } from '../cdp/page.ts'
 import { boxModel, describeNode, flattenAxTree, accessibilityTree, nodeAtPoint, readNodeText } from '../cdp/dom.ts'
 import { classifyPickError } from './pick-contract.ts'
-import { PICK_BINDING, confirmPickUi, parsePickAction, removePickUi, showPickUi, type PickAction } from './pick-ui.ts'
+import { PICK_BINDING, confirmPickUi, parsePickAction, removePickUi, showPickUi, type PickAction, type PickUiLabels } from './pick-ui.ts'
 
 /** The rich identity R6 serialises and the panel draws a frame around. */
 export interface PickElement {
@@ -116,6 +116,8 @@ export class PickChannel {
   }
   #detachPick: (() => void) | null = null
   #detachAction: (() => void) | null = null
+  /** Bar labels for the injected UI, supplied by the panel at enable time. */
+  #uiLabels: PickUiLabels | undefined
 
   constructor(options: PickChannelOptions) {
     this.#cdp = options.cdp
@@ -137,9 +139,10 @@ export class PickChannel {
    * this connection, and only then enters inspect mode — so a failure at any
    * step leaves `enabled: false` with the reason, never a half-armed picker.
    */
-  async setEnabled(enabled: boolean, targetId: string): Promise<PickState> {
+  async setEnabled(enabled: boolean, targetId: string, uiLabels?: PickUiLabels): Promise<PickState> {
     if (!enabled) return this.#disable(targetId)
     if (targetId === '') return this.#fail('target-required', 'a targetId is required to start picking')
+    this.#uiLabels = uiLabels
 
     const session = await this.#sessions.ensure(targetId)
     const call: PageCall = (method, params, options) =>
@@ -297,7 +300,7 @@ export class PickChannel {
     // M1.5 / T5.10–T5.12: draw the frame + floating bar and arm the binding
     // that reports the chosen action. UI failure is reported but the pick
     // itself stands — the panel can still deliver from `lastPick`.
-    const ui = await showPickUi(call, sessionId, element)
+    const ui = await showPickUi(call, sessionId, element, this.#uiLabels)
     if (!ui.ok) this.#onError?.(ui.code, ui.message)
     this.#subscribeAction(sessionId)
   }
@@ -351,7 +354,7 @@ export class PickChannel {
 
     // T5.11: confirm in place, collapse after 2.5s. A failed confirm must not
     // swallow the delivery — the panel acts on the action regardless.
-    const confirm = await confirmPickUi(call, sessionId)
+    const confirm = await confirmPickUi(call, sessionId, this.#uiLabels)
     if (!confirm.ok) this.#onError?.(confirm.code, confirm.message)
 
     this.#state = { ...this.#state, lastAction: action, code: 'delivered' }

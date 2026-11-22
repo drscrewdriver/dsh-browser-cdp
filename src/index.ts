@@ -34,7 +34,7 @@ import { existsSync, readdirSync, readFileSync, appendFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { windowsEnvChromeCandidates } from './cdp/launcher.ts'
+import { darwinChromeCandidates as launcherDarwinChromeCandidates, posixChromeCandidates as launcherPosixChromeCandidates, windowsEnvChromeCandidates } from './cdp/launcher.ts'
 import { importLoginCookies } from './login-import.ts'
 import { initCastServer, markEgoToolCall, getLastEgoActivity, onEgoActivity, setAttachEndpoint, recycleWorker, getCliPollStatus, getAttachEndpoint, broadcastCliFrames, broadcastCliSpaces, getCliTrackAll, pushFocus, panelWatcherCount, getWatchCounters } from './cast-server.ts'
 import { CliFramePoller, buildFrameScript, FRAME_SENTINEL } from './cast/cli-frame-poller.ts'
@@ -502,17 +502,6 @@ const IS_DARWIN = process.platform === 'darwin'
 const AUTO_ADAPT_OFF = /^(0|false|no)$/i.test(
   process.env.EGO_BROWSER_AUTO_ADAPT ?? '',
 )
-const COMMON_CHROME_BINS = [
-  'google-chrome-stable',
-  'google-chrome',
-  'chromium',
-  'chromium-browser',
-  '/usr/bin/google-chrome-stable',
-  '/usr/bin/google-chrome',
-  '/usr/bin/chromium',
-  '/usr/bin/chromium-browser',
-  '/opt/google/chrome/google-chrome',
-]
 /** Windows registry-free probe of the usual install dirs (no subprocess). */
 function windowsChromeCandidates(): string[] {
   // Delegate to the launcher's canonical env-driven list (issue #19): the
@@ -522,30 +511,14 @@ function windowsChromeCandidates(): string[] {
 /**
  * macOS registry-free probe of the usual `.app` bundles (no subprocess).
  *
- * Chrome on macOS is never on PATH: the launcher lives inside the bundle at
- * `<App>.app/Contents/MacOS/<binary>`. Both the system-wide and per-user
- * `/Applications` locations are probed, Chrome first so that a machine with
- * several browsers picks the same one the README documents.
+ * Delegates to the launcher's canonical bundle list (issue #19 family): the
+ * launcher lives inside the bundle at `<App>.app/Contents/MacOS/<binary>`.
+ * Both the system-wide and per-user `/Applications` locations are probed,
+ * Chrome first so that a machine with several browsers picks the same one the
+ * README documents.
  */
 function darwinChromeCandidates(): string[] {
-  const roots = ['/Applications']
-  if (process.env.HOME) {
-    roots.push(`${process.env.HOME}/Applications`)
-  }
-  const bundles = [
-    'Google Chrome.app/Contents/MacOS/Google Chrome',
-    'Chromium.app/Contents/MacOS/Chromium',
-    'Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
-    'Brave Browser.app/Contents/MacOS/Brave Browser',
-    'Tungsten Edge.app/Contents/MacOS/Tungsten Edge',
-  ]
-  const out: string[] = []
-  for (const root of roots) {
-    for (const bundle of bundles) {
-      out.push(`${root}/${bundle}`)
-    }
-  }
-  return out
+  return launcherDarwinChromeCandidates(process.env)
 }
 /** Find a usable Chrome binary by scanning PATH + common fixed locations. */
 export function findChromeBinary(): string | undefined {
@@ -604,30 +577,15 @@ export function findChromeBinary(): string | undefined {
     }
     return undefined
   }
-  // POSIX: absolute + PATH walk.
-  for (const name of COMMON_CHROME_BINS) {
-    if (name.includes('/')) {
-      try {
-        if (existsSync(name)) {
-          return name
-        }
-      } catch {
-        // fall through
+  // POSIX: absolute + PATH walk — the launcher's canonical expansion
+  // (issue #19 family: the doctor and the launcher probe the same list).
+  for (const p of launcherPosixChromeCandidates(process.env)) {
+    try {
+      if (existsSync(p)) {
+        return p
       }
-    } else {
-      for (const dir of (process.env.PATH ?? '').split(':')) {
-        if (!dir) {
-          continue
-        }
-        const p = `${dir}/${name}`
-        try {
-          if (existsSync(p)) {
-            return p
-          }
-        } catch {
-          // fall through
-        }
-      }
+    } catch {
+      // fall through
     }
   }
   return undefined

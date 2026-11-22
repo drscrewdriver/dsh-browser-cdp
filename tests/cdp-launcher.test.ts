@@ -35,6 +35,30 @@ describe('launcher binary discovery', () => {
   })
 })
 
+/** Issue #19 family, second pass — darwin/posix canonical lists live in the launcher. */
+describe('launcher doctor-shared darwin/posix lists', () => {
+  const existsFor = (present: readonly string[]) => (p: string) => present.includes(p)
+  it('finds Edge/Brave/Chromium bundles on darwin, not just Google Chrome', () => {
+    const edge = '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge'
+    expect(discoverChromeBinary('', 'darwin', existsFor([edge]), { HOME: '/Users/u' })).toBe(edge)
+  })
+  it('probes the per-user /Applications root after the system one', () => {
+    const perUser = '/Users/u/Applications/Chromium.app/Contents/MacOS/Chromium'
+    expect(discoverChromeBinary('', 'darwin', existsFor([perUser]), { HOME: '/Users/u' })).toBe(perUser)
+  })
+  it('expands bare posix names over PATH dirs (doctor saw it, launcher did not)', () => {
+    const local = '/usr/local/bin/chromium'
+    expect(discoverChromeBinary('', 'linux', existsFor([local]), { PATH: '/usr/local/bin:/usr/bin' })).toBe(local)
+  })
+  it('keeps the doctor name-major walk order: google-chrome-stable anywhere beats google-chrome in the first dir', () => {
+    expect(discoverChromeBinary('', 'linux', existsFor(['/d1/google-chrome', '/d2/google-chrome-stable']), { PATH: '/d1:/d2' }))
+      .toBe('/d2/google-chrome-stable')
+  })
+  it('still finds the fixed /usr/bin paths with an empty PATH', () => {
+    expect(discoverChromeBinary('', 'linux', existsFor(['/usr/bin/chromium']), {})).toBe('/usr/bin/chromium')
+  })
+})
+
 /** T2.12 — the managed launch strips forbidden user flags. */
 describe('launcher args assembly', () => {
   it('adds port/profile/base flags and filters BLOCKED user args', () => {

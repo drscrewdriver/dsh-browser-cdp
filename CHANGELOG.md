@@ -1,3 +1,15 @@
+## 1.14.10 (2026-11-22)
+
+**插件卫生审计三模式加强：P1 双清单漂移收尾（#19 家族第二轮）× P2 面板散文本地化（search-index#5 家族）× P3 stale build 重建。**
+
+- **P1**：darwin/posix 的浏览器发现清单与 win32 同病——launcher 只认 `/Applications/Google Chrome.app` 与 4 条固定 /usr/bin 路径，doctor 却探 Chromium/Edge/Brave bundle、`~/Applications`、PATH 裸名与 /opt；只装 Edge 的 macOS、chromium 在 /usr/local/bin 的 linux，会复刻 #19 的「doctor 说装了、launcher 找不到」。canonical 清单下沉 launcher（`DARWIN_CHROME_BUNDLES`/`darwinChromeCandidates`/`POSIX_CHROME_BINS`/`posixChromeCandidates`，PATH 展开保持 doctor 原有 name-major 语义），doctor 的 `darwinChromeCandidates()`/posix 分支改为委托，`discoverChromeBinary` 三平台全部吃 canonical 表；`PLATFORM_CANDIDATES` 双清单删除。
+- **P2**：面板/页面 UI 的 9 处硬编码中文散文收进 locale 面。client 面板 7 处入 watchDict（en/zh 双语补全）：MSE 视频错误 3 处、链接行 `LP·无头` 徽标、live 图缩放 tooltip、tab 关闭失败前缀、空态标题。pick 覆盖层 2 处（引用按钮 + 确认条）改为面板经 pick 请求透传 `labels`——cast-server 原样代理 body，worker 校验后进 PickChannel，注入表达式 `data.ui.quote || 兜底`；en 用户不再看到中文按钮，老调用方不传 labels 时 zh 兜底逐字节不变。
+- **P3**：1.14.9 提交未重建 lib（lib 停在 1.14.8 构建）——本版 `npm run build` 重建，#19 的 launcher 修复随 lib 真正出厂；prepack 门禁在位（`prepack: npm run build`）。
+
+门禁：`npm run typecheck` 干净；`npm test` **1355 passed / 13 skipped**（+8：launcher darwin/posix 5 例 + pick labels 3 例；`tabbit-backend-dispatch` 1 例为 HEAD 预存失败，与本版无关）；`npm run build` 后 lib/ 与 src/ 同步。
+
+Known edge（观察项，未修）：EGO_CLI_LABEL 等 3 个默认标签 host/client 镜像重复（双 bundle 结构所限、已注释互指，漂移为外观级）；TUI（`tui-command.ts`）与 agent 面（`help.ts`/`errors.ts`）的中文散文为既定设计，不属 #5 泄漏面。
+
 ## 1.14.8 (2026-11-22)
 
 **面板路由 base 化（上游 #100 同构，修法沿用）：反向代理子路径部署下 `/api/bcdp/*` 不再打到代理根。**

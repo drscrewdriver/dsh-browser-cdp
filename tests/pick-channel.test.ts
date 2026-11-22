@@ -387,3 +387,36 @@ describe('T5.12 payload parsing', () => {
     expect(parsePickAction(JSON.stringify({}))).toEqual({ ok: false, code: 'bad-action' })
   })
 })
+
+describe('pick overlay labels (panel locale pass-through)', () => {
+  const pickWith = async (h: ReturnType<typeof harness>, labels?: { quote?: string; quoted?: string }): Promise<void> => {
+    await h.channel.setEnabled(true, 'T1', labels)
+    h.fire('Overlay.inspectNodeRequested', { backendNodeId: 42 }, 'S-T1')
+    await flush()
+  }
+  it('injects the panel-supplied bar labels into the overlay expression', async () => {
+    const h = harness()
+    await pickWith(h, { quote: 'Quote to chat Ctrl+J', quoted: '✓ Quoted to composer' })
+    const evaled = h.callsFor('Runtime.evaluate').map((e) => String(e.params.expression)).join('\n')
+    expect(evaled).toContain('Quote to chat Ctrl+J')
+    // The supplied label is read from data.ui at runtime — the zh literal only
+    // remains as the || fallback branch, never as the direct assignment.
+    expect(evaled).toContain('data.ui.quote ||')
+    expect(evaled).not.toContain("textContent = '引用到对话")
+  })
+  it('confirms with the supplied quoted text after the quote action', async () => {
+    const h = harness()
+    await pickWith(h, { quote: 'Quote to chat Ctrl+J', quoted: '✓ Quoted to composer' })
+    h.fire('Runtime.bindingCalled', { name: PICK_BINDING, payload: JSON.stringify({ action: 'quote' }) }, 'S-T1')
+    await flush()
+    await flush()
+    const confirm = h.callsFor('Runtime.evaluate').find((e) => String(e.params.expression).includes('Quoted to composer'))
+    expect(confirm).toBeDefined()
+  })
+  it('falls back to the zh literals when no labels are passed (old callers)', async () => {
+    const h = harness()
+    await pickWith(h)
+    const ui = h.callsFor('Runtime.evaluate').find((e) => String(e.params.expression).includes('__dsh-pick-box'))
+    expect(String(ui!.params.expression)).toContain('引用到对话 Ctrl+J')
+  })
+})

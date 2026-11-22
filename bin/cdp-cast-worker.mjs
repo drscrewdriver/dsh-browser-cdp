@@ -5925,16 +5925,23 @@ async function evaluate(call, sessionId, expression) {
 		};
 	}
 }
+/** zh fallbacks — the panel normally supplies localized PickUiLabels. */
+const FALLBACK_QUOTE = "引用到对话 Ctrl+J";
+const FALLBACK_QUOTED = "✓ 已引用到输入框";
 /**
 * The page-side program. Kept as one string so it survives `Runtime.evaluate`
 * with no bundler involved. Idempotent: re-running replaces the previous UI.
 */
-function uiExpression(element) {
+function uiExpression(element, labels) {
 	return `(() => {
 const data = ${JSON.stringify({
 		rect: element.rect,
 		describe: element.describe,
-		binding: PICK_BINDING
+		binding: PICK_BINDING,
+		ui: {
+			quote: labels?.quote ?? "",
+			quoted: labels?.quoted ?? ""
+		}
 	})};
 const ID_BOX = '__dsh-pick-box';
 const ID_BAR = '__dsh-pick-bar';
@@ -5974,7 +5981,7 @@ const desc = document.createElement('span');
 desc.className = 'dsh-pick-desc';
 desc.textContent = data.describe;
 const btnComment = document.createElement('button');
-btnComment.textContent = '引用到对话 Ctrl+J';
+btnComment.textContent = data.ui.quote || ${JSON.stringify(FALLBACK_QUOTE)};
 bar.appendChild(desc); bar.appendChild(btnComment);
 const below = rect.y + rect.height + 10;
 const barH = 36;
@@ -5996,12 +6003,12 @@ window.addEventListener('keydown', function onKey(ev) {
 window.__dshPickUiDone = () => done;
 })()`;
 }
-/** T5.11's "✓ 已传输到对话" confirm, collapsed in place after 2.5s. */
-function confirmExpression() {
+/** T5.11's quoted-state confirm, collapsed in place after 2.5s. */
+function confirmExpression(labels) {
 	return `(() => {
 const bar = document.getElementById('__dsh-pick-bar');
 if (bar) {
-  bar.textContent = '✓ 已引用到输入框';
+  bar.textContent = ${JSON.stringify(labels?.quoted || FALLBACK_QUOTED)};
   setTimeout(() => { bar.remove(); }, 2500);
 }
 const box = document.getElementById('__dsh-pick-box');
@@ -6016,14 +6023,14 @@ for (const id of ['__dsh-pick-box', '__dsh-pick-bar', '__dsh-pick-style']) {
 })()`;
 }
 /** Draw the frame + bar and arm the binding that reports the chosen action. */
-async function showPickUi(call, sessionId, element) {
+async function showPickUi(call, sessionId, element, labels) {
 	const arm = await armBinding(call, sessionId);
 	if (!arm.ok) return arm;
-	return evaluate(call, sessionId, uiExpression(element));
+	return evaluate(call, sessionId, uiExpression(element, labels));
 }
 /** Swap the bar to the quoted state; the page collapses it after 2.5s. */
-async function confirmPickUi(call, sessionId) {
-	return evaluate(call, sessionId, confirmExpression());
+async function confirmPickUi(call, sessionId, labels) {
+	return evaluate(call, sessionId, confirmExpression(labels));
 }
 /** Remove every trace of the picker UI (panel unmount / tab switch / disable). */
 async function removePickUi(call, sessionId) {
@@ -6101,6 +6108,8 @@ var PickChannel = class {
 	};
 	#detachPick = null;
 	#detachAction = null;
+	/** Bar labels for the injected UI, supplied by the panel at enable time. */
+	#uiLabels;
 	constructor(options) {
 		this.#cdp = options.cdp;
 		this.#sessions = options.sessions;
@@ -6122,9 +6131,10 @@ var PickChannel = class {
 	* this connection, and only then enters inspect mode — so a failure at any
 	* step leaves `enabled: false` with the reason, never a half-armed picker.
 	*/
-	async setEnabled(enabled, targetId) {
+	async setEnabled(enabled, targetId, uiLabels) {
 		if (!enabled) return this.#disable(targetId);
 		if (targetId === "") return this.#fail("target-required", "a targetId is required to start picking");
+		this.#uiLabels = uiLabels;
 		const session = await this.#sessions.ensure(targetId);
 		const call = (method, params, options) => this.#sessions.call(targetId, method, params, options?.timeoutMs ?? 6e3);
 		const enabledDomains = await enableDomains(call, session.sessionId, ["Overlay", "DOM"], this.#affinity, targetId, CONNECTION_ID);
@@ -6269,7 +6279,7 @@ var PickChannel = class {
 			picks: this.#state.picks + 1
 		};
 		this.#onPick?.(element);
-		const ui = await showPickUi(call, sessionId, element);
+		const ui = await showPickUi(call, sessionId, element, this.#uiLabels);
 		if (!ui.ok) this.#onError?.(ui.code, ui.message);
 		this.#subscribeAction(sessionId);
 	}
@@ -6317,7 +6327,7 @@ var PickChannel = class {
 		this.#detachAction = null;
 		const targetId = this.#state.targetId;
 		const call = (method, params, options) => this.#sessions.call(targetId, method, params, options?.timeoutMs ?? 6e3);
-		const confirm = await confirmPickUi(call, sessionId);
+		const confirm = await confirmPickUi(call, sessionId, this.#uiLabels);
 		if (!confirm.ok) this.#onError?.(confirm.code, confirm.message);
 		this.#state = {
 			...this.#state,
@@ -7298,10 +7308,15 @@ async function main() {
 					error: "no live browser"
 				});
 				const targetId = typeof body.targetId === "string" ? body.targetId : "";
+				const rawLabels = body.labels;
+				const uiLabels = rawLabels !== null && typeof rawLabels === "object" ? {
+					quote: typeof rawLabels.quote === "string" ? rawLabels.quote : void 0,
+					quoted: typeof rawLabels.quoted === "string" ? rawLabels.quoted : void 0
+				} : void 0;
 				try {
 					return sendJson(res, 200, {
 						ok: true,
-						state: await channel.setEnabled(body.enabled === true, targetId)
+						state: await channel.setEnabled(body.enabled === true, targetId, uiLabels)
 					});
 				} catch (error) {
 					return sendJson(res, 503, {

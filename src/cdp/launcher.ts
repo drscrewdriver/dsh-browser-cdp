@@ -93,11 +93,6 @@ const defaultIo = (): Required<LaunchIo> => ({
 
 // ── binary discovery (T2.12) ────────────────────────────────────────────────
 
-const PLATFORM_CANDIDATES: Record<string, readonly string[]> = {
-  darwin: ['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'],
-  linux: ['/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/usr/bin/chromium', '/usr/bin/chromium-browser'],
-}
-
 /**
  * Env-var-driven probe of the usual Windows install dirs — the ONE canonical
  * list, consumed by both the launcher (`discoverChromeBinary`) and the
@@ -106,6 +101,13 @@ const PLATFORM_CANDIDATES: Record<string, readonly string[]> = {
  * Edge, so a machine with just the 32-bit Edge (`Program Files (x86)`) got
  * "No Chrome/Chromium/Edge binary found" while `bcdp_doctor` happily
  * reported the very same binary.
+ *
+ * Issue #19 family, second pass: the same doctor-vs-launcher drift existed on
+ * the other two platforms — the launcher knew exactly one macOS bundle
+ * (Google Chrome in /Applications) and four fixed /usr/bin paths, while the
+ * doctor probed Chromium/Edge/Brave bundles, `~/Applications`, bare PATH
+ * names and /opt. The canonical darwin/posix lists now live HERE and the
+ * doctor delegates, so "installed" means the same thing to both again.
  */
 export function windowsEnvChromeCandidates(env: Record<string, string | undefined>): string[] {
   const pf = env.ProgramFiles
@@ -133,6 +135,64 @@ const WIN32_FALLBACK_CANDIDATES: readonly string[] = [
   'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
 ]
 
+/**
+ * macOS Chrome-family `.app` bundles the doctor has always probed — Chrome
+ * on macOS is never on PATH: the binary lives inside the bundle at
+ * `<App>.app/Contents/MacOS/<binary>`. Canonical here so the launcher finds
+ * the same installs the doctor reports (issue #19 family).
+ */
+export const DARWIN_CHROME_BUNDLES: readonly string[] = [
+  'Google Chrome.app/Contents/MacOS/Google Chrome',
+  'Chromium.app/Contents/MacOS/Chromium',
+  'Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
+  'Brave Browser.app/Contents/MacOS/Brave Browser',
+  'Tungsten Edge.app/Contents/MacOS/Tungsten Edge',
+]
+
+/** System-wide first, then per-user `/Applications` (matches the README). */
+export function darwinChromeCandidates(env: Record<string, string | undefined> = process.env): string[] {
+  const roots = ['/Applications']
+  if (env.HOME) roots.push(`${env.HOME}/Applications`)
+  const out: string[] = []
+  for (const root of roots) {
+    for (const bundle of DARWIN_CHROME_BUNDLES) {
+      out.push(`${root}/${bundle}`)
+    }
+  }
+  return out
+}
+
+/**
+ * POSIX Chrome-family binaries — bare names are expanded over `PATH`
+ * (name-major, so `google-chrome-stable` anywhere on PATH beats `google-chrome`
+ * in the first dir, exactly the doctor's old walk), interleaved with the fixed
+ * absolute locations. Canonical here so the launcher and the doctor agree.
+ */
+export const POSIX_CHROME_BINS: readonly string[] = [
+  'google-chrome-stable',
+  'google-chrome',
+  'chromium',
+  'chromium-browser',
+  '/usr/bin/google-chrome-stable',
+  '/usr/bin/google-chrome',
+  '/usr/bin/chromium',
+  '/usr/bin/chromium-browser',
+  '/opt/google/chrome/google-chrome',
+]
+
+export function posixChromeCandidates(env: Record<string, string | undefined> = process.env): string[] {
+  const dirs = (env.PATH ?? '').split(':').filter(Boolean)
+  const out: string[] = []
+  for (const name of POSIX_CHROME_BINS) {
+    if (name.includes('/')) {
+      out.push(name)
+      continue
+    }
+    for (const dir of dirs) out.push(`${dir}/${name}`)
+  }
+  return out
+}
+
 export function discoverChromeBinary(
   explicit: string,
   platform: string,
@@ -142,7 +202,9 @@ export function discoverChromeBinary(
   if (explicit !== '') return exists(explicit) ? explicit : ''
   const candidates = platform === 'win32'
     ? [...windowsEnvChromeCandidates(env), ...WIN32_FALLBACK_CANDIDATES]
-    : PLATFORM_CANDIDATES[platform] ?? []
+    : platform === 'darwin'
+      ? darwinChromeCandidates(env)
+      : posixChromeCandidates(env)
   for (const candidate of candidates) {
     if (exists(candidate)) return candidate
   }

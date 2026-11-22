@@ -572,8 +572,17 @@ async function main(): Promise<void> {
         const channel = ensurePickChannel()
         if (channel === null) return sendJson(res, 409, { ok: false, code: 'browser-disconnected', error: 'no live browser' })
         const targetId = typeof body.targetId === 'string' ? body.targetId : ''
+        // The panel knows the user's locale; pass its bar labels through so
+        // the injected page overlay is not stuck on the zh fallbacks.
+        const rawLabels = (body as { labels?: unknown }).labels
+        const uiLabels = rawLabels !== null && typeof rawLabels === 'object'
+          ? {
+              quote: typeof (rawLabels as { quote?: unknown }).quote === 'string' ? (rawLabels as { quote: string }).quote : undefined,
+              quoted: typeof (rawLabels as { quoted?: unknown }).quoted === 'string' ? (rawLabels as { quoted: string }).quoted : undefined,
+            }
+          : undefined
         try {
-          return sendJson(res, 200, { ok: true, state: await channel.setEnabled(body.enabled === true, targetId) })
+          return sendJson(res, 200, { ok: true, state: await channel.setEnabled(body.enabled === true, targetId, uiLabels) })
         } catch (error) {
           return sendJson(res, 503, { ok: false, code: 'pick-failed', error: (error as Error).message || String(error) })
         }

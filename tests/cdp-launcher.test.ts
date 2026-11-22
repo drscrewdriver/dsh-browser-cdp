@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { buildLaunchArgs, buildServeArgs, discoverChromeBinary, discoverLightpandaBinary, launchLocalBrowser, stopLocalBrowser, WSL_LAUNCH } from '../src/cdp/launcher.ts'
+import { buildLaunchArgs, buildServeArgs, discoverChromeBinary, discoverLightpandaBinary, launchLocalBrowser, stopLocalBrowser, windowsEnvChromeCandidates, WSL_LAUNCH } from '../src/cdp/launcher.ts'
 
 /** T2.12 — binary discovery is platform-table driven with explicit override. */
 describe('launcher binary discovery', () => {
@@ -15,6 +15,23 @@ describe('launcher binary discovery', () => {
   it('walks the platform table in order', () => {
     expect(discoverChromeBinary('', 'linux', existsFor(['/usr/bin/chromium']))).toBe('/usr/bin/chromium')
     expect(discoverChromeBinary('', 'linux', existsFor([]))).toBe('')
+  })
+  it('finds 32-bit Edge via the env-driven list (issue #19: doctor saw it, launcher did not)', () => {
+    const env = { ProgramFiles: 'C:\\Program Files', 'ProgramFiles(x86)': 'C:\\Program Files (x86)', LOCALAPPDATA: 'C:\\Users\\u\\AppData\\Local' }
+    const edge32 = 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe'
+    expect(discoverChromeBinary('', 'win32', existsFor([edge32]), env)).toBe(edge32)
+  })
+  it('env-driven list covers both Edge layouts, Brave, and per-user installs', () => {
+    const env = { ProgramFiles: 'C:\\Program Files', 'ProgramFiles(x86)': 'C:\\Program Files (x86)', LOCALAPPDATA: 'C:\\Users\\u\\AppData\\Local' }
+    const list = windowsEnvChromeCandidates(env)
+    expect(list).toContain('C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe')
+    expect(list).toContain('C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe')
+    expect(list).toContain('C:\\Program Files (x86)\\BraveSoftware\\Brave-Browser\\Application\\brave.exe')
+    expect(list).toContain('C:\\Users\\u\\AppData\\Local\\Google\\Chrome\\Application\\chrome.exe')
+  })
+  it('falls back to the absolute table when the environment is mangled (issue #19)', () => {
+    const fallbackEdge32 = 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'
+    expect(discoverChromeBinary('', 'win32', existsFor([fallbackEdge32]), {})).toBe(fallbackEdge32)
   })
 })
 
@@ -91,10 +108,18 @@ describe('launcher lifecycle', () => {
     expect(f.spawned).toHaveLength(1)
   })
 
-  it('reports launch-exited when chrome dies before the port answers', async () => {
+  it('treats an answered port as readiness even when the spawn pid died (Yandex re-exec, issue #19)', async () => {
     const f = fakeIo({ port: 9444, pid: 4242 })
+    // The spawn pid exits immediately (re-exec); the successor browser opens
+    // the SAME debugging port, which answers on the first probe.
     const io = { ...f.io, isAlive: () => false }
     const out = await launchLocalBrowser({ chromePath: 'C:/x/chrome.exe', statePath: 'C:/fake/launcher.json' }, io)
+    expect(out).toMatchObject({ ok: true, reused: false, pid: 4242, port: 9444 })
+  })
+  it('reports launch-exited when the pid is gone AND the port never answers within the window', async () => {
+    const f = fakeIo({ port: 9444, pid: 4242, failFirstProbes: 999 })
+    const io = { ...f.io, isAlive: () => false }
+    const out = await launchLocalBrowser({ chromePath: 'C:/x/chrome.exe', statePath: 'C:/fake/launcher.json', timeoutMs: 1 }, io)
     expect(out).toMatchObject({ ok: false, code: 'launch-exited' })
   })
 

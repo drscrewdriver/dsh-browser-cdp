@@ -34,6 +34,7 @@ import { existsSync, readdirSync, readFileSync, appendFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { windowsEnvChromeCandidates } from './cdp/launcher.ts'
 import { importLoginCookies } from './login-import.ts'
 import { initCastServer, markEgoToolCall, getLastEgoActivity, onEgoActivity, setAttachEndpoint, recycleWorker, getCliPollStatus, getAttachEndpoint, broadcastCliFrames, broadcastCliSpaces, getCliTrackAll, pushFocus, panelWatcherCount, getWatchCounters } from './cast-server.ts'
 import { CliFramePoller, buildFrameScript, FRAME_SENTINEL } from './cast/cli-frame-poller.ts'
@@ -514,24 +515,9 @@ const COMMON_CHROME_BINS = [
 ]
 /** Windows registry-free probe of the usual install dirs (no subprocess). */
 function windowsChromeCandidates(): string[] {
-  const pf = process.env.ProgramFiles
-  const pfx86 = process.env['ProgramFiles(x86)']
-  const local = process.env.LOCALAPPDATA
-  const base =
-    local ||
-    `${process.env.USERPROFILE || process.env.HOME || ''}\\AppData\\Local`
-  const b = (p: string | undefined): string | undefined => (p ? p.replace(/\\+$/, '') : p)
-  const out = [
-    b(pf) + '\\Google\\Chrome\\Application\\chrome.exe',
-    b(pfx86) + '\\Google\\Chrome\\Application\\chrome.exe',
-    b(local) + '\\Google\\Chrome\\Application\\chrome.exe',
-    b(pf) + '\\Microsoft\\Edge\\Application\\msedge.exe',
-    b(pfx86) + '\\Microsoft\\Edge\\Application\\msedge.exe',
-    b(local) + '\\Microsoft\\Edge\\Application\\msedge.exe',
-    b(pfx86) + '\\BraveSoftware\\Brave-Browser\\Application\\brave.exe',
-    b(local) + '\\BraveSoftware\\Brave-Browser\\Application\\brave.exe',
-  ]
-  return out.filter(Boolean) as string[]
+  // Delegate to the launcher's canonical env-driven list (issue #19): the
+  // doctor and the launcher must agree on what "installed" means.
+  return windowsEnvChromeCandidates(process.env)
 }
 /**
  * macOS registry-free probe of the usual `.app` bundles (no subprocess).

@@ -94,18 +94,56 @@ const defaultIo = (): Required<LaunchIo> => ({
 // ── binary discovery (T2.12) ────────────────────────────────────────────────
 
 const PLATFORM_CANDIDATES: Record<string, readonly string[]> = {
-  win32: [
-    'C:/Program Files/Google/Chrome/Application/chrome.exe',
-    'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe',
-    'C:/Program Files/Microsoft/Edge/Application/msedge.exe',
-  ],
   darwin: ['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'],
   linux: ['/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/usr/bin/chromium', '/usr/bin/chromium-browser'],
 }
 
-export function discoverChromeBinary(explicit: string, platform: string, exists: (path: string) => boolean): string {
+/**
+ * Env-var-driven probe of the usual Windows install dirs — the ONE canonical
+ * list, consumed by both the launcher (`discoverChromeBinary`) and the
+ * doctor's `windowsChromeCandidates()` in index.ts, so the two can never
+ * drift again. Issue #19: the launcher's hardcoded list only knew 64-bit
+ * Edge, so a machine with just the 32-bit Edge (`Program Files (x86)`) got
+ * "No Chrome/Chromium/Edge binary found" while `bcdp_doctor` happily
+ * reported the very same binary.
+ */
+export function windowsEnvChromeCandidates(env: Record<string, string | undefined>): string[] {
+  const pf = env.ProgramFiles
+  const pfx86 = env['ProgramFiles(x86)']
+  const local = env.LOCALAPPDATA
+  const base = local || `${env.USERPROFILE || env.HOME || ''}\\AppData\\Local`
+  const b = (p: string | undefined): string | undefined => (p ? p.replace(/\\+$/, '') : p)
+  return [
+    b(pf) + '\\Google\\Chrome\\Application\\chrome.exe',
+    b(pfx86) + '\\Google\\Chrome\\Application\\chrome.exe',
+    b(local) + '\\Google\\Chrome\\Application\\chrome.exe',
+    b(pf) + '\\Microsoft\\Edge\\Application\\msedge.exe',
+    b(pfx86) + '\\Microsoft\\Edge\\Application\\msedge.exe',
+    b(local) + '\\Microsoft\\Edge\\Application\\msedge.exe',
+    b(pfx86) + '\\BraveSoftware\\Brave-Browser\\Application\\brave.exe',
+    b(local) + '\\BraveSoftware\\Brave-Browser\\Application\\brave.exe',
+  ].filter(Boolean) as string[]
+}
+
+/** Last-resort absolute paths for machines with a mangled environment. */
+const WIN32_FALLBACK_CANDIDATES: readonly string[] = [
+  'C:/Program Files/Google/Chrome/Application/chrome.exe',
+  'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe',
+  'C:/Program Files/Microsoft/Edge/Application/msedge.exe',
+  'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
+]
+
+export function discoverChromeBinary(
+  explicit: string,
+  platform: string,
+  exists: (path: string) => boolean,
+  env: Record<string, string | undefined> = process.env,
+): string {
   if (explicit !== '') return exists(explicit) ? explicit : ''
-  for (const candidate of PLATFORM_CANDIDATES[platform] ?? []) {
+  const candidates = platform === 'win32'
+    ? [...windowsEnvChromeCandidates(env), ...WIN32_FALLBACK_CANDIDATES]
+    : PLATFORM_CANDIDATES[platform] ?? []
+  for (const candidate of candidates) {
     if (exists(candidate)) return candidate
   }
   return ''
@@ -269,9 +307,10 @@ export type LaunchOutcome =
 
 /**
  * Launch (or reuse) the managed local browser for ONE engine. The readiness
- * gate is the three-step check from T2.12: process alive → port responds →
- * `/json/version` returns 200. `timeoutMs` bounds the readiness wait
- * (default 20s).
+ * gate is the port-first check: `/json/version` returns 200 (a re-exec'ing
+ * browser whose spawn pid died still counts as ready), with the spawn pid's
+ * liveness only used to pick the failure code when the deadline expires.
+ * `timeoutMs` bounds the readiness wait (default 20s).
  *
  * Engine exclusivity: the registry holds ONE managed instance — a record for
  * the OTHER engine is stopped first, so Chrome and Lightpanda never fight
@@ -356,14 +395,22 @@ export async function launchLocalBrowser(
   const endpoint = `http://127.0.0.1:${port}`
   const engineName = engine === 'lightpanda' ? 'lightpanda' : 'chrome'
   const deadline = now() + (options.timeoutMs ?? 20000)
+  // Port probe FIRST, pid check second: Chromium builds that re-exec on
+  // startup (Yandex Browser) orphan the spawn pid while the real browser
+  // opens the SAME debugging port. The port answering `/json/version` IS
+  // readiness, even when `isAlive(pid)` says our child is already gone
+  // (issue #19). A dead pid with a silent port still keeps polling until
+  // the deadline — the successor process may be about to bind it.
+  let spawnPidGone = false
   for (;;) {
-    if (!ioImpl.isAlive(pid)) {
-      return { ok: false, code: 'launch-exited', message: `${engineName} exited before opening the debugging port (pid ${pid})${engine === 'lightpanda' && platform === 'win32' ? ' — is lightpanda installed inside WSL? (`wsl` then `curl -fsSL https://pkg.lightpanda.io/install.sh | bash`)' : ''}` }
-    }
     let versionOk = false
     try { versionOk = (await ioImpl.fetchVersion(`${endpoint}/json/version`)).ok } catch { /* not up yet */ }
     if (versionOk) break
+    if (!ioImpl.isAlive(pid)) spawnPidGone = true
     if (now() >= deadline) {
+      if (spawnPidGone) {
+        return { ok: false, code: 'launch-exited', message: `${engineName} exited before opening the debugging port (pid ${pid})${engine === 'lightpanda' && platform === 'win32' ? ' — is lightpanda installed inside WSL? (`wsl` then `curl -fsSL https://pkg.lightpanda.io/install.sh | bash`)' : ''}` }
+      }
       ioImpl.killTree(pid)
       ioImpl.removeFile(statePath)
       return { ok: false, code: 'not-ready', message: `${engineName} did not answer ${endpoint}/json/version within the readiness window` }

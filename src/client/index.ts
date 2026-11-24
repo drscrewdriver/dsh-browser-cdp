@@ -1300,12 +1300,18 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 			var writable = snapshot.writable === true
 			var h = React.createElement
 			// 首次使用引导：本地标记持久化（`dsh.guide.browser-cdp.skipped`），懒初始化只读一次存储。
-			// 跳过/看完都写标记 → 不再自动弹；分节底部恒定留一个重开入口。
+			// 跳过/看完都写标记 → 不再自动弹；分节上方恒定留一个重开入口。
 			var guideState = React.useState(function () { return !isGuideSkipped('browser-cdp') })
 			var guideOpen = guideState[0], setGuideOpen = guideState[1]
 			// 顺序即语义：连接目标决定每一次 bcdp_* 打谁，是分节的第一性配置，
 			// 因此排在最前（first=true 去掉块顶分隔线）；工具封印等分组随后。
 			return h('div', { style: { display: 'grid', gap: '8px' } },
+				// 重启入口停在设置面上方：贴士也渲染在同一位置，跳过/看完之后一眼就能重开。
+				h('div', { key: 'guide-restart', style: { paddingBottom: '2px' } },
+					h(GuideRestartButton, {
+						ns: 'browser-cdp',
+						onOpen: function () { setGuideOpen(true) },
+					})),
 				guideOpen
 					? h(GuidePanel, {
 						key: 'guide',
@@ -1318,12 +1324,6 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 				FAM_FIELD_GROUPS.map(function (group) {
 					return h(FamGroup, { key: group.gk, group: group, value: value, writable: writable, scope: scope })
 				}),
-				// 重启入口停在底部：跳过/看完之后想再看一次，不必去清浏览器存储。
-				h('div', { key: 'guide-restart', style: { paddingTop: '2px' } },
-					h(GuideRestartButton, {
-						ns: 'browser-cdp',
-						onOpen: function () { setGuideOpen(true) },
-					})),
 			)
 		}
 

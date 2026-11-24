@@ -1,3 +1,30 @@
+## 1.14.11 (2026-11-24)
+
+**三件事同版出厂：① 页面动作药丸（页面与面板说同一句话）② 首次使用引导（设置分节三步教学）③ 侧栏元数据面（8 项：这页什么状态、谁在驱动）。**
+
+### 一、页面动作药丸
+
+每个 `bcdp_*` 调用前 4s，页面内角标与侧栏/浮窗药丸显示同一句话「DSH · 正在点击」，先把动作说清楚，模型只需补 WHY。
+
+- **host 侧单一真源**：`TOOL_ACTION_LABELS`（18 个碰页面的工具）+ `markEgoToolCall(sessionId, toolName)` 把 `{zh,en}` 随 `tool-call` SSE 下发；客户端只选词、不自带第二份表；`bcdp_status`/`bcdp_help` 这类元工具不给动作词（"正在读取页面"对它们是假话）。
+- **`withPageOverlay`**：除 `bcdp_wait`（本身就在等人）外的页面工具先打一次页面角标；`bcdp_status` 返回体新增 `overlay` 指引（一条英文说明模型该在批次前后各说一句，不做常驻噪声）。
+- **契约测试**：`action-label-contract`（词表覆盖/长度/双语成对）、`page-overlay`（覆盖层表达式）、`locale-guard` 三档棘轮（C-ui/A-pair/B-log，基线 148/82）。
+
+### 二、首次使用引导
+
+沿 guide-kit 统一契约（与 session-guard / thinking-levels 同形）：`guide.tsx` 是 kit 生成副本（会被 sync 覆盖），本插件专属文案只放 `guide-steps.ts`。三步：先连一个浏览器 → 工具是懒注入的（默认只常驻 `bcdp_status`）→ agent 动页面时你能看见。本地标记 `dsh.guide.browser-cdp.skipped` 持久化：跳过/看完都不再自动弹，分节底部恒定留「重新查看引导」。零外部依赖、全程 try/catch，不参与设置数据臂。
+
+### 三、侧栏元数据面（8 项）
+
+- **M1–M3/M8（免费项）**：`viewportW/H`、`capturing`、`lastActive` 早已在 spaces 行里推送却无人消费。状态行现在串出 `1200×800 · 3s 前 · agent · 会话 a1b2`；`capturing===false` 追加「未截流」（`true`/未知是常态，不占位）；tab 条尾部补 `N 页`。`lastActive<=0` 一律**不显示**——0 是「worker 没采到帧」，不是 1970。
+- **M4**：某 tab 命中人机验证时该行加 `⚠` 角标（title 用既有 captcha 文案），Tab 与浮窗两处都加。
+- **M5/M6（宿主 1 处签名）**：ownership 与「哪个会话在驱动」都走**已有的** `focus` 事件——`TargetFocus` 补 `sessionId?`，`pushFocus(targetId, source, sessionId?)` 第三参可选，`noteToolFocus` 把已握在手里的 `sid` 传下去。客户端首次监听 `event: focus`，维护 `targetId→{source,sessionId}`，同值不触发重渲染，随 spaces 的 live ids 剪枝（不落 localStorage：targetId 是运行时句柄）。
+- **M7（worker 采集）**：`HUMAN_PROBE_JS` 的返回体扩为 `{detected,kind,readyState,dpr}`（同一次 `Runtime.evaluate`，零额外调用）；活动 tab 额外一次 `Page.getLayoutMetrics`，用 `layoutViewport.clientWidth / cssLayoutViewport.clientWidth` 推页面 zoom（`outerWidth/innerWidth` 在嵌入/远程场景不准，不采用）。`getLayoutMetrics` 缺席时 try/catch 后 zoom 置 null，spaces 行照旧完整。zoom=100% 与 DPR=1 不显示。
+- **通道治理（只治元数据，帧缓存不动）**：`lastActive` 进渲染前截断到秒；两处 `spaces` SSE 监听包 300ms **尾部合并**（连推 5 条 → 1 次 `store.update`）；`frame` 事件仍是零元数据。
+- **实现注记**：格式化抽 `src/client/space-meta.ts`（零中文纯函数，Tab 与浮窗共用同一份字符串），词条放 `src/client/locales.ts` 后 `Object.assign` 进 `watchEn`/`watchZh`——直接写进 `index.ts` 的中文字面量会撞 locale 守卫的硬编码棘轮（基线 148/82 不动）。
+
+门禁：`npm run typecheck` 双 project 干净；`npm test` **1398 passed / 13 skipped**（+27：`space-meta` 单测覆盖 `lastActive=0`、四档距今、`capturing` 三态、zoom=100/80/null、readyState 三态、owner 四种组合、合并器与词条成对；另含 action-label-contract / page-overlay / locale-guard）；`npm run build` 后 `lib/client.js` 含 `formatSpaceMeta`/`createSpacesCoalescer`/`truncateLastActive`/`GuidePanel` 与新增文案，`bin/cdp-cast-worker.mjs` 含 `devicePixelRatio`/`Page.getLayoutMetrics`/`cssLayoutViewport`。
+
 ## 1.14.10 (2026-11-22)
 
 **插件卫生审计三模式加强：P1 双清单漂移收尾（#19 家族第二轮）× P2 面板散文本地化（search-index#5 家族）× P3 stale build 重建。**

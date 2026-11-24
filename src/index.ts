@@ -1815,13 +1815,17 @@ const commonOutputSchema = {
  * #15 — a session id scopes the write into that session's focus slot; a call
  * with no session (operator paths, old clients) keeps the global store. The
  * global write stays best-effort exactly as before.
+ *
+ * The same session id also rides on the focus EVENT (M6): this function is the
+ * only place that holds a targetId and its sessionId at the same time, so it is
+ * the only place that can pair them for the panel's "who is driving" line.
  */
 function noteToolFocus(value: unknown, sessionId?: string): void {
   const targetId = focusIdFrom(value)
   if (targetId === null) return
   const sid = typeof sessionId === 'string' ? sessionId.trim() : ''
   if (sid !== '') sessionFocusStores.for(sid).set(targetId, 'agent')
-  void pushFocus(targetId, 'agent').catch(() => null)
+  void pushFocus(targetId, 'agent', sid === '' ? undefined : sid).catch(() => null)
 }
 
 function callingSessionId(exec: ToolExec | undefined): string | undefined {

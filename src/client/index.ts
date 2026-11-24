@@ -34,6 +34,10 @@ import { BROWSER_CDP_GUIDE_STEPS } from './guide-steps'
  * exposes the same constant via /api/bcdp/stats so the panel can self-heal.
  */
 import { CLIENT_BUILD } from './build'
+// 侧栏元数据行（M1–M8）：词条在 locales.ts（字典文件，避开 locale 守卫的硬编码棘轮），
+// 格式化与 spaces 合并器在 space-meta.ts（零中文纯函数，Tab 与浮窗共用）。
+import { SPACE_META_EN, SPACE_META_ZH } from './locales'
+import { createSpacesCoalescer, formatPageCount, formatSpaceMeta, joinMeta, truncateLastActive } from './space-meta'
 
 		// #region CDP browser bridge client: realtime watch-bubble
 		//
@@ -407,6 +411,10 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 			actionFailed: '操作失败',
 		}
 		var watchDict: Record<string, any> = { en: watchEn, zh: watchZh }
+		// 元数据行词条并入两个字典：`wt()` 仍然是唯一取词路径（含 {n} 替换），
+		// 只是词条本体留在 locales.ts，以便 locale 守卫把它们当作译文而不是硬编码。
+		Object.assign(watchEn, SPACE_META_EN)
+		Object.assign(watchZh, SPACE_META_ZH)
 		/**
 		 * 动作药丸取词：host 送来的 {zh,en} 对，按当前界面语言挑一个。
 		 * 不塞进 watchEn/watchZh 是因为这些词**由 host 侧单一真源产生**
@@ -818,6 +826,11 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
    used to read as duplicated tabs; a W1/W2 badge explains them instead of hiding. */
 .dsh-ego-tab .dsh-ego-tabwin { flex-shrink:0; font-size:9.5px; line-height:14px; padding:0 3px;
   border-radius:4px; border:1px solid currentColor; opacity:.55; letter-spacing:.2px; }
+/* M4 — this tab is sitting on a human-verification screen. One glyph is all the
+   room there is; the sentence lives in the title attribute. */
+.dsh-ego-tab .dsh-ego-tabwarn { flex-shrink:0; color:#ffcc00; font-size:11px; line-height:14px; }
+/* M8 — how many pages are open (tail of the strip). */
+.dsh-ego-tabcount { flex-shrink:0; align-self:center; font-size:10px; opacity:.55; padding-left:2px; }
 /* Transient failure text inside the strip (close refused, capture failed). */
 .dsh-ego-taberr { flex-shrink:0; font-size:10.5px; line-height:16px; padding:0 6px; border-radius:999px;
   color:#ff453a; border:1px solid rgba(255,69,58,.45); background: rgba(255,69,58,.12); }
@@ -2046,6 +2059,21 @@ h('button', { type: 'button', disabled: !writable || isFull(links) || hasCliLink
 				// be findable in lastList in time to follow it. We merge updates
 				// from both sources here and follow from this map instead.
 				const pageMeta = new Map()
+				// M5/M6 — 谁在驱动这个 tab。唯一来源是 host 的 `focus` 事件（工具结果带
+				// sessionId，人手点选不带）。随 spaces 的 live ids 剪枝、不落 localStorage：
+				// targetId 是运行时句柄，持久化它就是第二个真相源。
+				const owners = new Map<string, { source?: string; sessionId?: string }>()
+				// 当前状态行的节点与它对应的行：focus 到达时只改文字，不重建视图
+				// （重建会把 <img> 拆掉再贴，闪一下）。
+				let metaEl: HTMLElement | null = null
+				let metaRow: any = null
+				const ownerOf = (targetId: any) => owners.get(targetId) || null
+				const metaLineOf = (row: any) => (row ? joinMeta(formatSpaceMeta({ row: row, owner: ownerOf(row.targetId) }, Date.now(), wt)) : '')
+				const paintMeta = () => {
+					if (!metaEl) return
+					metaEl.textContent = metaLineOf(metaRow)
+					metaEl.hidden = metaEl.textContent === ''
+				}
 				const watchClientId = 'floating-' + Math.random().toString(36).slice(2)
 				let watchStarted = false, watchTargetId: any = null, watchRenewTimer: any = null, watchStopTimer: any = null, watchRequest: any = null
 				// Watch-loop guards. The old code re-entered syncWatch from an in-flight
@@ -2384,6 +2412,15 @@ h('button', { type: 'button', disabled: !writable || isFull(links) || hasCliLink
 						txt.style.overflow = 'hidden'
 						txt.style.textOverflow = 'ellipsis'
 						tab.appendChild(dot)
+						// M4 — 这个 tab 正在跟人机验证屏：一个小符号把"该我上手的那个"从
+						// 一排 tab 里筛出来，悬停才给完整句子（空间只够一个符号）。
+						if (s.humanCheck && s.humanCheck.detected) {
+							const warn = document.createElement('span')
+							warn.className = 'dsh-ego-tabwarn'
+							warn.textContent = wt('captchaTabBadge')
+							warn.title = wt('captchaTitle')
+							tab.appendChild(warn)
+						}
 						tab.appendChild(txt)
 						// Tab close "×": POST to the host close route, then refresh.
 						const closeBtn = document.createElement('span')
@@ -2438,6 +2475,14 @@ h('button', { type: 'button', disabled: !writable || isFull(links) || hasCliLink
 							;[...tabsEl.querySelectorAll('.dsh-ego-tab')].forEach(t => t.classList.toggle('active', (t as any).__tid === s.targetId))
 						})
 						tabsEl.appendChild(tab)
+					}
+					// M8 — 打开页面数。条里只有几行时这个数字也能回答"是不是还开着别的东西"。
+					const pageCount = formatPageCount(list.length, wt)
+					if (pageCount !== null) {
+						const tail = document.createElement('span')
+						tail.className = 'dsh-ego-tabcount'
+						tail.textContent = pageCount
+						strip.appendChild(tail)
 					}
 				}
 
@@ -2509,7 +2554,12 @@ h('button', { type: 'button', disabled: !writable || isFull(links) || hasCliLink
 				const renderSpaces = (spaces: any) => {
 					if (disposed) return
 					// 全模式: keep the whole inventory. 仅激活: render one tab (the active one).
-					const incoming = Array.isArray(spaces) ? spaces : []
+					// lastActive 先截到秒（spaces 每 ~500ms 一推，毫秒尾数只会让渲染白白比出差异）。
+					const incoming = truncateLastActive(Array.isArray(spaces) ? spaces : [] as any[])
+					// owners 只留活着的 tab（关掉的 tab 不留残影）。按 incoming 剪而不是
+					// lastList：仅激活模式下 lastList 只留一行，按它剪会误删其它 tab 的归属。
+					const liveAll = new Set(incoming.map((s: any) => s && s.targetId))
+					for (const id of [...owners.keys()]) if (!liveAll.has(id)) owners.delete(id)
 					lastList = trackAll ? incoming : incoming.filter((s: any) => s && s.active === true).slice(0, 1)
 					// "No active row" is NOT "no browser". A freshly attached worker has
 					// no focus yet, and a remote CDP attach has no /json/list to observe,
@@ -2759,6 +2809,16 @@ h('button', { type: 'button', disabled: !writable || isFull(links) || hasCliLink
 					}
 					view.appendChild(t)
 					view.appendChild(u)
+					// M1–M8 状态行：与侧栏 Tab 走同一个纯函数，两处文案因此不会漂移。
+					// 没东西可说时就整行不占位（老 worker 不推新字段是常态）。
+					metaEl = document.createElement('div')
+					metaEl.className = 'dsh-ego-liveurl'
+					metaEl.style.fontSize = '10.5px'
+					metaEl.style.opacity = '.7'
+					metaRow = current
+					metaEl.textContent = metaLineOf(current)
+					metaEl.hidden = metaEl.textContent === ''
+					view.appendChild(metaEl)
 					body.appendChild(view)
 				}
 
@@ -2903,6 +2963,9 @@ h('button', { type: 'button', disabled: !writable || isFull(links) || hasCliLink
 					}
 				}
 
+				// spaces 尾部合并：worker 每个 keepalive tick（~500ms）推一次全量，tab churn
+				// 时更密；每一条都换一次视图没有信息价值（全量快照，中间态没人看得到）。
+				const spacesCoalescer = createSpacesCoalescer<any[]>((list: any[]) => { renderSpaces(list) }, 300)
 				let reconnectFallbackTimer: any = null
 				const openStream = () => {
 					if (disposed) return
@@ -2933,8 +2996,24 @@ h('button', { type: 'button', disabled: !writable || isFull(links) || hasCliLink
 						if (Array.isArray(list)) {
 							// Even for an empty list, we want to call renderSpaces
 							// so the "no live browser" placeholder shows up.
-							renderSpaces(list)
+							// 300ms 尾部合并（D4）：最后一条赢。
+							spacesCoalescer.push(list)
 						}
+					} catch {}
+				})
+				// M5/M6 — ownership / 会话归属。host 在每次工具结果与面板点选后推一条
+				// `focus`；这里只累积 targetId→{source,sessionId}，不推断、不持久化。
+				sse.addEventListener('focus', (ev: any) => {
+					if (disposed) return
+					try {
+						const f = JSON.parse(ev.data)
+						// null = focus 被清（tab 没了）：留着旧归属就是撒谎。
+						if (!f || typeof f.targetId !== 'string') { owners.clear(); paintMeta(); return }
+						owners.set(f.targetId, {
+							source: typeof f.source === 'string' ? f.source : undefined,
+							sessionId: typeof f.sessionId === 'string' ? f.sessionId : undefined,
+						})
+						paintMeta()
 					} catch {}
 				})
 				sse.addEventListener('capture-status', (ev: any) => {
@@ -3209,6 +3288,7 @@ clearTimeout((panel as any)._dshHideT)
 
 				return () => {
 					disposed = true
+					spacesCoalescer.cancel()
 					if (liveFlushRaf != null) try { window.cancelAnimationFrame(liveFlushRaf) } catch {}
 					if (followTimer) window.clearTimeout(followTimer)
 					if (reconnectFallbackTimer) window.clearTimeout(reconnectFallbackTimer)
@@ -3462,6 +3542,9 @@ clearTimeout((panel as any)._dshHideT)
   flex-shrink: 0; font-size: 9px; line-height: 12px; padding: 0 3px; border-radius: 4px;
   border: 1px solid currentColor; opacity: .55; letter-spacing: .2px;
 }
+/* M4 — human-verification glyph on the row; M8 — open-page count at the tail. */
+.dsh-ego-side-tab > .dsh-ego-side-tabwarn { flex-shrink: 0; color: #e0a520; font-size: 10px; }
+.dsh-ego-side-tabcount { flex-shrink: 0; align-self: center; font-size: 10px; opacity: .55; padding-left: 2px; }
 .dsh-ego-side-tab:hover { opacity: 1; background: rgba(128,128,128,.2); }
 .dsh-ego-side-tab.active {
   background: #0a84ff; color: #fff; border-color: transparent; opacity: 1;
@@ -4192,6 +4275,10 @@ clearTimeout((panel as any)._dshHideT)
 			this.store = ensureSnapshotStoreCreator()(this._initialState())
 			this.frameCache = new Map()
 			this.pageMeta = new Map()
+			// M5/M6 — targetId → 谁在驱动（focus 事件累积）。随 live ids 剪枝、不持久化。
+			this.owners = new Map()
+			// spaces 尾部合并器（openStream 时重建）
+			this.spacesCoalescer = null
 			this.lastList = []
 			this.pinned = null
 			this.currentActiveId = null
@@ -4267,6 +4354,9 @@ clearTimeout((panel as any)._dshHideT)
 				historyOpen: false,
 				zoomHint: null,
 				wiringStale: false,
+				// M1–M8 状态行（viewport·设备·距今·加载态·未截流·谁在驱动），
+				// 由 _recompute 用 formatSpaceMeta 拼出；这是与浮窗逐字一致的那一串。
+				spaceMeta: '',
 				backend: 'cdp', streamState: 'idle', streamMessage: '', streamGeneration: 0, streamMime: 'video/mp4; codecs="avc1.42E01E"', engineUnsupported: false,
 				pick: 'off', pickMessage: '',
 				// 活动药丸（与页面内覆盖层同一句话）：{zh,en} 由 host 的
@@ -4330,6 +4420,11 @@ clearTimeout((panel as any)._dshHideT)
 				}
 			}
 			this.currentActiveId = currentTargetId
+			// M1–M8 状态行：与浮窗共用 formatSpaceMeta（同一份字符串），这里只负责把
+			// 「这个 targetId 归谁」喂进去。没有当前页就整行空着，不留占位符。
+			var metaLine = currentSpace
+				? joinMeta(formatSpaceMeta({ row: currentSpace, owner: self.owners.get(currentTargetId) || null }, Date.now(), wt))
+				: ''
 			// Wiring watchdog: the live <img>/<video> is bound to this controller by a
 			// ref callback at attach time. If the binding was ever missed (mount-order
 			// race) or the element was replaced, liveImgTargetId drifts from the
@@ -4367,6 +4462,7 @@ clearTimeout((panel as any)._dshHideT)
 				s.link = self.link
 				s.trackAll = self.trackAll
 				s.agentActiveId = self.agentActiveId
+				s.spaceMeta = metaLine
 			})
 			this._syncWatch(currentTargetId)
 		}
@@ -4402,6 +4498,7 @@ clearTimeout((panel as any)._dshHideT)
 		LivePreviewController.prototype.dispose = function () {
 			this.keyboardProxy.dispose()
 			this.disposed = true
+			if (this.spacesCoalescer) this.spacesCoalescer.cancel()
 			try { this.pickControl.disable() } catch (e) {}
 			if (this.liveFlushRaf != null) try { window.cancelAnimationFrame(this.liveFlushRaf) } catch (e) {}
 			if (this.followTimer) window.clearTimeout(this.followTimer)
@@ -4549,7 +4646,13 @@ clearTimeout((panel as any)._dshHideT)
 		}
 		LivePreviewController.prototype._processSpaces = function (spaces: any) {
 			if (this.disposed) return
-			var incoming = Array.isArray(spaces) ? spaces : []
+			// lastActive 截到秒（spaces 每 ~500ms 一推，毫秒尾数只会白白制造重渲染差异）。
+			var incoming = truncateLastActive(Array.isArray(spaces) ? spaces : [])
+			// owners 只留活着的 tab。按 incoming 而不是 this.lastList 剪：仅激活模式下
+			// lastList 只留一行，按它剪会误删其它 tab 的归属。
+			var liveAll = new Set(incoming.map(function (s: any) { return s && s.targetId }))
+			var own = this.owners
+			own.forEach(function (_: any, id: any) { if (!liveAll.has(id)) own.delete(id) })
 			// 仅激活: the panel renders ONE tab (the browser-active one). 全模式 keeps
 			// the whole inventory so every tab has its own row and picture.
 			this.lastList = this.trackAll ? incoming : incoming.filter(function (s: any) { return s && s.active === true }).slice(0, 1)
@@ -4589,10 +4692,38 @@ clearTimeout((panel as any)._dshHideT)
 			if (busy !== this.lastSawActive) this.lastSawActive = busy
 			this._recompute()
 		}
+		/**
+		 * M5/M6 — 记下「谁在驱动这个 tab」（焦点事件累积）。
+		 *
+		 * focus 每次工具调用都会推一条（高频），所以同值不重算：一次白重渲染的
+		 * 代价在这里被幂等写入吃掉（R6）。
+		 */
+		LivePreviewController.prototype._noteFocus = function (f: any) {
+			var changed = false
+			if (!f || typeof f.targetId !== 'string') {
+				// null = focus 被清（tab 没了）：留着旧归属就是撒谎。
+				if (this.owners.size > 0) { this.owners.clear(); changed = true }
+			} else {
+				var next = {
+					source: typeof f.source === 'string' ? f.source : undefined,
+					sessionId: typeof f.sessionId === 'string' ? f.sessionId : undefined,
+				}
+				var prev = this.owners.get(f.targetId)
+				if (!prev || prev.source !== next.source || prev.sessionId !== next.sessionId) {
+					this.owners.set(f.targetId, next)
+					changed = true
+				}
+			}
+			if (changed) this._recompute()
+		}
 		LivePreviewController.prototype.openStream = function () {
 			if (this.disposed || !this.visible) return
 			this.closeStream()
 			var self = this
+			// spaces 尾部合并（D4）：worker 每个 keepalive tick 推一次全量，连推 5 条只
+			// 落 1 次 store.update。重建前先取消旧的，避免两套计时器同时存在。
+			if (this.spacesCoalescer) this.spacesCoalescer.cancel()
+			this.spacesCoalescer = createSpacesCoalescer(function (list: any[]) { self._processSpaces(list) }, 300)
 			fetch(WATCH_STATUS_ROUTE, { cache: 'no-store' }).then(function (res) { return res.ok ? res.json() : null }).then(function (status) { self._applyCaptureStatus(status) }).catch(function () {})
 			try {
 				this.sse = new EventSource(bcdpRoute('/api/bcdp/stream'))
@@ -4618,9 +4749,15 @@ clearTimeout((panel as any)._dshHideT)
 						// the active page, and pushes a store snapshot. The
 						// worker broadcasts this every keepalive tick (~500ms)
 						// and on tab churn, replacing the old polling loop.
-						self._processSpaces(list)
+						// 300ms 尾部合并：最后一条赢。
+						if (self.spacesCoalescer) self.spacesCoalescer.push(list)
+						else self._processSpaces(list)
 					}
 				} catch (e) {}
+			})
+			this.sse.addEventListener('focus', function (ev: any) {
+				if (self.disposed) return
+				try { self._noteFocus(JSON.parse(ev.data)) } catch (e) {}
 			})
 			// 活动药丸：host 在每个 bcdp_* 调用的顶部推一条带 label 的
 			// `tool-call` 事件。面板与页面内角标说同一句话（同一个词表），
@@ -5317,6 +5454,10 @@ clearTimeout((panel as any)._dshHideT)
 						},
 							badge !== '' ? h('span', { className: 'dsh-ego-side-tabwin' }, badge) : null,
 							h('span', { className: 'dsh-ego-side-tabdot' }),
+							// M4 — 该 tab 正在跟人机验证屏：角标只占一个字符，句子放 title。
+							s.humanCheck && s.humanCheck.detected
+								? h('span', { className: 'dsh-ego-side-tabwarn', title: wt('captchaTitle') }, wt('captchaTabBadge'))
+								: null,
 							h('span', { className: 'dsh-ego-side-tabtxt', style: { maxWidth: '150px', overflow: 'hidden', textOverflow: 'ellipsis' } }, s.title || s.url || wt('newTab')),
 							h('span', {
 								className: 'dsh-ego-side-tabclose',
@@ -5324,7 +5465,11 @@ clearTimeout((panel as any)._dshHideT)
 								onClick: function (e: any) { e.stopPropagation(); controller.closeTab(s.targetId) },
 							}, '×')
 						)
-					})
+					}),
+					// M8 — 打开页面数（尾部）。仅激活模式下真就是 1（条里真只有一行）。
+					formatPageCount(state.spaces.length, wt) !== null
+						? h('span', { className: 'dsh-ego-side-tabcount' }, formatPageCount(state.spaces.length, wt))
+						: null
 				)
 				: null
 			// Main live view
@@ -5363,7 +5508,7 @@ clearTimeout((panel as any)._dshHideT)
 					h('div', { className: 'dsh-ego-side-liveview' },
 						h('div', { className: 'dsh-ego-side-livebadge' },
 							h('span', { className: 'dsh-ego-side-state-dot' + (state.pinned ? ' pin' : state.busy ? ' busy' : '') }),
-							h('span', { style: { flex: 1 } }, (state.backend === 'ffmpeg' ? 'FFmpeg · H.264' : 'CDP') + ' · ' + (state.streamState === 'failed' ? (state.streamMessage || wt('failed')) : state.streamState === 'unsupported' ? wt('engineUnsupportedBanner') : state.streamState) + (state.currentTargetId ? (state.wiringStale ? ' · ' + wt('stale') : ' · ' + wt('captured')) : '')),
+							h('span', { style: { flex: 1 } }, (state.backend === 'ffmpeg' ? 'FFmpeg · H.264' : 'CDP') + ' · ' + (state.streamState === 'failed' ? (state.streamMessage || wt('failed')) : state.streamState === 'unsupported' ? wt('engineUnsupportedBanner') : state.streamState) + (state.currentTargetId ? (state.wiringStale ? ' · ' + wt('stale') : ' · ' + wt('captured')) : '') + (state.spaceMeta ? ' · ' + state.spaceMeta : '')),
 							state.pinned
 								? h('button', {
 									className: 'dsh-ego-side-back', type: 'button',

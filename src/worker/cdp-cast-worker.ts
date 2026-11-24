@@ -58,11 +58,18 @@ const DEFAULT_CONFIG: CastConfig = {
 let castConfig: CastConfig = { ...DEFAULT_CONFIG }
 try { castConfig = { ...castConfig, ...JSON.parse(process.argv[2] || '{}') } as CastConfig } catch { /* ignore */ }
 
+/**
+ * One Runtime.evaluate answers three questions the panel used to guess at:
+ * `humanCheck` (unchanged), `readyState` (a page still loading looks dead in a
+ * screenshot) and `dpr` (a 1.25 phone-preview layout explains "why is the text
+ * smaller"). All three ride the SAME 5s-throttled probe — no extra CDP call.
+ */
 const HUMAN_PROBE_JS = `(() => {
+  const readyState=document.readyState,dpr=(window.devicePixelRatio||1);
   const el=document.querySelector('iframe[src*="recaptcha"],.g-recaptcha,.h-captcha,iframe[src*="hcaptcha"],.cf-turnstile,iframe[src*="turnstile"],iframe[src*="cloudflare"],#challenge-form,.challenge-form,#captcha,.captcha');
-  if(el)return{detected:true,kind:/recaptcha/i.test(el.outerHTML)?'recaptcha':/hcaptcha/i.test(el.outerHTML)?'hcaptcha':/turnstile/i.test(el.outerHTML)?'turnstile':'captcha'};
+  if(el)return{detected:true,kind:/recaptcha/i.test(el.outerHTML)?'recaptcha':/hcaptcha/i.test(el.outerHTML)?'hcaptcha':/turnstile/i.test(el.outerHTML)?'turnstile':'captcha',readyState:readyState,dpr:dpr};
   const t=((document.body&&document.body.innerText)||'').slice(0,120000).toLowerCase();
-  return /verify you are human|your activity looks unusual|captcha|i.?m not a robot|人机验证|安全验证|我是人类|验证码|滑块验证/.test(t)?{detected:true,kind:'captcha'}:{detected:false,kind:null};
+  return /verify you are human|your activity looks unusual|captcha|i.?m not a robot|人机验证|安全验证|我是人类|验证码|滑块验证/.test(t)?{detected:true,kind:'captcha',readyState:readyState,dpr:dpr}:{detected:false,kind:null,readyState:readyState,dpr:dpr};
 })()`
 
 interface SseClient {
@@ -105,6 +112,13 @@ interface JpegFrame {
 const sseClients = new Set<SseClient>()
 const videoClients = new Set<VideoClient>()
 const probeCache = new Map<string, { at: number; human: unknown }>()
+/**
+ * Page zoom per target, kept apart from `probeCache` on purpose: the two are
+ * written by different round-trips and must not overwrite each other.
+ * `zoom: null` = "asked and could not know" (a backend without
+ * Page.getLayoutMetrics) — the panel then shows nothing rather than a guess.
+ */
+const zoomCache = new Map<string, { at: number; zoom: number | null }>()
 const frameCache = new Map<string, CachedFrame>()
 // Panel size-sync caches: a CDP round-trip for the windowId/bounds/chrome-frame
 // on every drag step is ~5 round-trips; cache them so each step is one
@@ -406,6 +420,39 @@ async function activeTargetId(sessionId?: string): Promise<string | null> {
   return (await activeTargetInfo(undefined, sessionId)).id
 }
 
+/** Shape of HUMAN_PROBE_JS's answer (every branch carries all four fields). */
+interface ProbeValue {
+  detected?: boolean
+  kind?: string | null
+  readyState?: string
+  dpr?: number
+}
+
+/**
+ * Page zoom for one target, on the same 5s cadence as the probe.
+ *
+ * Why the ratio of two viewports: `layoutViewport.clientWidth` is in CSS pixels
+ * BEFORE zoom and `cssLayoutViewport.clientWidth` is the visual width, so their
+ * ratio IS the zoom factor (1 = 100%). `outerWidth/innerWidth` was rejected — it
+ * reports the browser chrome and is wrong for embedded/remote targets.
+ *
+ * Never throws into the caller: `Page.getLayoutMetrics` is absent on some CDP
+ * variants, and a metadata probe must not cost a spaces row.
+ */
+function probeZoom(browser: ActiveBrowser, targetId: string, now: number): void {
+  const cached = zoomCache.get(targetId)
+  if (cached !== undefined && now - cached.at <= 5000) return
+  browser.sessions.call(targetId, 'Page.getLayoutMetrics', {}, 3000)
+    .then((raw: unknown) => {
+      const metrics = (raw || {}) as { layoutViewport?: { clientWidth?: number }; cssLayoutViewport?: { clientWidth?: number } }
+      const layoutW = Number(metrics.layoutViewport?.clientWidth)
+      const cssW = Number(metrics.cssLayoutViewport?.clientWidth)
+      const pct = Number.isFinite(layoutW) && Number.isFinite(cssW) && cssW > 0 ? Math.round((layoutW / cssW) * 100) : 0
+      zoomCache.set(targetId, { at: Date.now(), zoom: pct > 0 ? pct : null })
+    })
+    .catch(() => { zoomCache.set(targetId, { at: Date.now(), zoom: null }) })
+}
+
 async function snapshotSpaces(sessionId?: string): Promise<Array<Record<string, unknown>>> {
   // Bind the live browser once: the module-level `active` may be replaced by a
   // reconnect between two awaits, and this snapshot must describe one connection.
@@ -420,16 +467,24 @@ async function snapshotSpaces(sessionId?: string): Promise<Array<Record<string, 
   // multiple targets may be captured at once, so `capturing` is per-row now.
   const capturingIds = new Set((currentStatus.targetIds as string[] | undefined) ?? (currentStatus.targetId ? [currentStatus.targetId as string] : []))
   const spaces: Array<Record<string, unknown>> = []
+  const now = Date.now()
   for (const target of targets.slice(0, 30)) {
     const frame = frameCache.get(target.targetId)
     const session = browser.sessions.get(target.targetId)
     const cached = probeCache.get(target.targetId)
-    if (!cached || Date.now() - cached.at > 5000) {
+    if (!cached || now - cached.at > 5000) {
       browser.sessions.call(target.targetId, 'Runtime.evaluate', { expression: HUMAN_PROBE_JS, returnByValue: true, awaitPromise: false }, 3000)
         .then((result: unknown) => { const r = result as { result?: { value?: unknown } }; probeCache.set(target.targetId, { at: Date.now(), human: r.result?.value || null }) }).catch(() => { /* ignore */ })
     }
-    spaces.push({ targetId: target.targetId, url: target.url, title: target.title, active: target.targetId === activeId, activeSource: target.targetId === activeId ? activeInfo.source : '', capturing: capturingIds.has(target.targetId), lastActive: frame?.lastActive || 0, viewportW: frame?.viewportW || session?.viewportW, viewportH: frame?.viewportH || session?.viewportH, humanCheck: cached?.human || null })
+    // Only the tab the user is looking at pays the extra round-trip; a background
+    // tab's zoom cannot change without it becoming active anyway.
+    if (target.targetId === activeId) probeZoom(browser, target.targetId, now)
+    const probe = (cached?.human ?? null) as ProbeValue | null
+    spaces.push({ targetId: target.targetId, url: target.url, title: target.title, active: target.targetId === activeId, activeSource: target.targetId === activeId ? activeInfo.source : '', capturing: capturingIds.has(target.targetId), lastActive: frame?.lastActive || 0, viewportW: frame?.viewportW || session?.viewportW, viewportH: frame?.viewportH || session?.viewportH, humanCheck: probe === null ? null : { detected: probe.detected === true, kind: probe.kind ?? null }, readyState: probe?.readyState, dpr: probe?.dpr, zoom: zoomCache.get(target.targetId)?.zoom ?? null })
   }
+  // A target id is a runtime handle: a closed tab must not leave a zoom entry behind.
+  const liveIds = new Set(targets.map((target) => target.targetId))
+  for (const id of [...zoomCache.keys()]) if (!liveIds.has(id)) zoomCache.delete(id)
   spaces.sort((a, b) => Number(b.active) - Number(a.active) || (b.lastActive as number) - (a.lastActive as number))
   return spaces
 }

@@ -6660,15 +6660,29 @@ try {
 		...JSON.parse(process.argv[2] || "{}")
 	};
 } catch {}
+/**
+* One Runtime.evaluate answers three questions the panel used to guess at:
+* `humanCheck` (unchanged), `readyState` (a page still loading looks dead in a
+* screenshot) and `dpr` (a 1.25 phone-preview layout explains "why is the text
+* smaller"). All three ride the SAME 5s-throttled probe — no extra CDP call.
+*/
 const HUMAN_PROBE_JS = `(() => {
+  const readyState=document.readyState,dpr=(window.devicePixelRatio||1);
   const el=document.querySelector('iframe[src*="recaptcha"],.g-recaptcha,.h-captcha,iframe[src*="hcaptcha"],.cf-turnstile,iframe[src*="turnstile"],iframe[src*="cloudflare"],#challenge-form,.challenge-form,#captcha,.captcha');
-  if(el)return{detected:true,kind:/recaptcha/i.test(el.outerHTML)?'recaptcha':/hcaptcha/i.test(el.outerHTML)?'hcaptcha':/turnstile/i.test(el.outerHTML)?'turnstile':'captcha'};
+  if(el)return{detected:true,kind:/recaptcha/i.test(el.outerHTML)?'recaptcha':/hcaptcha/i.test(el.outerHTML)?'hcaptcha':/turnstile/i.test(el.outerHTML)?'turnstile':'captcha',readyState:readyState,dpr:dpr};
   const t=((document.body&&document.body.innerText)||'').slice(0,120000).toLowerCase();
-  return /verify you are human|your activity looks unusual|captcha|i.?m not a robot|人机验证|安全验证|我是人类|验证码|滑块验证/.test(t)?{detected:true,kind:'captcha'}:{detected:false,kind:null};
+  return /verify you are human|your activity looks unusual|captcha|i.?m not a robot|人机验证|安全验证|我是人类|验证码|滑块验证/.test(t)?{detected:true,kind:'captcha',readyState:readyState,dpr:dpr}:{detected:false,kind:null,readyState:readyState,dpr:dpr};
 })()`;
 const sseClients = /* @__PURE__ */ new Set();
 const videoClients = /* @__PURE__ */ new Set();
 const probeCache = /* @__PURE__ */ new Map();
+/**
+* Page zoom per target, kept apart from `probeCache` on purpose: the two are
+* written by different round-trips and must not overwrite each other.
+* `zoom: null` = "asked and could not know" (a backend without
+* Page.getLayoutMetrics) — the panel then shows nothing rather than a guess.
+*/
+const zoomCache = /* @__PURE__ */ new Map();
 const frameCache = /* @__PURE__ */ new Map();
 const winCache = /* @__PURE__ */ new Map();
 const chromeFrameCache = /* @__PURE__ */ new Map();
@@ -7054,6 +7068,36 @@ async function activeTargetInfo(known, sessionId) {
 async function activeTargetId(sessionId) {
 	return (await activeTargetInfo(void 0, sessionId)).id;
 }
+/**
+* Page zoom for one target, on the same 5s cadence as the probe.
+*
+* Why the ratio of two viewports: `layoutViewport.clientWidth` is in CSS pixels
+* BEFORE zoom and `cssLayoutViewport.clientWidth` is the visual width, so their
+* ratio IS the zoom factor (1 = 100%). `outerWidth/innerWidth` was rejected — it
+* reports the browser chrome and is wrong for embedded/remote targets.
+*
+* Never throws into the caller: `Page.getLayoutMetrics` is absent on some CDP
+* variants, and a metadata probe must not cost a spaces row.
+*/
+function probeZoom(browser, targetId, now) {
+	const cached = zoomCache.get(targetId);
+	if (cached !== void 0 && now - cached.at <= 5e3) return;
+	browser.sessions.call(targetId, "Page.getLayoutMetrics", {}, 3e3).then((raw) => {
+		const metrics = raw || {};
+		const layoutW = Number(metrics.layoutViewport?.clientWidth);
+		const cssW = Number(metrics.cssLayoutViewport?.clientWidth);
+		const pct = Number.isFinite(layoutW) && Number.isFinite(cssW) && cssW > 0 ? Math.round(layoutW / cssW * 100) : 0;
+		zoomCache.set(targetId, {
+			at: Date.now(),
+			zoom: pct > 0 ? pct : null
+		});
+	}).catch(() => {
+		zoomCache.set(targetId, {
+			at: Date.now(),
+			zoom: null
+		});
+	});
+}
 async function snapshotSpaces(sessionId) {
 	const browser = active;
 	if (browser === null) return [];
@@ -7062,11 +7106,12 @@ async function snapshotSpaces(sessionId) {
 	const activeId = activeInfo.id;
 	const capturingIds = new Set(currentStatus.targetIds ?? (currentStatus.targetId ? [currentStatus.targetId] : []));
 	const spaces = [];
+	const now = Date.now();
 	for (const target of targets.slice(0, 30)) {
 		const frame = frameCache.get(target.targetId);
 		const session = browser.sessions.get(target.targetId);
 		const cached = probeCache.get(target.targetId);
-		if (!cached || Date.now() - cached.at > 5e3) browser.sessions.call(target.targetId, "Runtime.evaluate", {
+		if (!cached || now - cached.at > 5e3) browser.sessions.call(target.targetId, "Runtime.evaluate", {
 			expression: HUMAN_PROBE_JS,
 			returnByValue: true,
 			awaitPromise: false
@@ -7077,6 +7122,8 @@ async function snapshotSpaces(sessionId) {
 				human: r.result?.value || null
 			});
 		}).catch(() => {});
+		if (target.targetId === activeId) probeZoom(browser, target.targetId, now);
+		const probe = cached?.human ?? null;
 		spaces.push({
 			targetId: target.targetId,
 			url: target.url,
@@ -7087,9 +7134,17 @@ async function snapshotSpaces(sessionId) {
 			lastActive: frame?.lastActive || 0,
 			viewportW: frame?.viewportW || session?.viewportW,
 			viewportH: frame?.viewportH || session?.viewportH,
-			humanCheck: cached?.human || null
+			humanCheck: probe === null ? null : {
+				detected: probe.detected === true,
+				kind: probe.kind ?? null
+			},
+			readyState: probe?.readyState,
+			dpr: probe?.dpr,
+			zoom: zoomCache.get(target.targetId)?.zoom ?? null
 		});
 	}
+	const liveIds = new Set(targets.map((target) => target.targetId));
+	for (const id of [...zoomCache.keys()]) if (!liveIds.has(id)) zoomCache.delete(id);
 	spaces.sort((a, b) => Number(b.active) - Number(a.active) || b.lastActive - a.lastActive);
 	return spaces;
 }

@@ -27,14 +27,25 @@ export interface TargetFocus {
   source: FocusSource
   /** When the focus was written (ms). Used only for staleness reports. */
   at: number
+  /**
+   * Which session's tool drove this tab. Only a tool result carries one — an
+   * operator click has no session, so the panel reads "you" for it. Optional
+   * on purpose: old hosts never send it and old clients ignore it.
+   */
+  sessionId?: string
 }
 
 type Listener = (focus: TargetFocus | null) => void
 
 export interface FocusStore {
   get(): TargetFocus | null
-  /** Record the tab the operation side now owns. Empty id clears the focus. */
-  set(targetId: string, source: FocusSource, at?: number): TargetFocus | null
+  /**
+   * Record the tab the operation side now owns. Empty id clears the focus.
+   *
+   * `sessionId` rides along for the panel's "who is driving" line; it is the
+   * 4th argument (after `at`) so every existing caller keeps its meaning.
+   */
+  set(targetId: string, source: FocusSource, at?: number, sessionId?: string): TargetFocus | null
   /** Drop the focus — used when the worker reports the tab is gone. */
   clear(): void
   /**
@@ -52,21 +63,24 @@ export function createFocusStore(now: () => number = () => Date.now()): FocusSto
   const emit = (): void => { for (const listener of listeners) listener(focus) }
   return {
     get: () => focus,
-    set(targetId, source, at) {
+    set(targetId, source, at, sessionId) {
       const id = String(targetId ?? '').trim()
+      const sid = typeof sessionId === 'string' && sessionId.trim() !== '' ? sessionId.trim() : undefined
       if (id === '') {
         if (focus === null) return null
         focus = null
         emit()
         return null
       }
-      // Re-writing the same id/source is a no-op: a poll loop must not emit an
-      // event per tick.
-      if (focus !== null && focus.targetId === id && focus.source === source) {
+      // Re-writing the same id/source/session is a no-op: a poll loop must not
+      // emit an event per tick. A DIFFERENT session on the same tab IS news.
+      if (focus !== null && focus.targetId === id && focus.source === source && focus.sessionId === sid) {
         focus = { ...focus, at: at ?? now() }
         return focus
       }
-      focus = { targetId: id, source, at: at ?? now() }
+      // `sessionId` is omitted (not set to undefined) when unknown, so a plain
+      // operator write does not grow a key nobody reads.
+      focus = { ...(sid === undefined ? {} : { sessionId: sid }), targetId: id, source, at: at ?? now() }
       emit()
       return focus
     },

@@ -306,6 +306,21 @@ export interface CliSpaceRow {
   /** Browser window the tab lives in. Two windows with the same pages look like
    * duplicated rows; the panel shows a W1/W2 badge instead of hiding one. */
   windowId?: number
+  /** Foreground source — internal semantics (which observer said "active"), never rendered. */
+  activeSource?: string
+  /** The capture lease currently screencasts this tab. `false` means "not capturing
+   * this one" and the panel says so; `undefined` (old worker) says nothing. */
+  capturing?: boolean
+  viewportW?: number
+  viewportH?: number
+  humanCheck?: { detected?: boolean; kind?: string | null } | null
+  /** Document readiness (probe-collected). Only `loading` is worth showing. */
+  readyState?: 'loading' | 'interactive' | 'complete'
+  /** Device pixel ratio; 1 = conventional, so the panel only speaks up when it is not. */
+  dpr?: number
+  /** Page zoom as a percentage derived from getLayoutMetrics; 100 = unzoomed.
+   * `null` when the backend has no such call — the panel then shows nothing. */
+  zoom?: number | null
 }
 
 export function broadcastCliFrame(
@@ -384,7 +399,16 @@ export function panelWatcherCount(): number {
  */
 export function broadcastFocus(focus: TargetFocus | null): void {
   if (sseClients.size === 0) return
-  const payload = focus === null ? null : { targetId: focus.targetId, source: focus.source, at: focus.at }
+  const payload = focus === null
+    ? null
+    // `sessionId` only rides along when known: an operator click has no session,
+    // and a field that is always present but usually empty is noise on the wire.
+    : {
+      targetId: focus.targetId,
+      source: focus.source,
+      at: focus.at,
+      ...(focus.sessionId === undefined ? {} : { sessionId: focus.sessionId }),
+    }
   const chunk = `event: focus\ndata: ${JSON.stringify(payload)}\n\n`
   for (const client of sseClients) {
     try { client.write(chunk) } catch { /* a dead client is dropped by its own close handler */ }
@@ -409,10 +433,14 @@ export function setFocusPusher(fn: typeof focusPusher): void {
  *
  * This is the single entry point for BOTH producers: an operator click and a
  * tool result that reports the tab it just drove.
+ *
+ * A tool result also knows WHICH session drove it (`sessionId`), so the panel can
+ * answer "who is driving this page" instead of guessing from the tool-call
+ * counter. Operator paths leave it out and read as "you".
  */
-export async function pushFocus(targetId: string, source: TargetFocus['source'] = 'agent'): Promise<TargetFocus | null> {
+export async function pushFocus(targetId: string, source: TargetFocus['source'] = 'agent', sessionId?: string): Promise<TargetFocus | null> {
   const id = String(targetId ?? '').trim()
-  const focus = defaultFocusStore.set(id, source)
+  const focus = defaultFocusStore.set(id, source, undefined, sessionId)
   broadcastFocus(focus)
   if (id !== '' && focusPusher !== null) {
     const result = await focusPusher(id).catch(() => null)

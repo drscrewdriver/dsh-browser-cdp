@@ -405,6 +405,15 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 			actionFailed: '操作失败',
 		}
 		var watchDict: Record<string, any> = { en: watchEn, zh: watchZh }
+		/**
+		 * 动作药丸取词：host 送来的 {zh,en} 对，按当前界面语言挑一个。
+		 * 不塞进 watchEn/watchZh 是因为这些词**由 host 侧单一真源产生**
+		 * （`TOOL_ACTION_LABELS`），客户端只做选择，不做第二份表。
+		 */
+		function pickActionLabel(label: any): string {
+			if (!label || typeof label !== 'object') return ''
+			return _egoLocale === 'zh' ? (label.zh || label.en || '') : (label.en || label.zh || '')
+		}
 		function wt(key: any, params: any = undefined) {
 			var dict: any = watchDict[_egoLocale] || watchEn
 			var text = dict[key] || (watchEn as any)[key] || key
@@ -1777,7 +1786,7 @@ h('button', { type: 'button', disabled: !writable || isFull(links) || hasCliLink
 				panel.innerHTML = `
 					<div id="dsh-ego-head">
 						<span class="dsh-ego-grip" title="${wt('dragHint')}">${ICON_GRIP}</span>
-						<span id="dsh-ego-title">${ICON_GLOBE}<span style="margin-left:6px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${wt('title')}</span><span id="dsh-ego-ver" style="margin-left:6px;font-size:10px;opacity:.5;flex-shrink:0;">v${CLIENT_BUILD}</span></span>
+						<span id="dsh-ego-title">${ICON_GLOBE}<span style="margin-left:6px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${wt('title')}</span><span id="dsh-ego-ver" style="margin-left:6px;font-size:10px;opacity:.5;flex-shrink:0;">v${CLIENT_BUILD}</span><span id="dsh-ego-action" hidden style="margin-left:8px;flex-shrink:0;display:inline-flex;align-items:center;gap:5px;padding:2px 8px;border-radius:999px;font-size:10.5px;background:rgba(77,107,254,.14);color:var(--dsw-alias-label-primary,#4d6bfe);border:1px solid rgba(77,107,254,.32);"></span></span>
 						<button id="dsh-ego-refresh" class="dsh-ego-iconbtn" title="${wt('refresh')}">${ICON_REFRESH}</button>
 						<button id="dsh-ego-historybtn" class="dsh-ego-iconbtn off" title="${wt('historyShow')}">${ICON_CLOCK}</button>
 						<button id="dsh-ego-close" class="dsh-ego-iconbtn" title="${wt('settingsHide')}">${ICON_CLOSE}</button>
@@ -2911,6 +2920,27 @@ h('button', { type: 'button', disabled: !writable || isFull(links) || hasCliLink
 				sse.addEventListener('capture-status', (ev: any) => {
 					try {
 						applyCaptureStatus(JSON.parse(ev.data))
+					} catch {}
+				})
+				// 活动药丸（浮窗侧）：与页面内角标、侧栏 Tab 的药丸同一句话。
+				// 三处渲染各自独立（浮窗是 vanilla DOM、Tab 是 React），但词表只有
+				// host 一份（TOOL_ACTION_LABELS），所以它们不会说岔。
+				let actionTimer: any = null
+				sse.addEventListener('tool-call', (ev: any) => {
+					if (disposed) return
+					try {
+						const m = JSON.parse(ev.data)
+						const label = m && m.label
+						if (!label) return
+						const el = panel.querySelector('#dsh-ego-action') as HTMLElement | null
+						if (!el) return
+						const text = pickActionLabel(label)
+						if (text === '') return
+						el.textContent = 'DSH · ' + text
+						el.title = 'DSH · ' + text
+						el.hidden = false
+						if (actionTimer) clearTimeout(actionTimer)
+						actionTimer = setTimeout(() => { actionTimer = null; try { el.hidden = true } catch {} }, 4000)
 					} catch {}
 				})
 				// Debounced reconnect fallback: when the SSE stream drops,
@@ -4195,6 +4225,9 @@ clearTimeout((panel as any)._dshHideT)
 			this._pick = 'off'
 			this._pickMessage = ''
 			this._pickTargetId = null
+			// 活动药丸状态：4s 后自动清（与页面覆盖层同寿命）
+			this._actionLabel = null
+			this._actionTimer = null
 			this.pickControl = createPickControl(function (pick: any, message: any) { self._setPickState(pick, message) }, function (el: any, a: any) { return deliverPickToConversation(ctx, el, a) })
 		}
 		LivePreviewController.prototype._initialState = function (): any {
@@ -4216,6 +4249,9 @@ clearTimeout((panel as any)._dshHideT)
 				wiringStale: false,
 				backend: 'cdp', streamState: 'idle', streamMessage: '', streamGeneration: 0, streamMime: 'video/mp4; codecs="avc1.42E01E"', engineUnsupported: false,
 				pick: 'off', pickMessage: '',
+				// 活动药丸（与页面内覆盖层同一句话）：{zh,en} 由 host 的
+				// TOOL_ACTION_LABELS 查表后随 `tool-call` SSE 送来，客户端只显示。
+				actionLabel: null,
 			}
 		}
 		LivePreviewController.prototype.subscribe = function (cb: any) {
@@ -4564,6 +4600,25 @@ clearTimeout((panel as any)._dshHideT)
 						// and on tab churn, replacing the old polling loop.
 						self._processSpaces(list)
 					}
+				} catch (e) {}
+			})
+			// 活动药丸：host 在每个 bcdp_* 调用的顶部推一条带 label 的
+			// `tool-call` 事件。面板与页面内角标说同一句话（同一个词表），
+			// 4s 后淡出——与页面覆盖层的时间窗一致，避免两处不同步。
+			this.sse.addEventListener('tool-call', function (ev: any) {
+				if (self.disposed) return
+				try {
+					var m = JSON.parse(ev.data)
+					var label = m && m.label
+					if (!label || (typeof label.zh !== 'string' && typeof label.en !== 'string')) return
+					self._actionLabel = label
+					self.store.update(function (st: any) { st.actionLabel = label })
+					if (self._actionTimer) clearTimeout(self._actionTimer)
+					self._actionTimer = setTimeout(function () {
+						self._actionTimer = null
+						self._actionLabel = null
+						try { self.store.update(function (st: any) { st.actionLabel = null }) } catch (e) {}
+					}, 4000)
 				} catch (e) {}
 			})
 			this.sse.addEventListener('capture-status', function (ev: any) {
@@ -5121,7 +5176,23 @@ clearTimeout((panel as any)._dshHideT)
 					// Build chip: the only way to tell "did the fix ship?" from a
 					// screenshot (the sidebar panel is a separate component from the
 					// floating one, and both read the same bundle).
-					h('span', { style: { marginLeft: '6px', fontSize: '9.5px', opacity: '.5', flexShrink: '0' } }, 'v' + CLIENT_BUILD)
+					h('span', { style: { marginLeft: '6px', fontSize: '9.5px', opacity: '.5', flexShrink: '0' } }, 'v' + CLIENT_BUILD),
+					// 活动药丸：与页面内覆盖层同一句话、同一 4s 窗口。它回答的问题是
+					// 「现在这一下是 agent 在读还是在点」——面板上只有光标位置是看不出
+					// 意图的，而人正好奇「它为什么动了」。
+					state.actionLabel
+						? h('span', {
+							style: {
+								marginLeft: '8px', flexShrink: '0', display: 'inline-flex', alignItems: 'center', gap: '5px',
+								padding: '2px 8px', borderRadius: '999px', fontSize: '10.5px',
+								background: 'rgba(77,107,254,.14)', color: 'var(--dsw-alias-label-primary, #4d6bfe)',
+								border: '1px solid rgba(77,107,254,.32)',
+							},
+							title: 'DSH · ' + pickActionLabel(state.actionLabel),
+						},
+							h('span', { style: { width: '5px', height: '5px', borderRadius: '50%', background: '#4d6bfe', display: 'inline-block' } }),
+							'DSH · ' + pickActionLabel(state.actionLabel))
+						: null
 				),
 				h('button', {
 					className: 'dsh-ego-side-iconbtn' + (state.busy ? ' spinning' : ''),

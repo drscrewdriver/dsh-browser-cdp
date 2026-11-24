@@ -194,7 +194,8 @@ describe("tabbit output contract conformance", () => {
   // 1.10.x: 失败契约（src/errors.ts）统一补 code/retry/actionSent/hint，四个都要登记。
   const FAILURE_KEYS = ["code", "retry", "actionSent", "hint"];
   const DECLARED: Record<string, string[]> = {
-    bcdp_status: ["ok", "available", "path", "exitCode", "backend", "raw", "backendKind", "toolFace", "guidance", "facades", "error", ...FAILURE_KEYS],
+    // 1.15.0: `overlay`（页面/面板覆盖层的行为提示）随 status 返回一次。
+    bcdp_status: ["ok", "available", "path", "exitCode", "backend", "raw", "backendKind", "toolFace", "guidance", "overlay", "facades", "error", ...FAILURE_KEYS],
     bcdp_script: ["ok", "stdout", "stderr", "output", "result", "durationMs", "timedOut", "error", "backend", "resultTruncated", "hint", ...FAILURE_KEYS],
   };
 

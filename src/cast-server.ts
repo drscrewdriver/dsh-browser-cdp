@@ -204,6 +204,38 @@ export function getLastEgoActivity(): number {
 const activityListeners = new Set<(sessionId?: string) => void>()
 
 /**
+ * 面板活动药丸的动作词（与页面内覆盖层的词表同义，但**故意分开维护**）。
+ *
+ * 为什么 host 侧也要一份：客户端 bundle 与 host 是两条独立产物，客户端不能
+ * `import` 这个模块；而让两边各自硬编码又必然漂移。取舍是——**host 侧是唯一
+ * 真源**（它查表后把 {zh,en} 塞进 SSE payload），客户端只负责显示，
+ * 所以客户端的词永远跟着 host 走，页面角标那份则是独立的、只影响页面。
+ *
+ * 未列入的工具（`bcdp_status`、`bcdp_help` 这类元工具）没有动作词：它们不改
+ * 页面，"正在读取页面"对它们来说是假话，宁可不显示药丸。
+ */
+export const TOOL_ACTION_LABELS: Record<string, { zh: string; en: string }> = {
+  bcdp_snapshot: { zh: '正在读取页面', en: 'Reading page' },
+  bcdp_page_info: { zh: '正在读取页面', en: 'Reading page' },
+  bcdp_js: { zh: '正在执行脚本', en: 'Running script' },
+  bcdp_script: { zh: '正在执行脚本', en: 'Running script' },
+  bcdp_click: { zh: '正在点击', en: 'Clicking' },
+  bcdp_fill: { zh: '正在输入', en: 'Typing' },
+  bcdp_key: { zh: '正在按键', en: 'Pressing keys' },
+  bcdp_scroll: { zh: '正在滚动', en: 'Scrolling' },
+  bcdp_navigate: { zh: '正在打开页面', en: 'Navigating' },
+  bcdp_screenshot: { zh: '正在截图', en: 'Screenshot' },
+  bcdp_hover: { zh: '正在悬停', en: 'Hovering' },
+  bcdp_select: { zh: '正在选择', en: 'Selecting' },
+  bcdp_check: { zh: '正在勾选', en: 'Checking' },
+  bcdp_drag: { zh: '正在拖拽', en: 'Dragging' },
+  bcdp_wait: { zh: '正在等待', en: 'Waiting' },
+  bcdp_tab: { zh: '正在切换标签页', en: 'Tab' },
+  bcdp_upload: { zh: '正在上传', en: 'Uploading' },
+  bcdp_download: { zh: '正在下载', en: 'Downloading' },
+}
+
+/**
  * Subscribe to "one bcdp_* call just landed".
  * @returns the unsubscribe function.
  */
@@ -214,7 +246,7 @@ export function onEgoActivity(cb: (sessionId?: string) => void): () => void {
   }
 }
 
-export function markEgoToolCall(sessionId?: string): void {
+export function markEgoToolCall(sessionId?: string, toolName?: string): void {
   toolCallCount += 1
   lastEgoActivity = Date.now()
   // Tier fan-out: never let a listener throw into the tool's own result path.
@@ -230,9 +262,18 @@ export function markEgoToolCall(sessionId?: string): void {
   // supplied one): the client scopes its sidebar auto-open to that session, so
   // a background conversation's tool call lands in ITS OWN sidebar instead of
   // the one the user happens to be reading.
-  const payload = sessionId === undefined || sessionId === ''
-    ? { count: toolCallCount }
-    : { count: toolCallCount, sessionId }
+  //
+  // `label` rides along for the panel's activity pill: the page-side overlay
+  // already tells whoever is looking at the browser WHAT is happening, and the
+  // panel must say the same word — two different sentences for one action is
+  // how a person loses track of who is driving. Kept to zh/en here for the same
+  // reason the overlay is: it is transient chrome, not a localized surface.
+  const label = toolName === undefined ? undefined : TOOL_ACTION_LABELS[toolName]
+  let payload: Record<string, unknown> =
+    sessionId === undefined || sessionId === ''
+      ? { count: toolCallCount }
+      : { count: toolCallCount, sessionId }
+  if (label !== undefined) payload = { ...payload, label }
   const frame = `event: tool-call\ndata: ${JSON.stringify(payload)}\n\n`
   for (const res of sseClients) {
     try {

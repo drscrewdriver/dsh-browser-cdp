@@ -36,7 +36,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { darwinChromeCandidates as launcherDarwinChromeCandidates, posixChromeCandidates as launcherPosixChromeCandidates, windowsEnvChromeCandidates } from './cdp/launcher.ts'
 import { importLoginCookies } from './login-import.ts'
-import { initCastServer, markEgoToolCall, getLastEgoActivity, onEgoActivity, setAttachEndpoint, recycleWorker, getCliPollStatus, getAttachEndpoint, broadcastCliFrames, broadcastCliSpaces, getCliTrackAll, pushFocus, panelWatcherCount, getWatchCounters } from './cast-server.ts'
+import { TOOL_ACTION_LABELS, initCastServer, markEgoToolCall, getLastEgoActivity, onEgoActivity, setAttachEndpoint, recycleWorker, getCliPollStatus, getAttachEndpoint, broadcastCliFrames, broadcastCliSpaces, getCliTrackAll, pushFocus, panelWatcherCount, getWatchCounters } from './cast-server.ts'
 import { CliFramePoller, buildFrameScript, FRAME_SENTINEL } from './cast/cli-frame-poller.ts'
 import { buildEgoCloseTabScript, buildEgoListTabsScript, buildEgoNavigateScript, buildEgoSwitchTabScript, buildEgoWindowSizeScript, parsePanelResult, type PanelActionOutcome, type PanelActionRunner } from './cast/panel-actions.ts'
 import { buildEgoAxScript, buildTabbitAxSnippet, composeFallbackReport, parseAxSentinel, type FallbackAxSnapshot } from './cast/fallback-tab-report.ts'
@@ -157,6 +157,69 @@ export interface ActiveSpaceTracker {
   closed(space: string | number, done: boolean): void
   /** Drop a stale numeric id back to the remembered space name (or default). */
   resetToName(): void
+}
+
+/**
+ * 页面内活动覆盖层（CDP 路径）：agent 每次真正碰页面前，先在页面右上角挂一个
+ * 「DSH · 正在读取页面 / 点击 / 输入 …」的小徽标，让正在看同一屏的人知道
+ * 浏览器正在被谁驱动、在做什么。
+ *
+ * 约束（都是为了不污染 agent 自己的读取面）：
+ * - **closed shadow DOM**：页面 innerText / 正文抽取看不到覆盖层文字；
+ * - `aria-hidden="true"`：AX 树 / bcdp_snapshot 的元素编号不会把徽标算进去；
+ * - `pointer-events:none`：绝不挡住真实点击；
+ * - 全部 try/catch + 4s 自动淡出：覆盖层失败绝不影响工具本身。
+ *
+ * 只在 ego/CDP 通道的 buildScript 前缀里注入（tabbit 的 exec 面不走此路径）。
+ */
+const OVERLAY_ACTIONS = TOOL_ACTION_LABELS
+
+/** 页面内覆盖层更新表达式（`page.evaluate` 的字符串形式）。 */
+export function pageOverlayExpr(zh: string, en: string): string {
+  return `(function(){
+  try {
+    var __zh = ((navigator.language||'').toLowerCase().indexOf('zh') === 0);
+    var __label = __zh ? ${j(zh)} : ${j(en)};
+    var host = document.getElementById('__dsh_overlay__');
+    if (!host) {
+      host = document.createElement('div');
+      host.id = '__dsh_overlay__';
+      host.setAttribute('aria-hidden', 'true');
+      host.style.cssText = 'position:fixed;right:16px;top:16px;z-index:2147483647;pointer-events:none;transition:opacity .25s;';
+      var root = host.attachShadow ? host.attachShadow({ mode: 'closed' }) : host;
+      root.innerHTML = '<style>#b{display:flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;background:rgba(17,24,39,.92);color:#fff;font:12px/1.4 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;box-shadow:0 4px 16px rgba(0,0,0,.28);white-space:nowrap}#d{width:6px;height:6px;border-radius:50%;background:#60a5fa;display:inline-block}</style><div id="b"><span id="d"></span><span id="t"></span></div>';
+      document.documentElement.appendChild(host);
+      window.__dshOverlayRoot = root;
+    }
+    var r = window.__dshOverlayRoot || host;
+    var t = r.querySelector ? r.querySelector('#t') : null;
+    if (t) t.textContent = 'DSH · ' + __label;
+    host.style.opacity = '1';
+    clearTimeout(window.__dshOverlayTimer);
+    window.__dshOverlayTimer = setTimeout(function(){ try { host.style.opacity = '0'; } catch(e){} }, 4000);
+  } catch (e) {}
+})()`
+}
+
+/** 给脚本加一行覆盖层更新前缀；未知工具原样返回（零开销）。 */
+/**
+ * 页面覆盖层**不接**的工具（词表里仍有它们，见下方注释）。
+ *
+ * `bcdp_wait` 的 `op=function` 脚本必须让 `waitForFunction(...)` 处在最外层——
+ * 包裹在 try 里会撞 SDK 的 "Object reference chain is too long"（P0-2 实测）。
+ * 覆盖层前缀本身就是一个 try 块，两者不能共存；因此页面侧让位，
+ * 而**面板药丸照旧显示「正在等待」**——面板不往页面里塞脚本，没有这条约束。
+ */
+const PAGE_OVERLAY_EXCLUDED = new Set(['bcdp_wait'])
+
+function withPageOverlay(name: string, script: string): string {
+  if (PAGE_OVERLAY_EXCLUDED.has(name)) return script
+  const action = OVERLAY_ACTIONS[name]
+  if (action === undefined) return script
+  return (
+    `try { await page.evaluate(${j(pageOverlayExpr(action.zh, action.en))}) } catch (__ov) {}\n` +
+    script
+  )
 }
 
 /** Build the script that runs the probe and emits a sentinel payload. */
@@ -2390,7 +2453,7 @@ function defineEgoTool(ctx: EgoContext, cfg: EgoRuntimeConfig, opts: EgoToolOpti
         // /api/bcdp/spaces; the LivePreviewController transitions on 0 —>0 and
         // calls betterSidebar.openTab(). Idempotent: the client's transition
         // guard means only the first call per session opens the Tab.
-        cfg.spaceTracker.setCurrentSession(callingSessionId(exec), resolveEffectiveLink(cfg.links, cfg.activeTargetId)?.link.id ?? ''); markEgoToolCall(callingSessionId(exec))
+        cfg.spaceTracker.setCurrentSession(callingSessionId(exec), resolveEffectiveLink(cfg.links, cfg.activeTargetId)?.link.id ?? ''); markEgoToolCall(callingSessionId(exec), opts.name)
           pendingViewport = cfg
         // Capability gate: a tool whose dependency face the attached engine
         // cannot satisfy fails HERE — structured and immediate — instead of
@@ -2433,7 +2496,7 @@ function defineEgoTool(ctx: EgoContext, cfg: EgoRuntimeConfig, opts: EgoToolOpti
         if (opts.tabRevive) {
           // F: navigate-specific watchdog — revive a wedged tab once and tag
           // the outcome so the model sees whether recovery fired.
-          const { result, recoveredFrom } = await runWithTabRevive(ctx, cfg, exec, () => opts.buildScript(args))
+          const { result, recoveredFrom } = await runWithTabRevive(ctx, cfg, exec, () => withPageOverlay(opts.name, opts.buildScript(args)))
           if (!result.ok) throw new Error(recoveredFrom ? `${result.error}\n${recoveredFrom}` : result.error)
           if (result.value && typeof result.value === 'object') (result.value as Record<string, unknown>).recoveredFrom = recoveredFrom
           if (typeof opts.afterExecute === 'function') opts.afterExecute(args, result.value)
@@ -2442,7 +2505,7 @@ function defineEgoTool(ctx: EgoContext, cfg: EgoRuntimeConfig, opts: EgoToolOpti
           noteToolFocus(result.value, callingSessionId(exec))
           return toolPayload(result)
         }
-        const result = await runWithStaleSpaceRetry(ctx, cfg, exec, () => opts.buildScript(args))
+        const result = await runWithStaleSpaceRetry(ctx, cfg, exec, () => withPageOverlay(opts.name, opts.buildScript(args)))
         if (!result.ok) throw new Error(result.error)
         if (typeof opts.afterExecute === 'function') opts.afterExecute(args, result.value)
         // The operation face just drove this tab: move the focus now, so the
@@ -4056,6 +4119,16 @@ bridge.onChange(() => tiers.reapply())
  * Tabbit 激活时被封在注入面之外的工具清单 + 兜底路径。由 `bcdp_status` 的
  * `guidance` 字段带出——工具「不在列表」时模型需要知道它不是坏了。
  */
+/**
+ * 覆盖层的行为提示（随 `bcdp_status` 返回体下发一次）。
+ *
+ * 为什么需要它：页面角标说明"机器在做什么"，但模型并不知道角标存在，
+ * 于是会出现「静默连发 5 个调用、用户看着屏幕自己动」这种最坏形态。
+ * 一条英文（模型侧语言）说明就够，别做成每次调用都推的常驻噪声。
+ */
+const OVERLAY_GUIDANCE =
+  'Each bcdp_* call shows a "DSH · reading/clicking/typing" pill on the page and beside the panel title for ~4s. The pill says WHAT the machine is doing; you owe the WHY — say one line before a batch of actions and one line after (result + next step), including read-only calls. Never fire three or more calls in a row silently. Ask before actions that need the human (login, CAPTCHA, payment, delete, submit).'
+
 const TABBIT_SEALED_GUIDANCE =
   'On the tabbit backend these tools are sealed (not broken): bcdp_cdp, bcdp_key, bcdp_scroll, hover/select/check/drag, bcdp_wait, upload/download/dialog, captcha/auth/login_import, bcdp_jev_*. Use bcdp_js for a single expression (e.g. window.scrollBy(0,600)) or bcdp_script for multi-step work.'
 
@@ -4096,6 +4169,11 @@ function registerEgoStatus(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool: T
               },
             },
             guidance: { type: 'string' },
+            /**
+             * 覆盖层说明。放这里而不是 description：status 是常驻工具，
+             * description 每轮都付费；返回体只付一次，而模型第一次调用的就是它。
+             */
+            overlay: { type: 'string' },
             // Cache fast path: this answer cost no spawn. The verdict itself rides
             // in `raw` so the always-resident tool adds ONE property, not three.
             cached: { type: 'boolean' },
@@ -4162,6 +4240,7 @@ function registerEgoStatus(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool: T
                 : `${cachedAttach.status}: ${cachedAttach.code}: ${cachedAttach.message}`,
             backendKind: kind,
             toolFace: { live: face.live.length, sealed: face.sealed.length },
+            overlay: OVERLAY_GUIDANCE,
             ...(kind === 'tabbit-cli' ? { guidance: TABBIT_SEALED_GUIDANCE } : {}),
           }
         }
@@ -4188,6 +4267,7 @@ function registerEgoStatus(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (tool: T
           const faceFields = {
             backendKind: kind,
             toolFace: { live: face.live.length, sealed: face.sealed.length },
+            overlay: OVERLAY_GUIDANCE,
             ...(kind === 'tabbit-cli' ? { guidance: TABBIT_SEALED_GUIDANCE } : {}),
           }
           // tabbit 为激活链路时，内置运行时的 facade 探针答的不是这个问题（那条
@@ -5442,7 +5522,7 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
       timeoutMs: 15_000,
       execute: async (args: Record<string, unknown>, exec: ToolExec) =>
         withEgoLock(async () => {
-          cfg.spaceTracker.setCurrentSession(callingSessionId(exec), resolveEffectiveLink(cfg.links, cfg.activeTargetId)?.link.id ?? ''); markEgoToolCall(callingSessionId(exec))
+          cfg.spaceTracker.setCurrentSession(callingSessionId(exec), resolveEffectiveLink(cfg.links, cfg.activeTargetId)?.link.id ?? ''); markEgoToolCall(callingSessionId(exec), 'bcdp_captcha')
           pendingViewport = cfg
           const result = await runWithStaleSpaceRetry(
             ctx,
@@ -5498,7 +5578,7 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
       timeoutMs: 320_000,
       execute: async (args: Record<string, unknown>, exec: ToolExec) =>
         withEgoLock(async () => {
-          cfg.spaceTracker.setCurrentSession(callingSessionId(exec), resolveEffectiveLink(cfg.links, cfg.activeTargetId)?.link.id ?? ''); markEgoToolCall(callingSessionId(exec))
+          cfg.spaceTracker.setCurrentSession(callingSessionId(exec), resolveEffectiveLink(cfg.links, cfg.activeTargetId)?.link.id ?? ''); markEgoToolCall(callingSessionId(exec), 'bcdp_wait_for_human')
           pendingViewport = cfg
           const timeoutMs = Math.max(1000, Math.min(300_000, num(args.timeoutMs, 120_000)))
           const selector = str(args.selector, '')
@@ -5870,7 +5950,7 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
         },
         timeoutMs: TOOL_TIMEOUT_MS,
         execute: async (args: Record<string, unknown>, exec: ToolExec) => {
-          cfg.spaceTracker.setCurrentSession(callingSessionId(exec), resolveEffectiveLink(cfg.links, cfg.activeTargetId)?.link.id ?? ''); markEgoToolCall(callingSessionId(exec))
+          cfg.spaceTracker.setCurrentSession(callingSessionId(exec), resolveEffectiveLink(cfg.links, cfg.activeTargetId)?.link.id ?? ''); markEgoToolCall(callingSessionId(exec), 'bcdp_script')
           pendingViewport = cfg
           // P0-4：`bcdp_script` 是宿主侧 defineTool（不走 defineEgoTool），所以
           // 必须在这里自己进一次 tabbit 分派闸——否则逃生舱在最需要它的通道上
@@ -6056,7 +6136,7 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
       },
       timeoutMs: 10_000,
       execute: async (_args: Record<string, unknown>, exec: ToolExec) => {
-        cfg.spaceTracker.setCurrentSession(callingSessionId(exec), resolveEffectiveLink(cfg.links, cfg.activeTargetId)?.link.id ?? ''); markEgoToolCall(callingSessionId(exec))
+        cfg.spaceTracker.setCurrentSession(callingSessionId(exec), resolveEffectiveLink(cfg.links, cfg.activeTargetId)?.link.id ?? ''); markEgoToolCall(callingSessionId(exec), 'bcdp_jev_status')
           pendingViewport = cfg
         const judge = judgeCfg()
         const runtime = judgeRuntimeOf()
@@ -6128,7 +6208,7 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
       },
       timeoutMs: 60_000,
       execute: async (args: Record<string, unknown>, exec: ToolExec) => {
-        cfg.spaceTracker.setCurrentSession(callingSessionId(exec), resolveEffectiveLink(cfg.links, cfg.activeTargetId)?.link.id ?? ''); markEgoToolCall(callingSessionId(exec))
+        cfg.spaceTracker.setCurrentSession(callingSessionId(exec), resolveEffectiveLink(cfg.links, cfg.activeTargetId)?.link.id ?? ''); markEgoToolCall(callingSessionId(exec), 'bcdp_jev_ask')
           pendingViewport = cfg
         const blocked = attachGate()
         if (blocked !== '') return { ok: false, text: blocked }
@@ -6254,7 +6334,7 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
       },
       timeoutMs: 60_000,
       execute: async (args: Record<string, unknown>, exec: ToolExec) => {
-        cfg.spaceTracker.setCurrentSession(callingSessionId(exec), resolveEffectiveLink(cfg.links, cfg.activeTargetId)?.link.id ?? ''); markEgoToolCall(callingSessionId(exec))
+        cfg.spaceTracker.setCurrentSession(callingSessionId(exec), resolveEffectiveLink(cfg.links, cfg.activeTargetId)?.link.id ?? ''); markEgoToolCall(callingSessionId(exec), 'bcdp_jev_frame')
           pendingViewport = cfg
         const blocked = attachGate()
         if (blocked !== '') return { ok: false, text: blocked }
@@ -6333,7 +6413,7 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
       },
       timeoutMs: TOOL_TIMEOUT_MS,
       execute: async (args: Record<string, unknown>, exec: ToolExec) => {
-        cfg.spaceTracker.setCurrentSession(callingSessionId(exec), resolveEffectiveLink(cfg.links, cfg.activeTargetId)?.link.id ?? ''); markEgoToolCall(callingSessionId(exec))
+        cfg.spaceTracker.setCurrentSession(callingSessionId(exec), resolveEffectiveLink(cfg.links, cfg.activeTargetId)?.link.id ?? ''); markEgoToolCall(callingSessionId(exec), 'bcdp_jev_run')
           pendingViewport = cfg
         const blocked = attachGate()
         if (blocked !== '') return { ok: false, text: blocked }
@@ -6409,7 +6489,7 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
       },
       timeoutMs: TOOL_TIMEOUT_MS,
       execute: async (args: Record<string, unknown>, exec: ToolExec) => {
-        cfg.spaceTracker.setCurrentSession(callingSessionId(exec), resolveEffectiveLink(cfg.links, cfg.activeTargetId)?.link.id ?? ''); markEgoToolCall(callingSessionId(exec))
+        cfg.spaceTracker.setCurrentSession(callingSessionId(exec), resolveEffectiveLink(cfg.links, cfg.activeTargetId)?.link.id ?? ''); markEgoToolCall(callingSessionId(exec), 'bcdp_jev_attempt')
           pendingViewport = cfg
         const blocked = attachGate()
         if (blocked !== '') return { ok: false, text: blocked }

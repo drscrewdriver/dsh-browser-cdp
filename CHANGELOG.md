@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.15.0 (2026-11-26)
+
+**新增本插件首个跨插件服务面 `browser-fetch`（主题线 1.15.0-rc.1 / rc.2，预发布线已验证）。**
+
+- 新模块 `src/browser-fetch.ts`：经 cordis `ctx.provide("browser-fetch", …)` 注册，同会话插件
+  （首个消费方：dsh-union-search >= 0.13.0）`ctx.get("browser-fetch")` 取用；fiber 卸载自动注销。
+- `fetchRenderedHtml({url, waitUntil, maxBytes, timeoutMs}, signal)`：每次调用现取端点
+  （browser.json / launcher.json 候选 + /json/version 活体探测，复用 1.14.14 endpoint-authority）
+  → 自开短命 CDP 连接 → `Target.createTarget({background:true})` 后台 tab → navigate → 等
+  load → 取渲染后 `outerHTML`（主文档 statusCode 经 Network.responseReceived，拿不到回 null）
+  → finally 必关 tab 与连接。不抢 ego-cli 工具锁、不与帧轮询串队；后台 tab 永不 activate。
+- 服务端硬门（无绕过参数）：仅 http(s)，字面 IP + DNS 解析双重拒绝回环/私网/元数据；
+  maxBytes clamp 2MB，截断按 UTF-8 码点边界不劈字符（clipUtf8）。错误码五态：
+  bad-request / blocked-target / no-browser / nav-failed（含一次端点换代重试）/ timeout。
+- tabbit / lightpanda 等无 CDP 端点路线统一 `no-browser` 降级；接口文档见 `docs/browser-fetch.md`。
+- 测试：`tests/browser-fetch.test.ts` 9 用例（成功链/门/超时关 tab/abort 关 tab/换代重试/字节截断）；
+  修复存量红 `tests/tabbit-backend-dispatch.test.ts`（attach 缓存用例补 `linkId`，对齐
+  attachMatchesLink 收紧后的实现）——CI 门禁自 11-21 起首次全绿，全量 1431 passed。
+- 发布通道：rc.1/rc.2 经 prerelease 分支 + release.yml 通道判定自动挂 `--tag rc` + Pre-release
+  Release，latest 与 dsh-* 线标签全程未动；正式版走全链路。
+
 ## 1.14.14 (2026-11-25)
 
 **修复 #20：观察窗焊死在旧实例 / 「不关浏览器也卡 New Tab」——两处独立缺陷，分开修。**

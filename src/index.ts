@@ -38,6 +38,7 @@ import { darwinChromeCandidates as launcherDarwinChromeCandidates, posixChromeCa
 import { importLoginCookies } from './login-import.ts'
 import { TOOL_ACTION_LABELS, initCastServer, markEgoToolCall, getLastEgoActivity, onEgoActivity, setAttachEndpoint, recycleWorker, getCliPollStatus, getAttachEndpoint, broadcastCliFrames, broadcastCliSpaces, getCliTrackAll, pushFocus, panelWatcherCount, getWatchCounters } from './cast-server.ts'
 import { CliFramePoller, buildFrameScript, FRAME_SENTINEL } from './cast/cli-frame-poller.ts'
+import { BROWSER_FETCH_SERVICE_NAME, createBrowserFetchService } from './browser-fetch.ts'
 import { buildEgoCloseTabScript, buildEgoListTabsScript, buildEgoNavigateScript, buildEgoSwitchTabScript, buildEgoWindowSizeScript, parsePanelResult, type PanelActionOutcome, type PanelActionRunner } from './cast/panel-actions.ts'
 import { buildEgoAxScript, buildTabbitAxSnippet, composeFallbackReport, parseAxSentinel, type FallbackAxSnapshot } from './cast/fallback-tab-report.ts'
 import type { TabAnchorReport } from './tab-report.ts'
@@ -4114,6 +4115,19 @@ bridge.onChange(() => tiers.reapply())
       // never let teardown throw
     }
   })
+  // Cross-plugin service surface (1.15.0): dsh-union-search >= 0.13.0 does
+  // ctx.get("browser-fetch") to borrow the logged-in agent browser for rendered
+  // HTML. provide() is fiber-owned: the service unregisters when this plugin's
+  // fiber unloads, so disable/uninstall never leaves a stale implementation.
+  try {
+    const browserFetch = createBrowserFetchService()
+    const provide = (ctx as unknown as { provide?: (name: string, value: unknown) => () => void }).provide
+    if (typeof provide === 'function') {
+      provide(BROWSER_FETCH_SERVICE_NAME, browserFetch)
+    }
+  } catch (error) {
+    ctx.logger?.warn?.(`dsh-browser-cdp: browser-fetch service not provided (${String((error as Error)?.message ?? error)})`)
+  }
   ctx.logger?.info?.(
     `dsh-browser-cdp: mounted (egoBin=${cfg.egoBin}, defaultSpace=${cfg.activeSpace})`,
   )

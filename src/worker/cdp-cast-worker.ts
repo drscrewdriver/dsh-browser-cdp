@@ -15,6 +15,8 @@ import { PickChannel } from './pick-channel.ts'
 import { captureMarked } from '../cdp/marks.ts'
 import { BCDP_CDP_ENGINE, capabilitiesFromEnvValue } from '../cdp/capabilities.ts'
 import { clampViewportSize, widthWithDelta, computeWindowBounds, aspectHeight } from './window-size.ts'
+import { createEndpointResolver, pickForegroundId, type EndpointIO } from './endpoint-authority.ts'
+import { defaultLauncherStatePath } from '../cdp/launcher.ts'
 
 const SENTINEL = '@@DSH_RESULT@@'
 /**
@@ -59,17 +61,19 @@ let castConfig: CastConfig = { ...DEFAULT_CONFIG }
 try { castConfig = { ...castConfig, ...JSON.parse(process.argv[2] || '{}') } as CastConfig } catch { /* ignore */ }
 
 /**
- * One Runtime.evaluate answers three questions the panel used to guess at:
+ * One Runtime.evaluate answers four questions the panel used to guess at:
  * `humanCheck` (unchanged), `readyState` (a page still loading looks dead in a
- * screenshot) and `dpr` (a 1.25 phone-preview layout explains "why is the text
- * smaller"). All three ride the SAME 5s-throttled probe — no extra CDP call.
+ * screenshot), `dpr` (a 1.25 phone-preview layout explains "why is the text
+ * smaller") and — #20 — `visibilityState` (a background tab reports 'hidden',
+ * which is the only reliable "which tab is the user actually looking at").
+ * All four ride the SAME 5s-throttled probe — no extra CDP call.
  */
 const HUMAN_PROBE_JS = `(() => {
-  const readyState=document.readyState,dpr=(window.devicePixelRatio||1);
+  const readyState=document.readyState,dpr=(window.devicePixelRatio||1),visibilityState=document.visibilityState;
   const el=document.querySelector('iframe[src*="recaptcha"],.g-recaptcha,.h-captcha,iframe[src*="hcaptcha"],.cf-turnstile,iframe[src*="turnstile"],iframe[src*="cloudflare"],#challenge-form,.challenge-form,#captcha,.captcha');
-  if(el)return{detected:true,kind:/recaptcha/i.test(el.outerHTML)?'recaptcha':/hcaptcha/i.test(el.outerHTML)?'hcaptcha':/turnstile/i.test(el.outerHTML)?'turnstile':'captcha',readyState:readyState,dpr:dpr};
+  if(el)return{detected:true,kind:/recaptcha/i.test(el.outerHTML)?'recaptcha':/hcaptcha/i.test(el.outerHTML)?'hcaptcha':/turnstile/i.test(el.outerHTML)?'turnstile':'captcha',readyState:readyState,dpr:dpr,visibilityState:visibilityState};
   const t=((document.body&&document.body.innerText)||'').slice(0,120000).toLowerCase();
-  return /verify you are human|your activity looks unusual|captcha|i.?m not a robot|人机验证|安全验证|我是人类|验证码|滑块验证/.test(t)?{detected:true,kind:'captcha',readyState:readyState,dpr:dpr}:{detected:false,kind:null,readyState:readyState,dpr:dpr};
+  return /verify you are human|your activity looks unusual|captcha|i.?m not a robot|人机验证|安全验证|我是人类|验证码|滑块验证/.test(t)?{detected:true,kind:'captcha',readyState:readyState,dpr:dpr,visibilityState:visibilityState}:{detected:false,kind:null,readyState:readyState,dpr:dpr,visibilityState:visibilityState};
 })()`
 
 interface SseClient {
@@ -96,7 +100,9 @@ interface ActiveBrowser {
   ws: WebSocket
   cdp: CdpClient
   sessions: TargetSessions
-  pid?: number
+  pid?: number | null
+  /** #20 — identity of the instance this connection belongs to. */
+  instanceKey?: string
 }
 interface JpegFrame {
   targetId: string
@@ -111,7 +117,7 @@ interface JpegFrame {
 
 const sseClients = new Set<SseClient>()
 const videoClients = new Set<VideoClient>()
-const probeCache = new Map<string, { at: number; human: unknown }>()
+const probeCache = new Map<string, { at: number; human: unknown; visibility?: string; readyState?: string; dpr?: number }>()
 /**
  * Page zoom per target, kept apart from `probeCache` on purpose: the two are
  * written by different round-trips and must not overwrite each other.
@@ -312,20 +318,30 @@ const manager = new CaptureManager({
   },
 })
 
-async function readBrowserState(): Promise<{ port?: number } | null> {
-  try { return JSON.parse(await import('node:fs/promises').then((fs) => fs.readFile(BROWSER_STATE_FILE, 'utf8'))) as { port?: number } }
-  catch { return null }
+/**
+ * #20 — the endpoint resolver. io.fs/net are the only place this worker touches
+ * state files or /json/version for AUTHORITY purposes; every function falls
+ * back silently (a missing/bad file is "no candidate", never an error).
+ */
+const fsp = await import('node:fs/promises')
+const endpointIO: EndpointIO = {
+  statMtime: async (p) => { try { return (await fsp.stat(p)).mtimeMs } catch { return -1 } },
+  readJson: async (p) => { try { return JSON.parse(await fsp.readFile(p, 'utf8')) as Record<string, unknown> } catch { return null } },
+  fetchVersion: async (u) => {
+    try {
+      const r = await fetch(u, { signal: AbortSignal.timeout(1000) })
+      if (!r.ok) return null
+      const j = await r.json() as { webSocketDebuggerUrl?: string }
+      return { wsUrl: typeof j.webSocketDebuggerUrl === 'string' ? j.webSocketDebuggerUrl : undefined }
+    } catch { return null }
+  },
+  isAlive: (pid) => { try { process.kill(pid, 0); return true } catch { return false } },
+  env: process.env as Record<string, string | undefined>,
 }
+const endpointResolver = createEndpointResolver(endpointIO, { browserStatePath: BROWSER_STATE_FILE, launcherStatePath: defaultLauncherStatePath() })
 
-async function resolveBrowser(): Promise<{ wsUrl: string; port: number | null } | null> {
-  if (process.env.EGO_LINUX_CDP_URL) return { wsUrl: process.env.EGO_LINUX_CDP_URL, port: null }
-  const state = await readBrowserState()
-  if (!state?.port) return null
-  try {
-    const response = await fetch(`http://127.0.0.1:${state.port}/json/version`, { signal: AbortSignal.timeout(1500) })
-    const wsUrl = response.ok ? (await response.json() as { webSocketDebuggerUrl?: string }).webSocketDebuggerUrl : null
-    return wsUrl ? { port: state.port ?? null, wsUrl } : null
-  } catch { return null }
+async function resolveBrowser(): Promise<{ wsUrl: string; port: number | null; pid: number | null; instanceKey: string } | null> {
+  return endpointResolver.resolve()
 }
 
 async function listTargets(): Promise<Array<{ targetId: string; url: string; title: string; type: string }>> {
@@ -365,16 +381,18 @@ const proxyObserveCache: { at: number; id: string | null; failedUntil: number; b
  *     it as "active" left every row `active:false` until a watch started, and
  *     the panel (which renders active rows only) then never started one: a
  *     deadlock, not a glitch.
- *   - `/json/list` first page — the FOREGROUND tab. Correct for a local launch
- *     (the user really is switching tabs in that window) and, through the proxy
- *     path, for a remote one too; a proxy that cannot answer is "no
- *     observation", never an error.
+ *   - `/json/list` foreground pick — the tab the USER is looking at. The old
+ *     "first page" rule was a wrong assumption (#20 / findings F3): a freshly
+ *     opened New Tab usually sorts first, so the panel snapped to it. Locally
+ *     the pick now goes visibility → first non-blank → first; through the
+ *     remote proxy path (`/json/*` over the proxy) a per-page CDP probe is not
+ *     possible, so there the first page stays — #12 semantics unchanged.
  *   - the panel's own selection — belongs to the view focus, not here.
  *
  * Order: per-session focus (validated against the live list) → explicit host
- * focus → foreground observation (local port, else remote proxy) → none.
- * `known` lets the caller pass the target list it already fetched, so a closed
- * tab cannot keep the highlight.
+ * focus → foreground observation (local: visibility-ranked list; remote: proxy
+ * list) → none. `known` lets the caller pass the target list it already
+ * fetched, so a closed tab cannot keep the highlight.
  */
 async function activeTargetInfo(known?: readonly string[], sessionId?: string): Promise<{ id: string | null; source: 'focus-session' | 'focus' | 'foreground' | 'foreground-remote' | 'none' }> {
   const inKnown = (id: string): boolean => known === undefined || known.includes(id)
@@ -400,8 +418,19 @@ async function activeTargetInfo(known?: readonly string[], sessionId?: string): 
       if (target.remote) { proxyObserveCache.failedUntil = now + 30_000; proxyObserveCache.base = target.base }
       return { id: null, source: 'none' }
     }
-    const list = await response.json() as Array<{ id?: string; type?: string }>
-    const id = list.find((entry) => entry.type === 'page')?.id ?? null
+    const list = await response.json() as Array<{ id?: string; url?: string; type?: string }>
+    const pages = list.filter((entry): entry is { id: string; url?: string } => entry.type === 'page' && typeof entry.id === 'string')
+    // #20 (F3): the front tab is picked by visibility instead of list order.
+    // The answer rides the HUMAN_PROBE_JS cache the spaces tick already keeps
+    // warm (both enumerate the same ≤30 page targets) — a tab with no cached
+    // probe yet is treated as unknown, never probed extra here (probe budget).
+    const visibilityOf = (id: string): string | undefined => {
+      const cached = probeCache.get(id)
+      return cached?.visibility !== undefined && now - cached.at <= 5000 ? cached.visibility : undefined
+    }
+    const id = target.remote
+      ? pages.find((p) => p.id !== undefined)?.id ?? null
+      : await pickForegroundId(pages.slice(0, 30), visibilityOf)
     if (target.remote) {
       proxyObserveCache.at = now
       proxyObserveCache.id = id
@@ -420,12 +449,13 @@ async function activeTargetId(sessionId?: string): Promise<string | null> {
   return (await activeTargetInfo(undefined, sessionId)).id
 }
 
-/** Shape of HUMAN_PROBE_JS's answer (every branch carries all four fields). */
+/** Shape of HUMAN_PROBE_JS's answer (every branch carries all five fields). */
 interface ProbeValue {
   detected?: boolean
   kind?: string | null
   readyState?: string
   dpr?: number
+  visibilityState?: string
 }
 
 /**
@@ -474,13 +504,13 @@ async function snapshotSpaces(sessionId?: string): Promise<Array<Record<string, 
     const cached = probeCache.get(target.targetId)
     if (!cached || now - cached.at > 5000) {
       browser.sessions.call(target.targetId, 'Runtime.evaluate', { expression: HUMAN_PROBE_JS, returnByValue: true, awaitPromise: false }, 3000)
-        .then((result: unknown) => { const r = result as { result?: { value?: unknown } }; probeCache.set(target.targetId, { at: Date.now(), human: r.result?.value || null }) }).catch(() => { /* ignore */ })
+        .then((result: unknown) => { const r = (result as { result?: { value?: ProbeValue | null } }).result?.value || null; probeCache.set(target.targetId, { at: Date.now(), human: r, visibility: r?.visibilityState, readyState: r?.readyState, dpr: r?.dpr }) }).catch(() => { /* ignore */ })
     }
     // Only the tab the user is looking at pays the extra round-trip; a background
     // tab's zoom cannot change without it becoming active anyway.
     if (target.targetId === activeId) probeZoom(browser, target.targetId, now)
     const probe = (cached?.human ?? null) as ProbeValue | null
-    spaces.push({ targetId: target.targetId, url: target.url, title: target.title, active: target.targetId === activeId, activeSource: target.targetId === activeId ? activeInfo.source : '', capturing: capturingIds.has(target.targetId), lastActive: frame?.lastActive || 0, viewportW: frame?.viewportW || session?.viewportW, viewportH: frame?.viewportH || session?.viewportH, humanCheck: probe === null ? null : { detected: probe.detected === true, kind: probe.kind ?? null }, readyState: probe?.readyState, dpr: probe?.dpr, zoom: zoomCache.get(target.targetId)?.zoom ?? null })
+    spaces.push({ targetId: target.targetId, url: target.url, title: target.title, active: target.targetId === activeId, activeSource: target.targetId === activeId ? activeInfo.source : '', capturing: capturingIds.has(target.targetId), lastActive: frame?.lastActive || 0, viewportW: frame?.viewportW || session?.viewportW, viewportH: frame?.viewportH || session?.viewportH, humanCheck: probe === null ? null : { detected: probe.detected === true, kind: probe.kind ?? null }, readyState: probe?.readyState, dpr: probe?.dpr, visibility: probe?.visibilityState, zoom: zoomCache.get(target.targetId)?.zoom ?? null })
   }
   // A target id is a runtime handle: a closed tab must not leave a zoom entry behind.
   const liveIds = new Set(targets.map((target) => target.targetId))
@@ -499,6 +529,8 @@ async function connectLoop(): Promise<void> {
       const cdp = new CdpClient(ws)
       const sessions = new TargetSessions(cdp)
       active = { ...browser, ws, cdp, sessions }
+      // #20 — the watcher may only close THIS connection while it is live.
+      verifySkips = 0
       publishStatus({ browserConnected: true })
       await manager.browserConnected()
       await new Promise<void>((resolve) => { ws.addEventListener('close', () => resolve(), { once: true } as AddEventListenerOptions); ws.addEventListener('error', () => resolve(), { once: true } as AddEventListenerOptions) })
@@ -511,6 +543,45 @@ async function connectLoop(): Promise<void> {
       await sleep(2000)
     }
   }
+}
+
+/**
+ * #20 (F2) — endpoint authority while the socket is ALIVE.
+ *
+ * `connectLoop` only re-resolves on ws close/error, so a stale snapshot that
+ * still reaches a living wrong browser would never be replaced. Every 5s the
+ * watcher asks the resolver again; a different `instanceKey` (new browser on a
+ * new port, or the state file taking authority over the env snapshot) closes
+ * the current socket so the loop swaps to the winner. Hard guards, all from the
+ * issue thread's regression list:
+ *   - remote env (`#12`) → the watcher never runs, env stays the only authority;
+ *   - no live candidate → nothing happens, the connection is never broken on a
+ *     probe miss (维持 3s 重试语义);
+ *   - unchanged fingerprint AND an answering active port → zero network.
+ */
+let lastFingerprint = ''
+let verifySkips = 0
+async function maybeReplaceEndpoint(): Promise<void> {
+  if (endpointResolver.remoteAuthoritative()) return
+  const fp = await endpointResolver.fingerprint()
+  const browser = active
+  if (browser === null) return
+  const current = browser.instanceKey ?? ''
+  if (fp === lastFingerprint) {
+    // Reverse check (spec §2): the state files did not move, but the instance
+    // we hold may have died without the socket noticing. Throttled to every
+    // third tick (~15s) to keep the steady-state network budget small.
+    if (verifySkips++ % 3 !== 0 || browser.port === null) return
+    const alive = await endpointIO.fetchVersion(`http://127.0.0.1:${browser.port}/json/version`)
+    if (alive !== null) return
+  } else {
+    lastFingerprint = fp
+  }
+  const next = await resolveBrowser()
+  if (!next) return
+  if (next.instanceKey === current) return
+  process.stderr.write(`[cdp-cast-worker] endpoint replaced: ${current} -> ${next.instanceKey}\n`)
+  try { browser.ws.close() } catch { /* ignore */ }
 }
 
 function sleep(ms: number): Promise<void> {
@@ -862,8 +933,12 @@ async function main(): Promise<void> {
     if (!active || sseClients.size === 0) return
     snapshotSpaces().then((spaces) => broadcast('spaces', spaces)).catch(() => { /* ignore */ })
   }, 1000)
+  // #20 — endpoint watcher; independent of the SSE tick so it also runs while
+  // nobody is watching (the next panel open must not meet a stale endpoint).
+  const endpointTimer = setInterval(() => { maybeReplaceEndpoint().catch(() => { /* ignore */ }) }, 5000)
   const shutdown = async (): Promise<void> => {
     clearInterval(metadataTimer)
+    clearInterval(endpointTimer)
     await manager.dispose().catch(() => { /* ignore */ })
     try { active?.ws?.close() } catch { /* ignore */ }
     try { const state = JSON.parse(await import('node:fs/promises').then((fs) => fs.readFile(CAST_STATE_FILE, 'utf8'))) as { pid?: number }; if (state.pid === process.pid) rmSync(CAST_STATE_FILE, { force: true }) } catch { /* ignore */ }

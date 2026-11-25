@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { pickForegroundId, isBlankPageUrl } from "../src/worker/endpoint-authority.ts";
 import {
   createActiveSpaceTracker,
   runWithStaleSpaceRetry,
@@ -370,5 +372,45 @@ describe("attachSessionHint (G)", () => {
   it("leaves unrelated errors untouched", () => {
     expect(attachSessionHint("TypeError: nope")).toBe("TypeError: nope");
     expect(attachSessionHint(undefined)).toBe("");
+  });
+});
+
+// ── H: #20 foreground pick — visibility chain, not /json/list order ────────
+
+describe("pickForegroundId (H, #20 R2)", () => {
+  it("New Tab sorts first but the business page is visible → business page wins", async () => {
+    const pages = [
+      { id: "t1", url: "chrome://newtab" },
+      { id: "t2", url: "https://www.bing.com/search?q=x" },
+    ];
+    const seen = { t1: "hidden", t2: "visible" } as Record<string, string>;
+    expect(await pickForegroundId(pages, (id: string) => seen[id])).toBe("t2");
+  });
+
+  it("all hidden (headless-style) → first non-blank page, never the New Tab", async () => {
+    const pages = [
+      { id: "t1", url: "chrome://newtab" },
+      { id: "t2", url: "https://example.com/a" },
+      { id: "t3", url: "about:blank" },
+    ];
+    expect(await pickForegroundId(pages, () => "hidden")).toBe("t2");
+  });
+
+  it("single page → returned as-is even when it is a blank tab", async () => {
+    expect(await pickForegroundId([{ id: "only", url: "chrome://newtab" }], () => undefined)).toBe("only");
+    expect(await pickForegroundId([], () => undefined)).toBe(null);
+  });
+
+  it("blank-page set covers the start pages the panel used to stick on", () => {
+    expect(isBlankPageUrl("chrome://startpage")).toBe(true);
+    expect(isBlankPageUrl("https://start.duckduckgo.com")).toBe(false);
+    expect(isBlankPageUrl(undefined)).toBe(true);
+  });
+
+  it("worker keeps the first-page rule on the remote proxy path (#12 no-regression)", () => {
+    const worker = readFileSync(new URL("../src/worker/cdp-cast-worker.ts", import.meta.url), "utf8");
+    // string form on purpose: regex `?` is a quantifier and hides typos here
+    expect(worker).toContain("? pages.find((p) => p.id !== undefined)?.id ?? null");
+    expect(worker).toContain(": await pickForegroundId(pages.slice(0, 30), visibilityOf)");
   });
 });

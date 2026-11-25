@@ -1,3 +1,31 @@
+# Changelog
+
+## 1.14.14 (2026-11-25)
+
+**修复 #20：观察窗焊死在旧实例 / 「不关浏览器也卡 New Tab」——两处独立缺陷，分开修。**
+
+报告人（MOYU126）的现象由两个不同源的成因拼成，本版逐一处理：
+
+### 一、端点权威（R1：端口漂移后面板不跟随）
+
+- `resolveBrowser()` 不再把 `EGO_LINUX_CDP_URL`（spawn 时刻的快照）当真理：改为 **browser.json / launcher.json 状态文件候选 + 逐个 `/json/version` 活体探测（1s 超时），env 仅在候选全灭后兜底**。idle 关闭重开、端口 40025→33253 漂移时观察窗自动跟随新实例，无需重启引擎。
+- **实例身份 + 强制换代**：`connectLoop` 过去只在 ws 断开后重解析——旧端口上若另有一只活浏览器，连接永不断、永不换。现在每条连接携带 `instanceKey = pid:port`，独立 5s watcher 比对权威实例，不同才 `ws.close()` 换代（日志 `endpoint replaced: old -> new`）；无新候选时绝不动现有连接。
+- 回环候选一律回传**数值 port**，`devtoolsBase()` 从此走 local 分支，绕开 `proxyObserveCache` 的 30s 失败毒化（一次本地抖动不再让前台观测哑 30 秒）。
+- **远端 CDP 不回归（#12）**：env host 非回环（含代理前缀）时 env 仍是唯一权威，不做回环探测、不被状态文件覆盖；watcher 整体停用。Lightpanda 后端（`launcher.json.engine === 'lightpanda'`）走同一端口探测路径。
+- 实现下沉到新模块 `src/worker/endpoint-authority.ts`（fs/net/clock 全注入，零新依赖）；探测预算：状态文件 mtime+port 未变则 0 网络，稳态反查节流至 ~15s 一次。
+
+### 二、前景选择（R2：不关浏览器也卡 New Tab）
+
+- 该症状与端口漂移无关：`activeTargetInfo()` 的前台兜底取的是 `/json/list` 的首个 page，而列表顺序≠前台顺序，新标签页常排第一（旧注释「first page — the FOREGROUND tab」的假设不成立）。focus 通道未命中时面板就挂到 New Tab 上。
+- 现在 `HUMAN_PROBE_JS` 同一次 `Runtime.evaluate` 多带回 `visibilityState`（零额外调用，与 1.14.11 加 `readyState`/`dpr` 同模式），本地前景选择改为：**per-session focus（#15，不动）→ global focus → `visibilityState === 'visible'` 页 → 非 newtab/about:blank/startpage 首个页 → none**；`spaces` 行另透 `visibility` 字段，SSE 形状不变，客户端零改动。远端代理路径无逐页探针条件，维持首个 page 语义。
+
+### 三、前提更正与致谢
+
+- 报告人推测「1.14.10 改成 env 优先 / 丢掉 launcher.json 多候选」经 tarball 逐版核对不成立：env 优先至少自 1.5.0 就在，worker 从未读过 launcher.json；升级即坏的感觉来自上述两个既有缺陷在新构建中显形。但其端口漂移序列、四轮 workaround 验证与「状态文件候选→探测→env 兜底」的期望顺序全部可信，本版的候选顺序即采纳其方案（仅对远端 env 保留例外）。
+- 新增 `tests/worker-endpoint-authority.test.ts`（19 例：候选收集/活体探测/远端例外/指纹零网络/换代契约）与 `active-space.test.ts` H 组（5 例：可见性链/全 hidden 退化/单页原样/远端首 page 保留）。Android/proot 环境本地无法复现报告人宿主，落地实测以 Windows 本机 + 单测为准，Android 侧待报告人复验。
+
+门禁：typecheck 双 project 干净；`npm test` 1422 passed / 13 skipped；build 后 `bin/cdp-cast-worker.mjs` 含 `instanceKey`×13 / `visibilityState`×12 / `endpoint replaced`。
+
 ## 1.14.13 (2026-11-25)
 
 **「重新查看引导」按钮改为圆角描边胶囊（对齐统一引导件新样式）。**

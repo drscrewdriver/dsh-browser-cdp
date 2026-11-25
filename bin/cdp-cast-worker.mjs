@@ -413,14 +413,14 @@ var require_permessage_deflate = /* @__PURE__ */ __commonJS({ "node_modules/ws/l
 					value = value[0];
 					if (key === "client_max_window_bits") {
 						if (value !== true) {
-							const num = +value;
-							if (!Number.isInteger(num) || num < 8 || num > 15) throw new TypeError(`Invalid value for parameter "${key}": ${value}`);
-							value = num;
+							const num$1 = +value;
+							if (!Number.isInteger(num$1) || num$1 < 8 || num$1 > 15) throw new TypeError(`Invalid value for parameter "${key}": ${value}`);
+							value = num$1;
 						} else if (!this._isServer) throw new TypeError(`Invalid value for parameter "${key}": ${value}`);
 					} else if (key === "server_max_window_bits") {
-						const num = +value;
-						if (!Number.isInteger(num) || num < 8 || num > 15) throw new TypeError(`Invalid value for parameter "${key}": ${value}`);
-						value = num;
+						const num$1 = +value;
+						if (!Number.isInteger(num$1) || num$1 < 8 || num$1 > 15) throw new TypeError(`Invalid value for parameter "${key}": ${value}`);
+						value = num$1;
 					} else if (key === "client_no_context_takeover" || key === "server_no_context_takeover") {
 						if (value !== true) throw new TypeError(`Invalid value for parameter "${key}": ${value}`);
 					} else throw new Error(`Unknown parameter "${key}"`);
@@ -1032,12 +1032,12 @@ var require_receiver = /* @__PURE__ */ __commonJS({ "node_modules/ws/lib/receive
 				return;
 			}
 			const buf = this.consume(8);
-			const num = buf.readUInt32BE(0);
-			if (num > Math.pow(2, 21) - 1) {
+			const num$1 = buf.readUInt32BE(0);
+			if (num$1 > Math.pow(2, 21) - 1) {
 				cb(this.createError(RangeError, "Unsupported WebSocket frame: payload length > 2^53 - 1", false, 1009, "WS_ERR_UNSUPPORTED_DATA_PAYLOAD_LENGTH"));
 				return;
 			}
-			this._payloadLength = num * Math.pow(2, 32) + buf.readUInt32BE(4);
+			this._payloadLength = num$1 * Math.pow(2, 32) + buf.readUInt32BE(4);
 			this.haveLength(cb);
 		}
 		/**
@@ -6625,6 +6625,215 @@ function aspectHeight(width, aspect, fallbackHeight) {
 }
 
 //#endregion
+//#region src/worker/endpoint-authority.ts
+/** pid:port identity of one browser instance; stable across ws reconnects. */
+function instanceKey(pid, port) {
+	return `${pid ?? "nopid"}:${port ?? "noport"}`;
+}
+const LOOPBACK_HOSTS = new Set([
+	"127.0.0.1",
+	"localhost",
+	"0.0.0.0",
+	"::1",
+	"[::1]"
+]);
+/**
+* Is this host (or ws/http URL host segment) loopback? A proxy-prefixed host
+* segment like "gateway.corp:8443/127.0.0.1" is NOT loopback — that is a remote
+* path and keeps env authority (#12 regression guard).
+*/
+function isLoopbackHost(host) {
+	return LOOPBACK_HOSTS.has(host.toLowerCase());
+}
+function num(v) {
+	return typeof v === "number" && Number.isFinite(v) && v > 0 ? v : null;
+}
+function str(v) {
+	return typeof v === "string" && v !== "" ? v : null;
+}
+/** browser.json / launcher.json share one shape interest: port + optional ws endpoint + pid. */
+function stateRecord(raw, source, fresh) {
+	if (raw === null) return null;
+	const port = num(raw.port);
+	if (port === null) return null;
+	return {
+		port,
+		wsUrl: str(raw.wsUrl) ?? (str(raw.endpoint)?.startsWith("ws") ? str(raw.endpoint) : null),
+		pid: num(raw.pid),
+		source,
+		fresh
+	};
+}
+/** Parse EGO_LINUX_CDP_URL into a candidate; unparseable (proxy-prefixed) URLs keep env-source with wsUrl only. */
+function envCandidate(env) {
+	const raw = env.EGO_LINUX_CDP_URL;
+	if (!raw) return null;
+	let parsed = null;
+	try {
+		parsed = new URL(raw);
+	} catch {
+		parsed = null;
+	}
+	if (parsed === null || !isLoopbackHost(parsed.hostname)) return {
+		port: null,
+		wsUrl: raw,
+		pid: null,
+		source: "env",
+		fresh: 0,
+		trustWsUrl: true
+	};
+	return {
+		port: num(Number(parsed.port)),
+		wsUrl: raw,
+		pid: null,
+		source: "env",
+		fresh: 0
+	};
+}
+/**
+* Build the resolver bound to one set of state paths. `fingerprint()` lets the
+* 5s watcher skip ALL probing (zero network) while neither mtime nor the
+* recorded port changed; `remoteAuthoritative()` gates the whole watcher off
+* for remote env.
+*/
+function createEndpointResolver(io, paths) {
+	const envRemote = () => {
+		const c = envCandidate(io.env);
+		return c !== null && c.source === "env" && c.port === null;
+	};
+	async function collectCandidates() {
+		const [stateMtime, launcherMtime, stateRaw, launcherRaw] = await Promise.all([
+			io.statMtime(paths.browserStatePath),
+			io.statMtime(paths.launcherStatePath),
+			io.readJson(paths.browserStatePath),
+			io.readJson(paths.launcherStatePath)
+		]);
+		const out = [];
+		const state = stateRecord(stateRaw, "state", stateMtime);
+		if (state) out.push({
+			...state,
+			fresh: Math.max(stateMtime, state.fresh)
+		});
+		const launcher = stateRecord(launcherRaw, "launcher", launcherMtime);
+		if (launcher) out.push({
+			...launcher,
+			fresh: Math.max(launcherMtime, launcher.fresh)
+		});
+		const candidates = out.map((r) => ({
+			port: r.port,
+			wsUrl: r.wsUrl,
+			pid: r.pid,
+			source: r.source,
+			fresh: r.fresh
+		}));
+		candidates.sort((a, b) => Number(io.isAlive(b.pid ?? -1)) - Number(io.isAlive(a.pid ?? -1)) || b.fresh - a.fresh);
+		return candidates;
+	}
+	async function probeCandidate(c) {
+		if (c.trustWsUrl === true && c.wsUrl !== null) return {
+			wsUrl: c.wsUrl,
+			port: c.port,
+			pid: c.pid,
+			instanceKey: instanceKey(c.pid, c.port)
+		};
+		if (c.port === null) return null;
+		const version = await io.fetchVersion(`http://127.0.0.1:${c.port}/json/version`);
+		if (version === null) return null;
+		const wsUrl = c.wsUrl ?? str(version.wsUrl);
+		if (wsUrl === null) return null;
+		return {
+			wsUrl,
+			port: c.port,
+			pid: c.pid,
+			instanceKey: instanceKey(c.pid, c.port)
+		};
+	}
+	async function resolve() {
+		const env = envCandidate(io.env);
+		if (env !== null && env.trustWsUrl === true) return {
+			wsUrl: env.wsUrl,
+			port: null,
+			pid: null,
+			instanceKey: instanceKey(null, null)
+		};
+		const candidates = await collectCandidates();
+		for (const c of candidates) {
+			const hit = await probeCandidate(c);
+			if (hit !== null) return hit;
+		}
+		if (env !== null && env.source === "env") {
+			const hit = await probeCandidate(env);
+			if (hit !== null) return hit;
+			if (env.wsUrl !== null && env.port === null) return {
+				wsUrl: env.wsUrl,
+				port: null,
+				pid: null,
+				instanceKey: instanceKey(null, null)
+			};
+		}
+		return null;
+	}
+	async function fingerprint() {
+		const [a, b, stateRaw, launcherRaw] = await Promise.all([
+			io.statMtime(paths.browserStatePath),
+			io.statMtime(paths.launcherStatePath),
+			io.readJson(paths.browserStatePath),
+			io.readJson(paths.launcherStatePath)
+		]);
+		const state = stateRecord(stateRaw, "state", a);
+		const launcher = stateRecord(launcherRaw, "launcher", b);
+		return `${a}:${state?.port ?? "-"}|${b}:${launcher?.port ?? "-"}`;
+	}
+	return {
+		resolve,
+		fingerprint,
+		remoteAuthoritative: envRemote
+	};
+}
+/** Pages that mean "nothing is being looked at"; ordering around them is what the New Tab bug is. */
+const BLANK_PAGE_URLS = [
+	"chrome://newtab",
+	"about:blank",
+	"chrome://startpage",
+	"edge://newtab",
+	"data:,"
+];
+function isBlankPageUrl(url) {
+	if (!url) return true;
+	const u = url.trim().toLowerCase();
+	return BLANK_PAGE_URLS.includes(u);
+}
+/**
+* Pick the foreground page from a `/json/list` page set.
+*
+* The old code took the FIRST `type === 'page'` entry and commented it as
+* "the FOREGROUND tab" — the assumption never held: a freshly opened New Tab
+* usually sorts first, so the panel snapped to it (findings F3). Order:
+*   1. the page whose visibilityState === 'visible'   (local only — a remote
+*      proxy cannot answer per-page probes, so callers keep first-page there)
+*   2. the first non-blank page
+*   3. the first page (last resort; a single-tab browser lands here)
+*
+* The getter may be sync (tests, warm cache) or async (one per-target CDP
+* evaluate); every answer is requested up front, so async probes run in
+* parallel and the hot path pays one round-trip, not N.
+*/
+async function pickForegroundId(pages, visibility) {
+	if (pages.length === 0) return null;
+	const seen = await Promise.all(pages.map((p) => Promise.resolve(visibility(p.id)).catch(() => void 0)));
+	const hit = pages.findIndex((_, i) => seen[i] === "visible");
+	if (hit >= 0) return pages[hit].id;
+	const real = pages.findIndex((p) => !isBlankPageUrl(p.url));
+	return real >= 0 ? pages[real].id : pages[0].id;
+}
+
+//#endregion
+//#region src/cdp/launcher.ts
+function defaultLauncherStatePath() {
+	return join(homedir(), ".dsh", "cache", "dsh-browser-cdp", "launcher.json");
+}
+
+//#endregion
 //#region src/worker/cdp-cast-worker.ts
 const SENTINEL = "@@DSH_RESULT@@";
 /**
@@ -6661,17 +6870,19 @@ try {
 	};
 } catch {}
 /**
-* One Runtime.evaluate answers three questions the panel used to guess at:
+* One Runtime.evaluate answers four questions the panel used to guess at:
 * `humanCheck` (unchanged), `readyState` (a page still loading looks dead in a
-* screenshot) and `dpr` (a 1.25 phone-preview layout explains "why is the text
-* smaller"). All three ride the SAME 5s-throttled probe — no extra CDP call.
+* screenshot), `dpr` (a 1.25 phone-preview layout explains "why is the text
+* smaller") and — #20 — `visibilityState` (a background tab reports 'hidden',
+* which is the only reliable "which tab is the user actually looking at").
+* All four ride the SAME 5s-throttled probe — no extra CDP call.
 */
 const HUMAN_PROBE_JS = `(() => {
-  const readyState=document.readyState,dpr=(window.devicePixelRatio||1);
+  const readyState=document.readyState,dpr=(window.devicePixelRatio||1),visibilityState=document.visibilityState;
   const el=document.querySelector('iframe[src*="recaptcha"],.g-recaptcha,.h-captcha,iframe[src*="hcaptcha"],.cf-turnstile,iframe[src*="turnstile"],iframe[src*="cloudflare"],#challenge-form,.challenge-form,#captcha,.captcha');
-  if(el)return{detected:true,kind:/recaptcha/i.test(el.outerHTML)?'recaptcha':/hcaptcha/i.test(el.outerHTML)?'hcaptcha':/turnstile/i.test(el.outerHTML)?'turnstile':'captcha',readyState:readyState,dpr:dpr};
+  if(el)return{detected:true,kind:/recaptcha/i.test(el.outerHTML)?'recaptcha':/hcaptcha/i.test(el.outerHTML)?'hcaptcha':/turnstile/i.test(el.outerHTML)?'turnstile':'captcha',readyState:readyState,dpr:dpr,visibilityState:visibilityState};
   const t=((document.body&&document.body.innerText)||'').slice(0,120000).toLowerCase();
-  return /verify you are human|your activity looks unusual|captcha|i.?m not a robot|人机验证|安全验证|我是人类|验证码|滑块验证/.test(t)?{detected:true,kind:'captcha',readyState:readyState,dpr:dpr}:{detected:false,kind:null,readyState:readyState,dpr:dpr};
+  return /verify you are human|your activity looks unusual|captcha|i.?m not a robot|人机验证|安全验证|我是人类|验证码|滑块验证/.test(t)?{detected:true,kind:'captcha',readyState:readyState,dpr:dpr,visibilityState:visibilityState}:{detected:false,kind:null,readyState:readyState,dpr:dpr,visibilityState:visibilityState};
 })()`;
 const sseClients = /* @__PURE__ */ new Set();
 const videoClients = /* @__PURE__ */ new Set();
@@ -6920,30 +7131,53 @@ const manager = new CaptureManager({
 		}
 	}
 });
-async function readBrowserState() {
-	try {
-		return JSON.parse(await import("node:fs/promises").then((fs) => fs.readFile(BROWSER_STATE_FILE, "utf8")));
-	} catch {
-		return null;
-	}
-}
+/**
+* #20 — the endpoint resolver. io.fs/net are the only place this worker touches
+* state files or /json/version for AUTHORITY purposes; every function falls
+* back silently (a missing/bad file is "no candidate", never an error).
+*/
+const fsp = await import("node:fs/promises");
+const endpointIO = {
+	statMtime: async (p) => {
+		try {
+			return (await fsp.stat(p)).mtimeMs;
+		} catch {
+			return -1;
+		}
+	},
+	readJson: async (p) => {
+		try {
+			return JSON.parse(await fsp.readFile(p, "utf8"));
+		} catch {
+			return null;
+		}
+	},
+	fetchVersion: async (u) => {
+		try {
+			const r = await fetch(u, { signal: AbortSignal.timeout(1e3) });
+			if (!r.ok) return null;
+			const j = await r.json();
+			return { wsUrl: typeof j.webSocketDebuggerUrl === "string" ? j.webSocketDebuggerUrl : void 0 };
+		} catch {
+			return null;
+		}
+	},
+	isAlive: (pid) => {
+		try {
+			process.kill(pid, 0);
+			return true;
+		} catch {
+			return false;
+		}
+	},
+	env: process.env
+};
+const endpointResolver = createEndpointResolver(endpointIO, {
+	browserStatePath: BROWSER_STATE_FILE,
+	launcherStatePath: defaultLauncherStatePath()
+});
 async function resolveBrowser() {
-	if (process.env.EGO_LINUX_CDP_URL) return {
-		wsUrl: process.env.EGO_LINUX_CDP_URL,
-		port: null
-	};
-	const state = await readBrowserState();
-	if (!state?.port) return null;
-	try {
-		const response = await fetch(`http://127.0.0.1:${state.port}/json/version`, { signal: AbortSignal.timeout(1500) });
-		const wsUrl = response.ok ? (await response.json()).webSocketDebuggerUrl : null;
-		return wsUrl ? {
-			port: state.port ?? null,
-			wsUrl
-		} : null;
-	} catch {
-		return null;
-	}
+	return endpointResolver.resolve();
 }
 async function listTargets() {
 	if (!active) return [];
@@ -6989,16 +7223,18 @@ const proxyObserveCache = {
 *     it as "active" left every row `active:false` until a watch started, and
 *     the panel (which renders active rows only) then never started one: a
 *     deadlock, not a glitch.
-*   - `/json/list` first page — the FOREGROUND tab. Correct for a local launch
-*     (the user really is switching tabs in that window) and, through the proxy
-*     path, for a remote one too; a proxy that cannot answer is "no
-*     observation", never an error.
+*   - `/json/list` foreground pick — the tab the USER is looking at. The old
+*     "first page" rule was a wrong assumption (#20 / findings F3): a freshly
+*     opened New Tab usually sorts first, so the panel snapped to it. Locally
+*     the pick now goes visibility → first non-blank → first; through the
+*     remote proxy path (`/json/*` over the proxy) a per-page CDP probe is not
+*     possible, so there the first page stays — #12 semantics unchanged.
 *   - the panel's own selection — belongs to the view focus, not here.
 *
 * Order: per-session focus (validated against the live list) → explicit host
-* focus → foreground observation (local port, else remote proxy) → none.
-* `known` lets the caller pass the target list it already fetched, so a closed
-* tab cannot keep the highlight.
+* focus → foreground observation (local: visibility-ranked list; remote: proxy
+* list) → none. `known` lets the caller pass the target list it already
+* fetched, so a closed tab cannot keep the highlight.
 */
 async function activeTargetInfo(known, sessionId) {
 	const inKnown = (id) => known === void 0 || known.includes(id);
@@ -7042,7 +7278,12 @@ async function activeTargetInfo(known, sessionId) {
 				source: "none"
 			};
 		}
-		const id = (await response.json()).find((entry) => entry.type === "page")?.id ?? null;
+		const pages = (await response.json()).filter((entry) => entry.type === "page" && typeof entry.id === "string");
+		const visibilityOf = (id$1) => {
+			const cached = probeCache.get(id$1);
+			return cached?.visibility !== void 0 && now - cached.at <= 5e3 ? cached.visibility : void 0;
+		};
+		const id = target.remote ? pages.find((p) => p.id !== void 0)?.id ?? null : await pickForegroundId(pages.slice(0, 30), visibilityOf);
 		if (target.remote) {
 			proxyObserveCache.at = now;
 			proxyObserveCache.id = id;
@@ -7116,10 +7357,13 @@ async function snapshotSpaces(sessionId) {
 			returnByValue: true,
 			awaitPromise: false
 		}, 3e3).then((result) => {
-			const r = result;
+			const r = result.result?.value || null;
 			probeCache.set(target.targetId, {
 				at: Date.now(),
-				human: r.result?.value || null
+				human: r,
+				visibility: r?.visibilityState,
+				readyState: r?.readyState,
+				dpr: r?.dpr
 			});
 		}).catch(() => {});
 		if (target.targetId === activeId) probeZoom(browser, target.targetId, now);
@@ -7140,6 +7384,7 @@ async function snapshotSpaces(sessionId) {
 			},
 			readyState: probe?.readyState,
 			dpr: probe?.dpr,
+			visibility: probe?.visibilityState,
 			zoom: zoomCache.get(target.targetId)?.zoom ?? null
 		});
 	}
@@ -7169,6 +7414,7 @@ async function connectLoop() {
 				cdp,
 				sessions
 			};
+			verifySkips = 0;
 			publishStatus({ browserConnected: true });
 			await manager.browserConnected();
 			await new Promise((resolve) => {
@@ -7189,6 +7435,40 @@ async function connectLoop() {
 			await sleep(2e3);
 		}
 	}
+}
+/**
+* #20 (F2) — endpoint authority while the socket is ALIVE.
+*
+* `connectLoop` only re-resolves on ws close/error, so a stale snapshot that
+* still reaches a living wrong browser would never be replaced. Every 5s the
+* watcher asks the resolver again; a different `instanceKey` (new browser on a
+* new port, or the state file taking authority over the env snapshot) closes
+* the current socket so the loop swaps to the winner. Hard guards, all from the
+* issue thread's regression list:
+*   - remote env (`#12`) → the watcher never runs, env stays the only authority;
+*   - no live candidate → nothing happens, the connection is never broken on a
+*     probe miss (维持 3s 重试语义);
+*   - unchanged fingerprint AND an answering active port → zero network.
+*/
+let lastFingerprint = "";
+let verifySkips = 0;
+async function maybeReplaceEndpoint() {
+	if (endpointResolver.remoteAuthoritative()) return;
+	const fp = await endpointResolver.fingerprint();
+	const browser = active;
+	if (browser === null) return;
+	const current = browser.instanceKey ?? "";
+	if (fp === lastFingerprint) {
+		if (verifySkips++ % 3 !== 0 || browser.port === null) return;
+		if (await endpointIO.fetchVersion(`http://127.0.0.1:${browser.port}/json/version`) !== null) return;
+	} else lastFingerprint = fp;
+	const next = await resolveBrowser();
+	if (!next) return;
+	if (next.instanceKey === current) return;
+	process.stderr.write(`[cdp-cast-worker] endpoint replaced: ${current} -> ${next.instanceKey}\n`);
+	try {
+		browser.ws.close();
+	} catch {}
 }
 function sleep(ms) {
 	return new Promise((resolve) => setTimeout(resolve, ms));
@@ -7754,8 +8034,12 @@ async function main() {
 		if (!active || sseClients.size === 0) return;
 		snapshotSpaces().then((spaces) => broadcast("spaces", spaces)).catch(() => {});
 	}, 1e3);
+	const endpointTimer = setInterval(() => {
+		maybeReplaceEndpoint().catch(() => {});
+	}, 5e3);
 	const shutdown = async () => {
 		clearInterval(metadataTimer);
+		clearInterval(endpointTimer);
 		await manager.dispose().catch(() => {});
 		try {
 			active?.ws?.close();

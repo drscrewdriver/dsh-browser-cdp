@@ -398,7 +398,7 @@ describe("bcdp_status reports the channel and the injection face", () => {
     // （tabbit 路 `diagnose` 的 grace 是 20s，且在 ego 锁里持锁）。就绪判定改由
     // mount / 设置变更 / refresh:true 驱动，所以这里钉的是「默认不 spawn」。
     const cached = mountTabbit();
-    defaultAttachCache.patch({ status: "ready", targetId: "tb", code: "", message: "", resolvedAt: Date.now() });
+    defaultAttachCache.patch({ status: "ready", linkId: "tb", targetId: "tb", code: "", message: "", resolvedAt: Date.now() });
     const first = await cached.run("bcdp_status", {});
     expect(cached.calls.some((c) => c.argv.includes("diagnose"))).toBe(false);
     expect(first.value).toMatchObject({ cached: true, available: true });

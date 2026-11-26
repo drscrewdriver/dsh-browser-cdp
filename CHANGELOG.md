@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.15.1 (2026-11-26)
+
+**设置分节底栏新增常驻 Star 快车道（panel-star-row S 档）。**
+
+- `src/client/index.ts` 的 `FamilySettingsCard`（顶层 `settings.section` 分节 body）末尾挂一行常驻条：GitHub 单色 SVG + `drscrewdriver/dsh-browser-cdp` 链接（新标签页、`rel=noreferrer`）+ 一句工程化求星话术 + `★ 留颗 Star` 钮。
+- 行本体是生成副本 `src/client/star-row-copy.ts`（真源 `mine-dsh-plugins/_tools/star-row/starRow.ts`，`sync.mjs --check` 把漂移）；副本内嵌 10 语按 `<html lang>` 前缀自选，认不出回落 en。
+- 关闭语义：点钮只收起话术与钮（`localStorage` 键 `dsh.star.browser-cdp.dismissed`），**仓库链接永留**；不弹窗。
+- `star-row-copy.ts` 登记进本仓 locale 守卫白名单（`tests/_locale-baseline.json`）——C-ui 148 / A-pair 82 棘轮原地不动，全量 1431 passed 不变。
+- 行为契约 `tests/star-row.test.ts`（4 例：渲染/链接属性/十语切换/关闭后只剩链接）。
+- 顺带对齐 `CLIENT_BUILD`：此前停在 `1.14.11`（比 package.json 落后两个版本），面板标题自报的构建号是错的；现由 `scripts/bump.mjs` 同步为 `1.15.1`。
+
 ## 1.15.0 (2026-11-26)
 
 **新增本插件首个跨插件服务面 `browser-fetch`（主题线 1.15.0-rc.1 / rc.2，预发布线已验证）。**

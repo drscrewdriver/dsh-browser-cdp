@@ -24,6 +24,7 @@ import { commitField } from './fam-write'
 import { shouldShowGen1SettingsGear } from './gen1-gate'
 import { GuidePanel, GuideRestartButton, guideSteps, isGuideSkipped } from './guide'
 import { BROWSER_CDP_GUIDE_STEPS } from './guide-steps'
+import { mountStarRow } from './star-row-copy'
 
 /**
  * Which CLIENT bundle is running, shown next to the panel title.
@@ -1323,6 +1324,14 @@ const inject = ['slots', 'locale', 'connection', 'sessions', 'conversation']
 				h(FamLinks, { key: 'links', first: true, value: value, writable: writable, scope: scope }),
 				FAM_FIELD_GROUPS.map(function (group) {
 					return h(FamGroup, { key: group.gk, group: group, value: value, writable: writable, scope: scope })
+				}),
+				// 面板常驻 star 快车道：仓库链接永留，求星话术可一键收起
+				// （dismissed 键 dsh.star.browser-cdp；文案在 star-row-copy.ts 生成副本内，不进字典棘轮）。
+				h('span', {
+					key: 'star-row',
+					ref: function (node: any) {
+						if (node && !node.firstChild) node.appendChild(mountStarRow())
+					},
 				}),
 			)
 		}

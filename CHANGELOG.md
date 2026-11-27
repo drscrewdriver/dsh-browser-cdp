@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.15.6-rc.1 (2026-11-27)
+
+**root 跑受管本地浏览器时自动追加 `--no-sandbox`（issue #22 里程碑 A）。**
+
+- `src/cdp/launcher.ts`：`LaunchIo` 新增可注入的 `euid()` 与 `env()`（默认实现走 `process.geteuid` / `process.env`），使 root 与无显示器的冷启动路径可以在测试里构造，不需要真的以 root 跑。
+- `buildLaunchArgs` 新增 `addNoSandbox`：为真时在 `--headless=new` 之前插入 `--no-sandbox`；用户 `chromeArgs` 里已经给过该参数（含 `--no-sandbox=true` 写法）时保留用户那一份、只留一个，argv 顺序仍是用户写的样子。
+- `launchLocalBrowser` 计算 `platform !== 'win32' && euid() === 0` 传入。Linux 容器/CI 镜像里 Chromium 以 root 启动会直接退出（"Running as root without --no-sandbox is not supported"），此前表现为一句无信息的 `local-launch-exited`。
+- 不复用 `bin/cdp-chrome-wrapper.sh`：那是 POSIX sh 脚本，Windows 与 macOS 走的是同一个 `launchLocalBrowser`，追加参数才天然跨平台。
+- 测试 `tests/cdp-launcher.test.ts` 新增 6 例：root 追加 / 非 root 不追加 / win32 即使 euid=0 也不追加 / 与用户 `chromeArgs` 去重（两种写法）/ 未启用时不动用户的 `--no-sandbox`。
+- 适用 `>= 1.15.6`；不改 remote 拓扑与 `dsh-*` 历史线。
+
 ## 1.15.5 (2026-11-27)
 
 **观察窗信任栅栏改为询问宿主 `connection.requestRejection`（issue #21）——「装了 skip-browser-auth 仍 401」的根因修复。**

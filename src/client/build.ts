@@ -8,4 +8,4 @@
  *
  * Keep in sync with package.json — `node scripts/bump.mjs <version>` writes both.
  */
-export const CLIENT_BUILD = '1.15.5'
+export const CLIENT_BUILD = '1.15.6-rc.1'

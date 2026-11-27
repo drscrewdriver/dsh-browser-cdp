@@ -2389,6 +2389,28 @@ function emptyListResultFor(
  * 为什么先 `localBrowserInfo()` 再 refreshAttach：前者是纯读（pid 存活即认），
  * 后者会走完整的 launch→probe 流程。已经起着的时候不该再付一次启动开销。
  */
+/**
+ * Issue #22 M-C: port of a live agent-browser instance from `browser.json`, or
+ * null. Advisory only — used to append "another instance is up, you could
+ * attach to it" to a FAILED local launch. It never changes the route
+ * (worker/endpoint-authority.ts: local mode only trusts launcher.json).
+ */
+function liveBrowserStatePort(): number | null {
+  try {
+    const e = process.env
+    const isWin = process.platform === 'win32'
+    const home = e.HOME || e.USERPROFILE || (isWin ? e.LOCALAPPDATA || '' : homedir())
+    const stateDir = e.EGO_LINUX_STATE_DIR
+      || (isWin
+        ? `${e.LOCALAPPDATA || `${home}\\AppData\\Local`}\\ego-lite-linux`
+        : `${e.XDG_STATE_HOME || `${home}/.local/state`}/ego-lite-linux`)
+    const raw = JSON.parse(readFileSync(`${stateDir}/browser.json`, 'utf8')) as { port?: unknown }
+    return typeof raw.port === 'number' && raw.port > 0 ? raw.port : null
+  } catch {
+    return null
+  }
+}
+
 async function ensureManagedBrowser(
   ctx: EgoContext,
   cfg: EgoRuntimeConfig,
@@ -2427,6 +2449,7 @@ async function ensureManagedBrowser(
     },
     // 这次是我们决定要起 —— 闸门已在上面判过，这里必须放行。
     useLauncher: true,
+    liveInstancePort: liveBrowserStatePort,
   })
   if (attach.status === 'ready' && attach.wsUrl !== '') {
     // 端点变了要让 worker 跟着重连，否则观察窗还连着上一个浏览器。
@@ -3616,6 +3639,9 @@ bridge.onChange(() => tiers.reapply())
           // 不再 spawn 受管浏览器，推迟到首个真碰页面的 bcdp_* 调用
           // （defineEgoTool 的 ensureManagedBrowser）。eager 保留 1.12.2 行为。
           useLauncher: shouldLaunchOnMount(resolved.localLaunchPolicy, localBrowserPower),
+          // Issue #22 M-C: advisory only — a live browser.json instance is
+          // mentioned in a FAILED local-launch message, never routed to.
+          liveInstancePort: liveBrowserStatePort,
           // 探测冷启动闸门（默认关）：关 = ego-cli 探测绝不把背后的浏览器拉起来，
           // 挂载/改设置不再弹浏览器窗口；首个真实 bcdp_* 调用才冷启动。
           cliProbeColdStart: resolved.allowProbeColdStart === true,
@@ -5866,7 +5892,15 @@ function registerHelpAndDoctor(ctx: EgoContext, cfg: EgoRuntimeConfig, reg: (too
         if (upstream !== '') {
           lines.push(`conflict: old dsh-ego-browser installed at ${upstream} — only one plugin should drive the local ego browser (they would share its task spaces)`)
         }
-        lines.push(`chromeArgs (effective, next cold start): ${chrArgs.length ? chrArgs.join(' ') : '(none)'}`)
+        // Issue #22 M-C: show what the launcher will ACTUALLY pass, including the
+        // auto-added `--no-sandbox` on root — otherwise the doctor says "(none)"
+        // while Chromium is being handed a flag the user never wrote.
+        const autoNoSandbox = process.platform !== 'win32'
+          && typeof process.geteuid === 'function'
+          && process.geteuid() === 0
+          && !chrArgs.some((a) => a === '--no-sandbox' || a === '--no-sandbox=true')
+        const effArgs = autoNoSandbox ? ['--no-sandbox', ...chrArgs] : chrArgs
+        lines.push(`chromeArgs (effective, next cold start): ${effArgs.length ? effArgs.join(' ') : '(none)'}${autoNoSandbox ? ' (--no-sandbox auto-added: running as root)' : ''}`)
         // state dir + runtime state
         const isWin = process.platform === 'win32'
         const e = process.env

@@ -296,3 +296,50 @@ describe('launcher root no-sandbox (issue #22 M-A)', () => {
     expect(args).toContain('--no-sandbox')
   })
 })
+
+/** Issue #22 M-C — a cold-start failure must name the fix, not just the symptom. */
+describe('launcher actionable cold-start errors (issue #22 M-C)', () => {
+  function failingIo(options: { euid: number; env: Record<string, string | undefined> }) {
+    const state: Record<string, string> = {}
+    const alive = new Set<number>()
+    return {
+      exists: (p: string) => p.endsWith('chrome.exe') || p in state,
+      readFile: (p: string) => state[p],
+      writeFile: (p: string, d: string) => { state[p] = d },
+      removeFile: (p: string) => { delete state[p] },
+      isAlive: () => false,
+      killTree: () => undefined,
+      spawn: () => ({ pid: 4242 }),
+      fetchVersion: async () => ({ ok: false }),
+      now: (() => { let t = 1000; return () => (t += 400) })(),
+      sleep: async () => undefined,
+      makePort: async () => 9222,
+      euid: () => options.euid,
+      env: () => options.env,
+    }
+  }
+
+  it('explains that root + no display needs localHeadless or --no-sandbox', async () => {
+    const io = failingIo({ euid: 0, env: {} })
+    const out = await launchLocalBrowser({ platform: 'linux', chromePath: 'C:/x/chrome.exe', statePath: 'l.json', timeoutMs: 1 }, io)
+    expect(out).toMatchObject({ ok: false, code: 'launch-exited' })
+    if (out.ok) throw new Error('unreachable')
+    expect(out.message).toContain('localHeadless')
+    expect(out.message).toContain('DISPLAY')
+  })
+
+  it('does not blame DISPLAY when one is present (root-only advice)', async () => {
+    const io = failingIo({ euid: 0, env: { DISPLAY: ':0' } })
+    const out = await launchLocalBrowser({ platform: 'linux', chromePath: 'C:/x/chrome.exe', statePath: 'l.json', timeoutMs: 1 }, io)
+    if (out.ok) throw new Error('unreachable')
+    expect(out.message).toContain('root')
+    expect(out.message).not.toContain('no DISPLAY/WAYLAND_DISPLAY')
+  })
+
+  it('skips the linux diagnosis entirely on win32', async () => {
+    const io = failingIo({ euid: 0, env: {} })
+    const out = await launchLocalBrowser({ platform: 'win32', chromePath: 'C:/x/chrome.exe', statePath: 'l.json', timeoutMs: 1 }, io)
+    if (out.ok) throw new Error('unreachable')
+    expect(out.message).not.toContain('localHeadless')
+  })
+})

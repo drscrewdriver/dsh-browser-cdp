@@ -840,3 +840,85 @@ describe("refreshAttach — tabbit readiness is an answer, not a constant", () =
     expect(out.status).toBe("ready");
   });
 });
+
+/**
+ * Issue #22 M-C — a failed local launch may MENTION a live browser.json
+ * instance, but must never re-route to it. Routing authority stays with the
+ * launcher in cdpMode=local (worker/endpoint-authority.ts contract).
+ */
+describe("refreshAttach — local failure hints without re-routing (issue #22 M-C)", () => {
+  /** Failing launcher IO: the spawn never answers on the port. */
+  function deadLauncherIo() {
+    const state: Record<string, string> = {}
+    return {
+      exists: (p: string) => p === '/x/chrome' || p.endsWith('chrome.exe') || p in state,
+      readFile: (p: string) => state[p],
+      writeFile: (p: string, d: string) => { state[p] = d },
+      removeFile: (p: string) => { delete state[p] },
+      isAlive: () => false,
+      killTree: () => undefined,
+      spawn: () => ({ pid: 4242 }),
+      fetchVersion: async () => ({ ok: false }),
+      now: (() => { let t = 1000; return () => (t += 400) })(),
+      sleep: async () => undefined,
+      makePort: async () => 9222,
+      euid: () => 0,
+      env: () => ({}),
+    }
+  }
+
+  it("appends the live port to the failure message", async () => {
+    const out = await refreshAttach({
+      targets: [], activeTargetId: "", mode: "local", cache: createAttachCache(),
+      fallback: { enabled: true, chromePath: "/x/chrome" },
+      useLauncher: true,
+      launcherIo: deadLauncherIo(),
+      liveInstancePort: () => 41234,
+      now: () => 0,
+    } as never)
+    expect(out.status).toBe("unreachable")
+    expect(out.message).toContain("41234")
+    expect(out.message).toContain("remote")
+  })
+
+  it("keeps the endpoint empty — the hint never becomes a route", async () => {
+    const out = await refreshAttach({
+      targets: [], activeTargetId: "", mode: "local", cache: createAttachCache(),
+      fallback: { enabled: true, chromePath: "/x/chrome" },
+      useLauncher: true,
+      launcherIo: deadLauncherIo(),
+      liveInstancePort: () => 41234,
+      now: () => 0,
+    } as never)
+    expect(out.endpoint).toBe("")
+    expect(out.wsUrl).toBe("")
+    expect(out.endpointSource).not.toBe("local-fallback")
+    expect(out.endpointSource).not.toBe("local-launch")
+  })
+
+  it("says nothing extra when no instance is live", async () => {
+    const out = await refreshAttach({
+      targets: [], activeTargetId: "", mode: "local", cache: createAttachCache(),
+      fallback: { enabled: true, chromePath: "/x/chrome" },
+      useLauncher: true,
+      launcherIo: deadLauncherIo(),
+      liveInstancePort: () => null,
+      now: () => 0,
+    } as never)
+    expect(out.message).not.toContain("another browser instance")
+  })
+
+  it("survives a probe that throws (the launch failure must not be masked)", async () => {
+    const out = await refreshAttach({
+      targets: [], activeTargetId: "", mode: "local", cache: createAttachCache(),
+      fallback: { enabled: true, chromePath: "/x/chrome" },
+      useLauncher: true,
+      launcherIo: deadLauncherIo(),
+      liveInstancePort: () => { throw new Error("boom") },
+      now: () => 0,
+    } as never)
+    expect(out.status).toBe("unreachable")
+    // The launch failure survives verbatim: the throwing probe added no advice.
+    expect(out.message).toContain("exited before opening the debugging port")
+  })
+})

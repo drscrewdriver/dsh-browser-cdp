@@ -662,6 +662,17 @@ export interface RefreshInput {
   useLauncher?: boolean
   /** Injectable launcher IO for fixtures. */
   launcherIo?: unknown
+  /**
+   * Issue #22 M-C: when the MANAGED local launch fails, is there ANOTHER live
+   * browser instance the user could attach to instead (browser.json)?
+   *
+   * Injected by the host so this module stays filesystem-free. It is advisory
+   * ONLY — the resolved endpoint/status never changes because of it: switching
+   * `cdpMode=local` over to a state-file instance would break the authority
+   * contract in worker/endpoint-authority.ts ("local mode only trusts
+   * launcher.json"). Returns the port of a live instance, or null.
+   */
+  liveInstancePort?: () => number | null
   /** R7 — injectable IO for the `ego-cli` probe; the host passes the real one. */
   cliIo?: CliLinkIo
   /** R7 — ours to inject with `--sdk-path` when the link opts in. */
@@ -833,12 +844,24 @@ export async function refreshAttach(input: RefreshInput): Promise<AttachState> {
           message: `managed local browser launched but its endpoint did not answer: ${localProbe.message}`,
         })
       }
+      // Issue #22 M-C: append "another instance is up, you can hand over" to the
+      // failure message. Advisory text only — the endpoint/status below stay
+      // exactly what the failed local launch produced (no silent re-route).
+      let advice = ''
+      try {
+        const livePort = input.liveInstancePort?.() ?? null
+        if (typeof livePort === 'number' && livePort > 0) {
+          advice = ` — note: another browser instance is live on port ${livePort}; if you meant to drive THAT one, switch cdpMode to remote and point the target at http://127.0.0.1:${livePort}`
+        }
+      } catch {
+        // A probe that throws must never mask the launch failure itself.
+      }
       return cache.patch({
         ...suggested,
         status: 'unreachable',
         engine: undefined,
         code: `local-${launch.code}`,
-        message: launch.message,
+        message: `${launch.message}${advice}`,
       })
     }
     return cache.patch(suggested)

@@ -462,8 +462,8 @@ const tierOpenByDefault = (value: unknown): boolean =>
  * A Linux box with neither `DISPLAY` nor `WAYLAND_DISPLAY` has no desktop to
  * draw a window on, so a headed Chromium exits immediately ("Missing X server
  * or $DISPLAY"). Defaulting to headless is the dependency-free fix; the
- * historical Xvfb route was rolled back as a Windows cold-start regression
- * (CHANGELOG 1.15.2) and must not come back.
+ * historical virtual-display-server route was rolled back as a Windows
+ * cold-start regression (CHANGELOG 1.15.2) and must not come back.
  *
  * ONLY a *missing* default is filled in here: an explicit `localHeadless: false`
  * still wins (resolveConfig calls this only when the field is `undefined`).

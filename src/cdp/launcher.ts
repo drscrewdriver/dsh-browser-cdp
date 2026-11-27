@@ -413,6 +413,33 @@ export type LaunchOutcome =
  * the OTHER engine is stopped first, so Chrome and Lightpanda never fight
  * over the singleton.
  */
+/**
+ * Issue #22 M-C: turn "chrome exited" into "do this".
+ *
+ * Both known cold-start failures on Linux are invisible in a bare exit code:
+ * running as root without `--no-sandbox`, and having no X/Wayland display to
+ * draw a window on. Report whichever applies (or both) so the user does not
+ * have to guess — this only ADDS advice, it never changes what we launched.
+ */
+function chromeExitHint(platform: string, io: Required<LaunchIo>, headless: boolean): string {
+  if (platform === 'win32' || platform === 'darwin') return ''
+  const hints: string[] = []
+  const env = io.env()
+  const isRoot = io.euid() === 0
+  const hasDisplay = (typeof env.DISPLAY === 'string' && env.DISPLAY.trim() !== '')
+    || (typeof env.WAYLAND_DISPLAY === 'string' && env.WAYLAND_DISPLAY.trim() !== '')
+  if (isRoot) {
+    hints.push('running as root: Chromium needs `--no-sandbox` (this build adds it automatically; if you overrode chromeArgs, make sure it is still there)')
+  }
+  if (!hasDisplay && !headless) {
+    hints.push('no DISPLAY/WAYLAND_DISPLAY: there is no desktop to open a window on — set `localHeadless: true` in the settings panel (or `--headless=new` via chromeArgs)')
+  }
+  if (hints.length === 0) {
+    hints.push('check `bcdp_doctor` for the resolved chromePath/chromeArgs, then try again with `localHeadless: true`')
+  }
+  return ` — ${hints.join('; ')}`
+}
+
 export async function launchLocalBrowser(
   options: {
     engine?: LaunchEngine
@@ -515,7 +542,11 @@ export async function launchLocalBrowser(
     if (!ioImpl.isAlive(pid)) spawnPidGone = true
     if (now() >= deadline) {
       if (spawnPidGone) {
-        return { ok: false, code: 'launch-exited', message: `${engineName} exited before opening the debugging port (pid ${pid})${engine === 'lightpanda' && platform === 'win32' ? ' — is lightpanda installed inside WSL? (`wsl` then `curl -fsSL https://pkg.lightpanda.io/install.sh | bash`)' : ''}` }
+        // Issue #22 M-C: a bare "exited before opening the debugging port" is
+        // unactionable — the two real causes are (a) root without --no-sandbox
+        // and (b) no display to draw a window on. Name the fix, not the symptom.
+        const diagnosis = engine === 'chrome' ? chromeExitHint(platform, ioImpl, options.localHeadless === true) : ''
+        return { ok: false, code: 'launch-exited', message: `${engineName} exited before opening the debugging port (pid ${pid})${engine === 'lightpanda' && platform === 'win32' ? ' — is lightpanda installed inside WSL? (`wsl` then `curl -fsSL https://pkg.lightpanda.io/install.sh | bash`)' : ''}${diagnosis}` }
       }
       ioImpl.killTree(pid)
       ioImpl.removeFile(statePath)

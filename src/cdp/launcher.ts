@@ -38,6 +38,12 @@ export interface LaunchIo {
   now?: () => number
   sleep?: (ms: number) => Promise<void>
   makePort?: () => Promise<number>
+  /** Effective UID of the current process. Injectable so the root/no-sandbox
+   *  path (issue #22 M-A) is testable without actually being root. */
+  euid?: () => number
+  /** Environment snapshot. Injectable so the headless fallback (issue #22 M-B)
+   *  is testable without touching the real process env. */
+  env?: () => Record<string, string | undefined>
 }
 
 const defaultIo = (): Required<LaunchIo> => ({
@@ -76,6 +82,8 @@ const defaultIo = (): Required<LaunchIo> => ({
   },
   now: () => Date.now(),
   sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  euid: () => (typeof process.geteuid === 'function' ? process.geteuid() : -1),
+  env: () => process.env,
   makePort: async () => {
     const server = createServer()
     const port = await new Promise<number>((resolve, reject) => {
@@ -224,20 +232,47 @@ export function buildLaunchArgs(options: {
   port: number
   headless: boolean
   chromeArgs?: string
+  /**
+   * Issue #22 M-A: append `--no-sandbox`. Set when the local browser runs as
+   * root (Linux containers / CI images), where Chromium refuses to start
+   * without it ("Running as root without --no-sandbox is not supported").
+   */
+  addNoSandbox?: boolean
 }): string[] {
   const userArgs = (options.chromeArgs ?? '')
     .split(/\s+/)
     .map((arg) => arg.trim())
     .filter((arg) => arg !== '')
     .filter((arg) => !BLOCKED_ARGS.some((blocked) => arg === blocked || arg.startsWith(`${blocked}=`) || arg.startsWith(`${blocked} `)))
+  // Issue #22 M-A: `--no-sandbox` goes right before the headless flag, and is
+  // de-duplicated against a user-supplied copy — the user may already put
+  // `--no-sandbox` in chromeArgs, and Chromium would see it twice.
+  const wantsNoSandbox = options.addNoSandbox === true
+  const isNoSandbox = (arg: string) => arg === '--no-sandbox' || arg === '--no-sandbox=true'
+  const userHasNoSandbox = userArgs.some(isNoSandbox)
+  // Keep exactly one copy: if the user already wrote it, THEIR token survives
+  // (argv stays what they wrote); we only fill it in when it is missing.
+  let dedupedUserArgs = userArgs
+  if (userHasNoSandbox) {
+    let kept = false
+    dedupedUserArgs = userArgs.filter((arg) => {
+      if (!isNoSandbox(arg)) return true
+      if (kept) return false
+      kept = true
+      return true
+    })
+  }
   return [
     `--remote-debugging-port=${options.port}`,
     `--user-data-dir=${options.userDataDir}`,
     '--no-first-run',
     '--no-default-browser-check',
     '--remote-allow-origins=*',
+    // When the user already passed it, keep THEIR position (below) so the
+    // argv stays exactly what they wrote; otherwise prepend before headless.
+    ...(wantsNoSandbox && !userHasNoSandbox ? ['--no-sandbox'] : []),
     ...(options.headless ? ['--headless=new'] : []),
-    ...userArgs,
+    ...dedupedUserArgs,
   ]
 }
 
@@ -443,7 +478,16 @@ export async function launchLocalBrowser(
     args = full.slice(1)
   } else {
     spawnBin = bin
-    args = buildLaunchArgs({ userDataDir, port, headless: options.localHeadless === true, chromeArgs: options.chromeArgs })
+    args = buildLaunchArgs({
+      userDataDir,
+      port,
+      headless: options.localHeadless === true,
+      chromeArgs: options.chromeArgs,
+      // Issue #22 M-A: Chromium refuses to start as root without --no-sandbox
+      // ("Running as root without --no-sandbox is not supported"). win32 has no
+      // euid notion and never needs this, so the platform gate comes first.
+      addNoSandbox: platform !== 'win32' && ioImpl.euid() === 0,
+    })
   }
 
   let pid = 0

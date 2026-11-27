@@ -227,3 +227,72 @@ describe('lightpanda managed serve', () => {
     expect(JSON.parse(h.readState()).engine).toBe('lightpanda')
   })
 })
+
+/** Issue #22 M-A — root gets `--no-sandbox` automatically, non-root does not. */
+describe('launcher root no-sandbox (issue #22 M-A)', () => {
+  function nlIo(options: { euid: number; spawned: Array<{ args: readonly string[] }> }) {
+    const state: Record<string, string> = {}
+    const alive = new Set<number>()
+    let probes = 0
+    return {
+      exists: (p: string) => p.endsWith('chrome.exe') || p in state,
+      readFile: (p: string) => state[p],
+      writeFile: (p: string, d: string) => { state[p] = d },
+      removeFile: (p: string) => { delete state[p] },
+      isAlive: (pid: number) => alive.has(pid),
+      killTree: (pid: number) => { alive.delete(pid) },
+      spawn: (_bin: string, args: readonly string[]) => {
+        options.spawned.push({ args })
+        alive.add(4242)
+        return { pid: 4242 }
+      },
+      fetchVersion: async () => { probes += 1; return { ok: true } },
+      now: (() => { let t = 1000; return () => (t += 300) })(),
+      sleep: async () => undefined,
+      makePort: async () => 9222,
+      euid: () => options.euid,
+    }
+  }
+
+  it('appends --no-sandbox when euid is 0 on a POSIX platform', async () => {
+    const spawned: Array<{ args: readonly string[] }> = []
+    const io = nlIo({ euid: 0, spawned })
+    const out = await launchLocalBrowser({ platform: 'linux', chromePath: 'C:/x/chrome.exe', localHeadless: true, statePath: 'l.json', timeoutMs: 50 }, io)
+    expect(out.ok).toBe(true)
+    const argv = spawned[0]!.args as string[]
+    expect(argv).toContain('--no-sandbox')
+    // Order: the managed base flags, then --no-sandbox right before --headless=new.
+    expect(argv.indexOf('--no-sandbox')).toBeLessThan(argv.indexOf('--headless=new'))
+  })
+
+  it('does not append --no-sandbox for a non-root user', async () => {
+    const spawned: Array<{ args: readonly string[] }> = []
+    const io = nlIo({ euid: 1000, spawned })
+    await launchLocalBrowser({ platform: 'linux', chromePath: 'C:/x/chrome.exe', statePath: 'l.json', timeoutMs: 50 }, io)
+    expect(spawned[0]!.args).not.toContain('--no-sandbox')
+  })
+
+  it('never appends --no-sandbox on win32 even when euid reports 0', async () => {
+    const spawned: Array<{ args: readonly string[] }> = []
+    const io = nlIo({ euid: 0, spawned })
+    await launchLocalBrowser({ platform: 'win32', chromePath: 'C:/x/chrome.exe', statePath: 'l.json', timeoutMs: 50 }, io)
+    expect(spawned[0]!.args).not.toContain('--no-sandbox')
+  })
+
+  it('de-duplicates when the user already passed --no-sandbox in chromeArgs', () => {
+    const args = buildLaunchArgs({ userDataDir: 'p', port: 1, headless: true, addNoSandbox: true, chromeArgs: '--no-sandbox --force-dark' })
+    expect(args.filter((a) => a === '--no-sandbox')).toHaveLength(1)
+    expect(args).toContain('--force-dark')
+    expect(args).toContain('--headless=new')
+  })
+
+  it('de-duplicates the =true spelling too', () => {
+    const args = buildLaunchArgs({ userDataDir: 'p', port: 1, headless: false, addNoSandbox: true, chromeArgs: '--no-sandbox=true' })
+    expect(args.filter((a) => a.startsWith('--no-sandbox'))).toHaveLength(1)
+  })
+
+  it('leaves a user-supplied --no-sandbox alone when we would not add one', () => {
+    const args = buildLaunchArgs({ userDataDir: 'p', port: 1, headless: false, chromeArgs: '--no-sandbox' })
+    expect(args).toContain('--no-sandbox')
+  })
+})

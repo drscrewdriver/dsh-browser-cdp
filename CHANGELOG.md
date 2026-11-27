@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.15.6-rc.2 (2026-11-27)
+
+**Linux 无 `DISPLAY`/`WAYLAND_DISPLAY` 时，受管本地浏览器默认走 headless（issue #22 里程碑 B）。**
+
+- `src/config.ts` 新增导出 `defaultLocalHeadless(platform, env)`：`linux` 且 `DISPLAY` 与 `WAYLAND_DISPLAY` 都为空 → `true`，其余（含 win32 / darwin）→ `false`。纯函数、可注入 env，测试不依赖真实进程环境。
+- `resolveConfig` 的兜底改为「`undefined` 才问平台默认」，**显式 `localHeadless: false` 不会被覆盖**——「我要窗口」是用户的选择，不是缺省可以推翻的。
+- schema 的 `.default()` 与 `resolveConfig` 用同一个判定：面板画出来的值就是启动时生效的值。
+- **不复活 Xvfb / 任何 X 虚拟屏依赖**：1.15.2 记录过 Xvfb 路线导致 Windows 冷启动回归，本次只做零依赖的 headless 兜底。
+- 测试 `tests/config.test.ts` 新增 8 例：linux 双空 / 有 `DISPLAY` / 仅有 `WAYLAND_DISPLAY` / win32 / darwin / 显式 true / 显式 false 不被覆盖 / 兜底与运行时同源。
+- 顺带修正两个 golden 断言：此前把 `localHeadless` 写死成 `false`，在无 DISPLAY 的 CI runner 上必然红——现在跟随 `defaultLocalHeadless()`，测的是「默认值与运行时同源」这条真契约。
+- 适用 `>= 1.15.6`；`cdpMode=remote` 与连接目标判定完全未动。
+
 ## 1.15.6-rc.1 (2026-11-27)
 
 **root 跑受管本地浏览器时自动追加 `--no-sandbox`（issue #22 里程碑 A）。**

@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.15.5 (2026-11-27)
+
+**观察窗信任栅栏改为询问宿主 `connection.requestRejection`（issue #21）——「装了 skip-browser-auth 仍 401」的根因修复。**
+
+- `src/cast-server.ts` 新增私有窄接口 `ConnectionTrust`：`/api/bcdp/*` 的放行判定不再自建 `dsh-auth-*` cookie 嗅探规则，改为向宿主 `connection` 服务询问本次请求的裁决（`hostTrust()` 懒解析避免 init 快照冻结 load order；不新增 peer 依赖，`connection` 为可选消费）。
+- 裁决映射：宿主回 `401`/`403` → 原样回给客户端；宿主明确放行 → 放行；宿主无 `connection` 服务（老引擎/老宿主）→ 回落 `legacyTrusted()` 的 cookie 兜底，行为与 1.15.4 完全一致。
+- 关键收益：`@iasiv5/dsh-skip-browser-auth` 这类**在宿主 `browserAuth` 策略点**返回恒真的插件现在能真正穿透到观察窗路由。此前插件自己嗅 cookie 等于绕过宿主策略点，于是「装了 skip-auth，观察窗仍 401」。
+- 契约测试 `tests/cast-server-trust-fence.test.ts`（6 例）：真实 cookie 200 / 伪造 `dsh-auth-fake=1` 401 / Host 与 Origin 伪造 403 / 无 `connection` 时回落 cookie 兜底 / 栅栏抛错不静默放行。
+- 预发线：`1.15.5-rc.1` 于 prerelease 打出，Actions 判 `DIST_TAG=rc`，`latest` 与全部 `dsh-*` 线标签在 rc 期间未动。
+- 兼容性：不改 `bin/cdp-cast-worker.mjs` 与 remote 拓扑；老宿主退化为旧行为。适用版本 `>= 1.15.5`；`compat/*`、`beta`、`beta-0.2.0`、`unified/15rc` 五条历史线**不含**本次修改。
+
 ## 1.15.5-rc.1 (2026-11-27)
 
 **观察窗信任栅栏改为询问宿主 `connection.requestRejection`（issue #21）。**

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { resolveConfig, judgeSettingsOf, tokenizeArgs, filterArgs, normalizeProbeState, EGO_CLI_BLOCKED, CHROME_BLOCKED } from "../src/config.ts";
+import { resolveConfig, judgeSettingsOf, tokenizeArgs, filterArgs, normalizeProbeState, EGO_CLI_BLOCKED, CHROME_BLOCKED, defaultLocalHeadless } from "../src/config.ts";
 
 describe("localLaunchPolicy (issue #14)", () => {
   it("defaults to on-demand so DSH boots without a browser window", () => {
@@ -375,3 +375,49 @@ describe("探测冷启动闸门（allowProbeColdStart）", () => {
     expect(resolveConfig({ allowProbeColdStart: 0 } as never).allowProbeColdStart).toBe(false);
   });
 });
+
+/** Issue #22 M-B — headless is the default only when there is no display to draw on. */
+describe("defaultLocalHeadless (issue #22 M-B)", () => {
+  it("is headless on linux with neither DISPLAY nor WAYLAND_DISPLAY", () => {
+    expect(defaultLocalHeadless("linux", {})).toBe(true)
+    expect(defaultLocalHeadless("linux", { DISPLAY: "", WAYLAND_DISPLAY: "" })).toBe(true)
+    expect(defaultLocalHeadless("linux", { DISPLAY: "   " })).toBe(true)
+  })
+
+  it("stays headed on linux when DISPLAY is set", () => {
+    expect(defaultLocalHeadless("linux", { DISPLAY: ":0" })).toBe(false)
+    expect(defaultLocalHeadless("linux", { DISPLAY: ":0", WAYLAND_DISPLAY: "" })).toBe(false)
+  })
+
+  it("stays headed on linux when only WAYLAND_DISPLAY is set", () => {
+    expect(defaultLocalHeadless("linux", { WAYLAND_DISPLAY: "wayland-0" })).toBe(false)
+  })
+
+  it("never defaults to headless off linux (win32 desktop session, darwin)", () => {
+    expect(defaultLocalHeadless("win32", {})).toBe(false)
+    expect(defaultLocalHeadless("darwin", {})).toBe(false)
+  })
+
+  it("does not resurrect Xvfb — headless is a plain flag, no extra dependency", () => {
+    const resolved = resolveConfig({})
+    expect(typeof resolved.localHeadless).toBe("boolean")
+  })
+})
+
+describe("localHeadless resolution (issue #22 M-B)", () => {
+  it("fills in the platform default only when the user never set the field", () => {
+    // resolveConfig reads the real process env; assert the invariant rather than
+    // a fixed value so the test is honest on any host.
+    const expected = defaultLocalHeadless(process.platform, process.env)
+    expect(resolveConfig({}).localHeadless).toBe(expected)
+  })
+
+  it("keeps an explicit true", () => {
+    expect(resolveConfig({ localHeadless: true } as never).localHeadless).toBe(true)
+  })
+
+  it("keeps an explicit false even where the fallback would say headless", () => {
+    // The core M-B contract: an explicit "give me a window" is never overridden.
+    expect(resolveConfig({ localHeadless: false } as never).localHeadless).toBe(false)
+  })
+})

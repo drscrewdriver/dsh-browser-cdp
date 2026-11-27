@@ -196,7 +196,11 @@ export const Config = z.object({
   toolEscape: z.boolean().default(true).description('Escape-hatch tier (1 tool: script — run an arbitrary heredoc with page/browser/taskSpaces/fetch/cdp preloaded; verbatim:true reproduces the old bare-heredoc cli behaviour). Sealed until browser activity like every other non-core tier: call bcdp_status first, then it appears. Off = sealed.').volatile(),
   toolJudge: z.boolean().default(true).description('Judgement tier (5 bcdp_jev_* tools). On still requires a JEV or Laya key: without one they can only answer "not configured", so they stay sealed anyway.').volatile(),
   sessionScopedPulse: z.boolean().default(true).description('Per-session unlock: when on, calling bcdp_status in session A only unlocks tools for session A — other sessions stay at their own depth. When off, any session\'s unlock is process-wide (historical behaviour). Falls back to off when the host does not expose agent-scoped tool restriction.').volatile(),
-  localHeadless: z.boolean().description('Run the locally launched browser headless.'),
+  // Issue #22 M-B: the schema default must resolve to the SAME predicate as
+  // `resolveConfig`'s fallback (below), otherwise the settings panel paints one
+  // value while the launcher uses another — the exact drift this file's L539-541
+  // comment warns about.
+  localHeadless: z.boolean().default(defaultLocalHeadless()).description('Run the locally launched browser headless. Defaults to headless on Linux when neither DISPLAY nor WAYLAND_DISPLAY is set (no desktop to draw on).'),
   // 启动时机（与 localHeadless 正交，别合并成一个三态下拉）：on-demand 下
   // DSH 启动不再弹受管浏览器窗口，推迟到首个真正碰页面的 bcdp_* 调用。
   // issue #14：`allowProbeColdStart` 只闸住了 ego-cli 探针，local 走的是另一条
@@ -452,6 +456,30 @@ export function judgeSettingsOf(config: ResolvedConfig): JudgeSettings {
 const tierOpenByDefault = (value: unknown): boolean =>
   !(value === false || value === 'false' || value === 0)
 
+/**
+ * Issue #22 M-B: is a headless launch the only sane default here?
+ *
+ * A Linux box with neither `DISPLAY` nor `WAYLAND_DISPLAY` has no desktop to
+ * draw a window on, so a headed Chromium exits immediately ("Missing X server
+ * or $DISPLAY"). Defaulting to headless is the dependency-free fix; the
+ * historical Xvfb route was rolled back as a Windows cold-start regression
+ * (CHANGELOG 1.15.2) and must not come back.
+ *
+ * ONLY a *missing* default is filled in here: an explicit `localHeadless: false`
+ * still wins (resolveConfig calls this only when the field is `undefined`).
+ * win32/darwin always have a desktop session in the shapes DSH runs in, so
+ * they keep the headed default.
+ */
+export function defaultLocalHeadless(
+  platform: string = process.platform,
+  env: Record<string, string | undefined> = process.env,
+): boolean {
+  if (platform !== 'linux') return false
+  const hasDisplay = typeof env.DISPLAY === 'string' && env.DISPLAY.trim() !== ''
+  const hasWayland = typeof env.WAYLAND_DISPLAY === 'string' && env.WAYLAND_DISPLAY.trim() !== ''
+  return !hasDisplay && !hasWayland
+}
+
 export function resolveConfig(config: RawConfig = {}): ResolvedConfig {
   // 0.1.7: volatile fields arrive as live refs in the composition entry —
   // deref them once here so the whole resolution below sees plain data.
@@ -535,7 +563,11 @@ export function resolveConfig(config: RawConfig = {}): ResolvedConfig {
     toolEscape: tierOpenByDefault(config.toolEscape),
     toolJudge: tierOpenByDefault(config.toolJudge),
     sessionScopedPulse: tierOpenByDefault(config.sessionScopedPulse),
-    localHeadless: config.localHeadless === undefined ? false : Boolean(config.localHeadless),
+    // Issue #22 M-B: no DISPLAY/WAYLAND_DISPLAY on linux -> headless. An explicit
+    // value (including `false`) is never overridden — only `undefined` is a
+    // "user never touched it" signal. Must stay the same predicate as the schema
+    // default below (the volatile-form lesson at this file's L539-541).
+    localHeadless: config.localHeadless === undefined ? defaultLocalHeadless() : Boolean(config.localHeadless),
     // 与 schema 的 .default() 必须同值：只写一处就会出现「面板显示 A、运行时
     // 用 B」（见本文件上方 volatile 字段默认值的同款教训）。回退到 1.12.2 的
     // 行为只需把这里与 schema 两处都改成 'eager'。

@@ -32,7 +32,7 @@ describe("dual capture config", () => {
       ffmpegFps: 20, ffmpegMaxWidth: 1280, ffmpegBitrateKbps: 4000, ffmpegEncoder: "auto", ffmpegPath: "", githubMirror: "",
       runtimeArgs: "", chromeArgs: "", isolateSpaces: false, idleTimeoutMin: 0, defaultSpace: ":auto",
       links: [], activeTargetId: "", cdpMode: "auto", cdpProbeTimeoutMs: 3000,
-      cursorHud: true, cursorName: "DeepSeek", allowLocalFallback: false, localHeadless: false, localLaunchPolicy: "on-demand", localUserDataDir: "", lightpandaArgs: "", legacyEgoToolNames: false, remoteEnabled: true,
+      cursorHud: true, cursorName: "DeepSeek", allowLocalFallback: false, localHeadless: defaultLocalHeadless(), localLaunchPolicy: "on-demand", localUserDataDir: "", lightpandaArgs: "", legacyEgoToolNames: false, remoteEnabled: true,
       // 探测冷启动闸门默认关：挂载探测绝不拉起浏览器。
       allowProbeColdStart: false,
       cliFramePollEnabled: true,
@@ -58,7 +58,7 @@ describe("dual capture config", () => {
       ffmpegFps: 20, ffmpegMaxWidth: 1280, ffmpegBitrateKbps: 4000, ffmpegEncoder: "auto", ffmpegPath: "", githubMirror: "",
       runtimeArgs: "", chromeArgs: "", isolateSpaces: false, idleTimeoutMin: 0, defaultSpace: ":auto",
       links: [], activeTargetId: "", cdpMode: "auto", cdpProbeTimeoutMs: 3000,
-      cursorHud: true, cursorName: "DeepSeek", allowLocalFallback: false, localHeadless: false, localLaunchPolicy: "on-demand", localUserDataDir: "", lightpandaArgs: "", legacyEgoToolNames: false, remoteEnabled: true,
+      cursorHud: true, cursorName: "DeepSeek", allowLocalFallback: false, localHeadless: defaultLocalHeadless(), localLaunchPolicy: "on-demand", localUserDataDir: "", lightpandaArgs: "", legacyEgoToolNames: false, remoteEnabled: true,
       allowProbeColdStart: false,
       cliFramePollEnabled: true,
       // 工具分级注入默认：lazy + 三级全开放（core 级不可封印）。

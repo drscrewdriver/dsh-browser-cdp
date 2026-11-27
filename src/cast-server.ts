@@ -32,6 +32,18 @@ import type { PanelActionRunner } from './cast/panel-actions.ts'
 
 const WORKER_BIN = fileURLToPath(new URL('../bin/cdp-cast-worker.mjs', import.meta.url))
 
+/**
+ * The host's connection trust surface, narrowed to what this file uses.
+ *
+ * `requestRejection` is the host API for exactly this situation — "a plugin
+ * registered its own Web route, does THIS request get to reach it?" — and it
+ * composes the Host/Origin fence with whichever browser-authentication owner
+ * the deployment installed. Typed locally so no peer dependency is added.
+ */
+interface ConnectionTrust {
+  requestRejection(request: { readonly headers: IncomingMessage['headers'] }): 401 | 403 | undefined
+}
+
 // ── R1: activated CDP endpoint for the watch/stream worker ────────────────
 // The cast worker is a separate long-lived process that attaches to the SAME
 // browser the tools drive. It cannot read the host half's per-spawn env, so
@@ -1044,20 +1056,59 @@ export function initCastServer(
   // ── trust fence for /api/bcdp/* ────────────────────────────────────────────
   // Exact-path routes match BEFORE the host's `/api` prefix trust-fence route,
   // so every handler below would otherwise answer unauthenticated requests.
-  // The host issues a `dsh-auth-<processKey>` cookie that is HttpOnly AND
-  // SameSite=Strict: a cross-site page (CSRF driver-by) never carries it, so
-  // requiring its mere presence closes the remote surface. A local process can
-  // still forge the header, but that is the same threat tier as the host's own
-  // token fence (a local process can read the process token too).
-  const isTrustedRequest = (req: IncomingMessage): boolean =>
+  //
+  // The verdict belongs to the HOST, not to a cookie shape guess (issue #21).
+  // A deployment may replace the host's BrowserAuth owner — the trusted-network
+  // stub never mints `dsh-auth-*` cookies at all — while keeping the same
+  // Host/Origin fence. Asking `connection.requestRejection` keeps this plugin
+  // agreeing with whatever authority is actually installed, instead of
+  // contradicting it with a 401 nobody can satisfy. It is also stricter than
+  // the cookie test it replaces: the host VERIFIES the cookie instead of only
+  // noticing that one is present.
+  //
+  // Fallback for engines older than that service surface: the host issues a
+  // `dsh-auth-<processKey>` cookie that is HttpOnly AND SameSite=Strict, so a
+  // cross-site page (CSRF drive-by) never carries it and requiring its mere
+  // presence still closes the remote surface. That is a carry-over, not a
+  // substitute — it cannot tell a forged cookie from a real session — which is
+  // exactly why the host service is preferred whenever it exists.
+  const legacyTrusted = (req: IncomingMessage): boolean =>
     /(?:^|;\s*)dsh-auth-[^=]+=/.test(String(req.headers.cookie ?? ''))
+  // Resolved lazily, not once at init: the connection plugin may mount after
+  // this one, and a load-order snapshot would then freeze the legacy path in
+  // place forever. `ctx.get` answers undefined until the service exists.
+  let trustOf: ConnectionTrust | undefined
+  const hostTrust = (): ConnectionTrust | undefined => {
+    if (trustOf === undefined || typeof trustOf.requestRejection !== 'function') {
+      try {
+        trustOf = (ctx as EgoContext).get?.('connection') as ConnectionTrust | undefined
+      } catch {
+        trustOf = undefined
+      }
+    }
+    return trustOf
+  }
+  /** 401/403 when the request may not reach this plugin's routes, else undefined. */
+  const rejectionOf = (req: IncomingMessage): 401 | 403 | undefined => {
+    const trust = hostTrust()
+    if (trust !== undefined) {
+      try {
+        return trust.requestRejection({ headers: req.headers })
+      } catch {
+        // A fence that throws is not a licence to open up: fall through to the
+        // cookie carry-over, which still refuses a cross-site caller.
+      }
+    }
+    return legacyTrusted(req) ? undefined : 401
+  }
   const guardHandler = (handler: NonNullable<RegisterRouteOptions['handler']>) =>
     async (req: unknown, resRaw: unknown) => {
       const res = resRaw as ServerResponse
-      if (!isTrustedRequest(req as IncomingMessage)) {
-        res.statusCode = 401
+      const rejection = rejectionOf(req as IncomingMessage)
+      if (rejection !== undefined) {
+        res.statusCode = rejection
         res.setHeader('Content-Type', 'application/json; charset=utf-8')
-        res.end('{"ok":false,"error":"unauthorized"}')
+        res.end(rejection === 403 ? '{"ok":false,"error":"forbidden"}' : '{"ok":false,"error":"unauthorized"}')
         return
       }
       return handler(req, res)

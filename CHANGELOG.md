@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.15.6 (2026-11-27)
+
+**`cdpMode=local` 在 Linux root / 无显示器环境下不再「冷启动必败」（issue #22，三个里程碑合并发布）。**
+
+### M-A — root 自动 `--no-sandbox`
+- `LaunchIo` 新增可注入 `euid()`/`env()`；`buildLaunchArgs` 支持 `addNoSandbox`，`launchLocalBrowser` 在 `platform !== 'win32' && euid() === 0` 时自动追加 `--no-sandbox`，位置在 `--headless=new` 之前，并与用户 `chromeArgs` 里已有的同名参数去重（保留用户那一份）。
+- 不复用 POSIX sh 的 `bin/cdp-chrome-wrapper.sh`——Windows/macOS 走同一个 `launchLocalBrowser`，追加参数才天然跨平台。
+
+### M-B — 无 `DISPLAY`/`WAYLAND_DISPLAY` 时默认 headless
+- 新增导出 `defaultLocalHeadless(platform, env)`：`linux` 且 `DISPLAY` 与 `WAYLAND_DISPLAY` 皆空 → `true`，其余 → `false`。`resolveConfig` 与 schema `.default()` 用同一判定，面板显示值 == 运行时生效值。
+- **显式 `localHeadless: false` 不被兜底覆盖**；**不复活 Xvfb 或任何 X 虚拟屏依赖**（1.15.2 记录过该路线导致 Windows 冷启动回归）。
+- 顺带修正两个 golden 断言：此前把 `localHeadless` 写死成 `false`，在无 DISPLAY 的 CI runner 上必然红。
+
+### M-C — 失败信息可操作化
+- `launch-exited` 附诊断尾注：root → 说明需要 `--no-sandbox`；headed 且无显示器 → 建议 `localHeadless: true`。win32/darwin 不追加 Linux 诊断。
+- `cdpMode=local` 启动失败且 `browser.json` 另有活实例时，附端口与「切 `cdpMode=remote` 指向它」的提示；**只提示不改路由**，`endpoint`/`wsUrl`/`endpointSource` 一律不动，守住 `endpoint-authority.ts` 的权威分级契约。
+- `bcdp_doctor` 的 effective chromeArgs 行包含自动追加的 `--no-sandbox`（root 时）并标注「auto-added」。
+
+### 预发线与验证
+- 按里程碑切成 `1.15.6-rc.1`（M-A）/ `1.15.6-rc.2`（M-B）/ `1.15.6-rc.3`（M-C），每个 rc 可独立安装与回滚；三个 rc 期间 `latest` 与全部 `dsh-*` 线标签未动。
+- 新增单测：launcher 6+3 例、config 8 例、targets 4 例；全量 1464 passed / 13 skipped。
+- **未实测环境**：真实的 Linux root + 无显示容器——本轮在 Windows 上开发，root 与无 DISPLAY 路径靠注入 `euid`/`env` 的单元测试覆盖（`defaultLocalHeadless('linux', {})` 实测为 `true`，`('linux', {DISPLAY: ':0'})` 与 `('win32', {})` 为 `false`）。Windows / macOS 冷启动路径分别被 `platform !== 'win32'` 与 `platform === 'linux'` 显式排除。
+- 适用 `>= 1.15.6`；`compat/*`、`beta`、`beta-0.2.0`、`unified/15rc` 五条历史线不含本次修改。
+
 ## 1.15.6-rc.3 (2026-11-27)
 
 **冷启动失败不再只说「exited」，改为给可执行的下一步（issue #22 里程碑 C）。**

@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.15.6-rc.3 (2026-11-27)
+
+**冷启动失败不再只说「exited」，改为给可执行的下一步（issue #22 里程碑 C）。**
+
+- `launch-exited` 追加诊断尾注（新增内部 `chromeExitHint()`）：Linux 上以 root 跑 → 指明 Chromium 需要 `--no-sandbox`（本版已自动追加，若改过 `chromeArgs` 需确认还在）；用了 headed 又无 `DISPLAY`/`WAYLAND_DISPLAY` → 直接建议 `localHeadless: true`。win32/darwin 不追加任何 Linux 诊断，免得误导。
+- `cdpMode=local` 启动失败时，若 `browser.json` 显示另有活实例，消息里附上端口与「想驱动那只就切 `cdpMode=remote` 指向它」。**只提示、不改路由**：`endpoint`/`wsUrl`/`endpointSource` 一个都不动，守住 `worker/endpoint-authority.ts` 的权威分级契约（local 模式只认 launcher.json）。
+- 注入点 `RefreshInput.liveInstancePort`：模块保持 fs-free，由宿主（`src/index.ts` 的 `liveBrowserStatePort()`）读 `browser.json`；探针抛错被吞掉，绝不掩盖启动失败本身。
+- `bcdp_doctor` 的 effective chromeArgs 行现在包含自动追加的 `--no-sandbox`（root 时）并标注「auto-added」，排障时看到的就是真正传给 Chromium 的 argv。
+- 测试：`tests/cdp-launcher.test.ts` +3（root 无显示器的提示 / 有 DISPLAY 时不提显示器 / win32 不提 Linux 建议），`tests/cdp-targets.test.ts` +4（附端口提示 / 不改路由 / 无活实例时不啰嗦 / 探针抛错不掩盖失败）。
+- 适用 `>= 1.15.6`。
+
 ## 1.15.6-rc.2 (2026-11-27)
 
 **Linux 无 `DISPLAY`/`WAYLAND_DISPLAY` 时，受管本地浏览器默认走 headless（issue #22 里程碑 B）。**
